@@ -38,7 +38,7 @@
 [ext_resource type="Script" uid="uid://bfnsx1qqya3sg" path="res://scripts/missile_alert.gd" id="43_missilealert"]
 [ext_resource type="AudioStream" uid="uid://bv4rdlcjtua78" path="res://Assets/Audio/missile_alert_1.mp3" id="44_alert1"]
 [ext_resource type="AudioStream" uid="uid://da06ry565wnav" path="res://Assets/Audio/missile_alert_2.mp3" id="45_alert2"]
-[ext_resource type="Script" path="res://scripts/damage_feedback.gd" id="46_damagefeedback"]
+[ext_resource type="Script" uid="uid://dufkeef6mawu4" path="res://scripts/damage_feedback.gd" id="46_damagefeedback"]
 
 [sub_resource type="CylinderMesh" id="CylinderMesh_arrow"]
 top_radius = 0.0
@@ -51,10 +51,10 @@ shading_mode = 0
 albedo_color = Color(1, 0.85, 0.1, 1)
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_fade"]
+render_priority = -1
 transparency = 1
 shading_mode = 0
 albedo_color = Color(0, 0, 0, 1)
-render_priority = -1
 
 [sub_resource type="QuadMesh" id="QuadMesh_fade"]
 size = Vector2(1.2, 1.2)
@@ -146,20 +146,30 @@ text = "ALIEN INVASION
 AIR SUPERIORITY"
 
 [node name="StartLabel" type="Label3D" parent="XRCamera3D/MainMenu"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.13, -0.02, -0.55)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.19, -0.02, -0.55)
 pixel_size = 0.0018
 billboard = 1
 no_depth_test = true
-text = "▶ START"
+text = "START"
 font_size = 34
 
 [node name="QuitLabel" type="Label3D" parent="XRCamera3D/MainMenu"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.13, -0.02, -0.55)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.19, -0.02, -0.55)
 pixel_size = 0.0018
 billboard = 1
 no_depth_test = true
-text = "✕ QUIT"
+text = "QUIT"
 font_size = 34
+
+[node name="Hint" type="Label3D" parent="XRCamera3D/MainMenu"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.13, -0.55)
+pixel_size = 0.0012
+billboard = 1
+no_depth_test = true
+text = "STICK LEFT / RIGHT TO SELECT
+RIGHT TRIGGER TO CONFIRM"
+font_size = 26
+modulate = Color(0.6, 0.6, 0.65, 1)
 
 [node name="Music" type="AudioStreamPlayer" parent="XRCamera3D/MainMenu"]
 stream = ExtResource("39_menumusic")

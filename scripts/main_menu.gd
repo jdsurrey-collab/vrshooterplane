@@ -30,16 +30,28 @@ extends Node3D
 ## snaps the Fade straight back to fully opaque, ready to be black again
 ## next time.
 ##
-## SELECTION is gaze-based: whichever button the camera is currently
-## pointing closest to is highlighted, the same aim-cone approach
-## missile_system.gd used to use for its own target lock (now replaced by
-## a target_lock.gd dependency, see that script), just applied to two
-## fixed points instead of a moving alien. This script only tracks/shows
-## the selection (`selected_action`) — game_flow.gd reads it when the
-## right trigger is pressed and decides what to actually do, since it's
-## already the sole owner of trigger-confirm actions for both menu states.
+## SELECTION is by THUMBSTICK (either controller): push left for START,
+## right for QUIT, then pull the right trigger to confirm. This script only
+## tracks/shows the selection (`selected_action`) — game_flow.gd reads it on
+## the trigger press and decides what to actually do, since it's already the
+## sole owner of trigger-confirm actions for both menu states.
+##
+## This REPLACED a gaze-based version that could not work, and whose failure
+## mode was that QUIT was literally unselectable. The reasoning is worth
+## keeping because it's a trap any future head-locked UI here would fall
+## into: MainMenu is a child of XRCamera3D, so the labels are rigidly
+## attached to the player's face. Gaze selection compared the angle between
+## the camera's forward vector and the direction to each label — but because
+## the labels move with the head, those directions are constant in camera
+## space, so both angles were fixed. Worse, the two labels sit symmetrically
+## (x = -0.13 and +0.13, identical y and z), which made the two angles
+## exactly equal, so the `<=` comparison always resolved to START and
+## turning your head did nothing at all. Gaze can only ever work against
+## WORLD-locked UI; a stick axis is unambiguous, needs no aiming, and
+## matches how the rest of this project takes input.
 
 const FADE_DURATION := 2.5
+const STICK_DEADZONE := 0.45  # must fall back inside this before another push registers — see _update_selection
 
 @export var game_flow_path: NodePath = ^"../../../GameFlow"
 
@@ -48,28 +60,38 @@ var selected_action: String = "start"
 
 var _game_flow: Node
 var _camera: Node3D
+var _left_controller: XRController3D
+var _right_controller: XRController3D
 var _fade: MeshInstance3D
 var _fade_material: StandardMaterial3D
 var _title_label: Label3D
 var _start_label: Label3D
 var _quit_label: Label3D
+var _hint_label: Label3D
 var _music: AudioStreamPlayer
 var _chatter: AudioStreamPlayer
 
 var _was_menu: bool = false
 var _revealing: bool = false
 var _reveal_time: float = 0.0
+var _stick_ready: bool = true
 
 
 func _ready() -> void:
 	_game_flow = get_node_or_null(game_flow_path)
 	_camera = get_parent()
+	# MainMenu -> XRCamera3D -> Player (XROrigin3D), where the controllers live.
+	var player := _camera.get_parent()
+	if player:
+		_left_controller = player.get_node_or_null("LeftHand")
+		_right_controller = player.get_node_or_null("RightHand")
 	_fade = get_node_or_null("Fade")
 	if _fade:
 		_fade_material = _fade.material_override
 	_title_label = get_node_or_null("Title")
 	_start_label = get_node_or_null("StartLabel")
 	_quit_label = get_node_or_null("QuitLabel")
+	_hint_label = get_node_or_null("Hint")
 	_music = get_node_or_null("Music")
 	_chatter = get_node_or_null("Chatter")
 	if _music:
@@ -102,15 +124,16 @@ func _process(delta: float) -> void:
 			_chatter.stop()
 	_was_menu = is_menu
 
-	if _title_label:
-		_title_label.visible = is_menu
-	if _start_label:
-		_start_label.visible = is_menu
-	if _quit_label:
-		_quit_label.visible = is_menu
+	# Hidden individually rather than relying on the root's `visible` below —
+	# the root deliberately stays visible through the reveal so the Fade quad
+	# can keep animating, and the text must not linger over the flight
+	# underneath while it does.
+	for label in [_title_label, _start_label, _quit_label, _hint_label]:
+		if label:
+			label.visible = is_menu
 
 	if is_menu:
-		_update_selection()
+		_update_selection(_selection_stick_x())
 	elif _revealing:
 		_reveal_time += delta
 		var a := clampf(1.0 - _reveal_time / FADE_DURATION, 0.0, 1.0)
@@ -122,15 +145,51 @@ func _process(delta: float) -> void:
 	visible = is_menu or _revealing
 
 
-func _update_selection() -> void:
-	if not _camera or not _start_label or not _quit_label:
+## Stick left = START, stick right = QUIT. Latched through the deadzone so
+## one push moves the selection once rather than re-triggering every frame
+## the stick is held over.
+##
+## Takes the axis as a parameter rather than reading the controllers itself
+## so the selection logic can be driven directly by a headless test — there
+## are no controllers without a live OpenXR session, and this is exactly the
+## kind of logic that reads fine and still doesn't work (see the class
+## comment for the gaze version that shipped broken).
+func _update_selection(x: float) -> void:
+	if not _start_label or not _quit_label:
 		return
-	var forward: Vector3 = -_camera.global_transform.basis.z
-	var cam_pos: Vector3 = _camera.global_position
-	var to_start := (_start_label.global_position - cam_pos).normalized()
-	var to_quit := (_quit_label.global_position - cam_pos).normalized()
 
-	selected_action = "start" if forward.angle_to(to_start) <= forward.angle_to(to_quit) else "quit"
+	if absf(x) < STICK_DEADZONE:
+		_stick_ready = true
+	elif _stick_ready:
+		_stick_ready = false
+		selected_action = "quit" if x > 0.0 else "start"
 
-	_start_label.modulate = Color(1, 1, 1, 1) if selected_action == "start" else Color(0.45, 0.45, 0.45, 1)
-	_quit_label.modulate = Color(1, 1, 1, 1) if selected_action == "quit" else Color(0.45, 0.45, 0.45, 1)
+	_apply_highlight(_start_label, selected_action == "start")
+	_apply_highlight(_quit_label, selected_action == "quit")
+
+
+## Either stick works — whichever one is actually being pushed wins, so the
+## player doesn't have to remember which hand the menu listens to.
+func _selection_stick_x() -> float:
+	var x := 0.0
+	if _left_controller and _left_controller.get_is_active():
+		x = _left_controller.get_vector2("primary").x
+	if absf(x) < STICK_DEADZONE and _right_controller and _right_controller.get_is_active():
+		x = _right_controller.get_vector2("primary").x
+	return x
+
+
+## Deliberately heavy-handed: colour, size and outline all change together.
+## At VR resolutions across a dark screen, a subtle brightness difference
+## between two small labels is genuinely hard to read.
+func _apply_highlight(label: Label3D, selected: bool) -> void:
+	if selected:
+		label.modulate = Color(1.0, 0.95, 0.5, 1.0)
+		label.outline_modulate = Color(0.9, 0.5, 0.05, 1.0)
+		label.outline_size = 26
+		label.scale = Vector3(1.25, 1.25, 1.25)
+	else:
+		label.modulate = Color(0.42, 0.42, 0.45, 1.0)
+		label.outline_modulate = Color(0.0, 0.0, 0.0, 0.0)
+		label.outline_size = 0
+		label.scale = Vector3.ONE

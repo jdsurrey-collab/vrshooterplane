@@ -928,17 +928,34 @@ request didn't call for.
     reconnected to `play()`) rather than relying on the imported stream's
     own loop flag, for explicit control. Both start when the MENU state is
     entered and stop the moment it's left (`PLAYING` or otherwise).
-  - **START / QUIT selection is gaze-based** — whichever label
-    (`StartLabel`/`QuitLabel`) the camera is currently pointing closest to
-    is highlighted (full brightness vs. dimmed), the same aim-cone approach
-    `missile_system.gd` used to use for its own target lock before that
-    was replaced by a `target_lock.gd` dependency (see Homing missiles),
-    just applied here to two fixed points instead of a moving alien. This
-    script only tracks and displays `selected_action` — it doesn't confirm
-    anything itself;
-    `game_flow.gd` (already the sole owner of trigger-confirm logic for
-    both menu states) reads it on a right-trigger press and either starts
-    the match or calls `get_tree().quit()`.
+  - **START / QUIT selection is by THUMBSTICK** — push either stick left
+    for START or right for QUIT, then pull the right trigger to confirm.
+    The selection is latched through a deadzone (`STICK_DEADZONE`) so one
+    push moves it once instead of re-triggering while held. The highlight
+    is deliberately heavy-handed (colour + 1.25x scale + outline together)
+    because a subtle brightness difference between two small labels on a
+    black screen is genuinely hard to read at VR resolutions, and a `Hint`
+    label spells the controls out. This script only tracks and displays
+    `selected_action` — it doesn't confirm anything itself; `game_flow.gd`
+    (already the sole owner of trigger-confirm logic for both menu states)
+    reads it on a right-trigger press and either starts the match or calls
+    `get_tree().quit()`.
+  - **This replaced a gaze-based version that could never have worked**, and
+    the failure is worth remembering because any future head-locked UI here
+    would hit it. `MainMenu` is a child of `XRCamera3D`, so the labels are
+    rigidly attached to the player's face. Gaze selection compared the angle
+    between the camera's forward vector and the direction to each label —
+    but since the labels move with the head, those directions are constant
+    in camera space, so both angles were fixed no matter where you looked.
+    Worse, the two labels sat symmetrically (x = -0.13 and +0.13, identical
+    y and z), making the two angles *exactly equal*, so the `<=` comparison
+    always resolved to START: **QUIT was literally unselectable.** Gaze
+    selection can only ever work against WORLD-locked UI. `_update_selection()`
+    now takes the stick axis as a parameter rather than reading controllers
+    itself, specifically so a headless test can drive it (there are no
+    controllers without a live OpenXR session, which is precisely why the
+    original bug shipped) — verified with a scripted run covering push,
+    hold-without-repeat, release, and deadzone.
 - **PLAYING**: right trigger confirms `_start_match()` (unpauses the
   player, calls `FactionBattle.start_battle()` which flips
   `simulation_active = true` — this is also the point the 10-minute timer
