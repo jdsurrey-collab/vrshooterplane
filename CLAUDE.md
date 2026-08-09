@@ -1128,16 +1128,23 @@ highlights and oversaturated mids. All of this lives in `Town.tscn`'s
   cueing and `fog_sun_scatter` 0.22 for haze around the sun. Volumetric fog
   was deliberately NOT used — it is expensive in VR stereo and this project
   already has an open frame-rate question.
-- **Height fog is effectively retired** (`fog_height` **320m**, down from
-  3200m). It was swallowing the buildings: `fog_height` is an ABSOLUTE
-  world-Y, but the terrain here ranges over kilometres and the city sits at
-  ~1300-2000m with towers reaching ~3200m — so a single absolute height put
-  the densest fog right through the skyline. Dropping it to 320m puts it
-  below the terrain entirely, which leaves the buildings clear.
-  This is the correct outcome rather than a workaround: absolute-Y height
-  fog fundamentally cannot work on terrain that varies this much, and
-  ground-hugging fog is now the **fog banks'** job (see Rolling fog banks
-  below), which follow the terrain properly.
+- **Height fog is a thin ground blanket**: `fog_height` **830m** with a
+  steep `fog_height_density` of **0.1**. The density is what controls
+  thickness — it's the exponential falloff rate above `fog_height`, so a
+  large value gives a shallow layer (~30m) and a small one gives a tall
+  gradient. It was previously 0.0175 at 3200m, which is why fog was
+  swallowing the skyline rather than lying on the ground.
+- **KNOWN LIMITATION, measured.** `fog_height` is an ABSOLUTE world Y, and
+  the terrain under the city ranges from **506m to 2586m — a 2080m spread**
+  (mean 1090m, city centre 794m). A single absolute height therefore
+  *cannot* hug the ground everywhere: 830m sits about 30m over the city
+  centre, pools deeper in the low ground toward 506m, and is underground on
+  the high ground toward 2586m, which gets no blanket at all. This is
+  inherent to non-volumetric height fog and is not tunable away — the only
+  way to get a true terrain-following blanket is FogVolumes (see Rolling
+  fog banks below, currently disabled). If the uneven coverage becomes a
+  problem, the lever is `fog_height`: lower it toward 550m to favour the
+  valleys, raise it toward 1100m to favour the mean.
 - Both densities were **halved after the first look in the headset** —
   `fog_density` 0.85 -> 0.425 and `fog_height_density` 0.035 -> 0.0175.
 - **FOG RANGE MUST EXCEED THE SPAWN DISTANCE.** The next look reported "I
@@ -1165,7 +1172,25 @@ All of it is first-pass and unverified in the headset, like every other
 visual tuning in this project. The exported roughness knobs and the
 Environment's grade values are the dials.
 
-### Rolling fog banks
+### Rolling fog banks — BUILT, THEN DISABLED
+
+**Currently off** (`FogBanks.enabled = false` and
+`volumetric_fog_enabled = false`), left in place rather than deleted, same
+convention as the other retired systems. Turning both back on restores it.
+
+Why it was switched off, from the live look: *"I can't see fog in the
+distance, but it's appearing next to me."* That's an accurate description
+of two real constraints stacking up, not a tuning miss:
+- Volumetric fog only exists inside the froxel grid, which reaches
+  `volumetric_fog_length` (12km) at most. Everything past that has no
+  volumetric fog at all, so there is nothing in the distance to see.
+- The banks were discrete drifting volumes recycled at 6.5km from the
+  player, so what you *did* see was individual blobs arriving nearby.
+
+A continuous tiled sheet instead of drifting banks would fix the second
+point but not the first — the hard 12km boundary would remain. Getting
+ground fog that is both terrain-following AND visible at 20km+ is not
+something either of Godot's fog systems does.
 
 `scripts/fog_banks.gd` (`FogBanks` in `Town.tscn`) — drifting banks of fog
 that hug the ground and climb terrain. Flat depth fog **cannot** do this:

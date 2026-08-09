@@ -37,18 +37,18 @@ fog_sun_scatter = 0.22
 fog_density = 0.425
 fog_aerial_perspective = 0.55
 fog_sky_affect = 0.5
-fog_height = 320.0
-fog_height_density = 0.0175
+fog_height = 830.0
+fog_height_density = 0.1
 fog_depth_curve = 0.55
 fog_depth_begin = 2500.0
 fog_depth_end = 70000.0
-volumetric_fog_enabled = true
+volumetric_fog_enabled = false
 volumetric_fog_density = 0.0
 volumetric_fog_albedo = Color(0.72, 0.74, 0.73, 1)
+volumetric_fog_gi_inject = 0.0
 volumetric_fog_anisotropy = 0.25
 volumetric_fog_length = 12000.0
 volumetric_fog_detail_spread = 2.5
-volumetric_fog_gi_inject = 0.0
 volumetric_fog_ambient_inject = 0.7
 volumetric_fog_sky_affect = 0.0
 volumetric_fog_temporal_reprojection_amount = 0.92
@@ -82,6 +82,7 @@ spawn_position_xz = Vector2(-16000, 0)
 
 [node name="FogBanks" type="Node3D" parent="."]
 script = ExtResource("10_fogbanks")
+enabled = false
 
 [node name="City" type="Node3D" parent="."]
 script = ExtResource("7_citygen")
