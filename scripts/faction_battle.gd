@@ -1,98 +1,237 @@
 extends Node3D
 
-## Alien invasion: 200 friendly ships vs. 200 alien ships fighting for
-## control of the city, plus the player. Replaces the old single wandering
-## HOSTILE-1 (enemy_ai.gd/EnemyShip.tscn, left on disk unused, same
-## convention as the retired map editor).
+## Alien invasion: two fleets of squadrons fighting for control of the city,
+## plus the player. Replaces the old single wandering HOSTILE-1
+## (enemy_ai.gd/EnemyShip.tscn, left on disk unused, same convention as the
+## retired map editor).
 ##
-## ARCHITECTURE — one manager, not 400 nodes. 400 individual Node3D+script
-## instances (the old enemy_ai.gd pattern) would mean 400x that per-instance
-## overhead. Instead every combatant is a lightweight Combatant (RefCounted,
-## see combatant.gd) held in a plain Array, and this single script updates
-## all of them in tight loops every _physics_process, then writes the
-## results into two MultiMeshInstance3D (one per faction, GPU-instanced —
-## same technique city_generator.gd already uses for its ~1200 street
-## tiles) instead of one draw call per ship.
+## ARCHITECTURE — one manager, not hundreds of nodes. Individual
+## Node3D+script instances (the old enemy_ai.gd pattern) would mean that
+## per-instance overhead multiplied by the whole population. Instead every
+## combatant is a lightweight Combatant (RefCounted, see combatant.gd) held
+## in a plain Array, grouped into Squads (RefCounted too, see squad.gd), and
+## this single script updates all of them in tight loops every
+## _physics_process, then writes the results into two MultiMeshInstance3D
+## (one per faction, GPU-instanced — the same technique city_generator.gd
+## already uses for its ~1200 street tiles) instead of one draw call per
+## ship.
+##
+## SQUADS, not one big cloud. The first version had every ship independently
+## spawn in one cluster and fly at one shared dome_center, which produced
+## exactly what it sounds like: two enormous undifferentiated packs. Now the
+## population is cut into squads of 1-5 (SQUAD_SIZE_MIN/MAX), each with its
+## OWN spawn point spread along a wide front, its OWN objective inside the
+## dome, formation-keeping on a leader, focus fire on the leader's target,
+## and its own morale state. Combined with the separation steering below,
+## that's what breaks the fleet up into readable individual fights.
+##
+## AI BEHAVIOURS, modelled on how modern combat-flight AI actually reads:
+##   * FORMATION — wingmen hold a station offset from their leader, with a
+##     throttle that speeds up/slows down to close on that station instead
+##     of flying at one fixed speed (which strings a squad out or piles it
+##     up).
+##   * PURSUE — run in on a target using a real lead/intercept solution
+##     (_lead_point), not a straight chase of where the target is *now*.
+##   * BREAK_OFF — after closing inside BREAK_OFF_RANGE, the attacker flies
+##     THROUGH and past its target for a couple of seconds before turning
+##     back, instead of gluing itself to the target's tail forever. This is
+##     the single biggest readability win: fights become a series of
+##     recognisable passes rather than two dots stuck together.
+##   * RETREAT — a hurt pilot (health under RETREAT_HEALTH_FRACTION) may
+##     break off entirely; a squad that has lost enough of its members
+##     (Squad.losses) breaks off as a unit, runs to a rally point, REGROUPs
+##     and comes back. "They may pull off if they are hurt, or if too many
+##     of their squad mates die."
+##   * SEPARATION — every ship pushes away from nearby friendly ships, which
+##     is what actually stops squads from collapsing into a single point.
+##   * Reaction delay + per-pilot accuracy — ships don't fire the instant
+##     they acquire (Combatant.reaction_timer), and their aim is displaced
+##     from the true firing solution by an amount scaled by their own
+##     `accuracy` and the range. This is the "threatening but not unfair"
+##     knob.
 ##
 ## AIR SUPERIORITY — an invisible cylindrical "dome" over the city
 ## (city_center, dome_radius horizontally, dome_ceiling above terrain).
 ## Every physics frame, each side's count of living ships currently inside
 ## the dome (the player counts as one friendly) nets against the other:
-## air_superiority += (friendly_in_dome - enemy_in_dome) * delta, clamped to
-## [-100, 100] — one enemy in the dome cancels one friendly's contribution,
-## exactly 1-for-1. Either side hitting +/-100, or the 10-minute match timer
-## expiring (higher AS wins), ends the match.
-##
-## RETARGETING is staggered — only ~1/8 of the population re-evaluates its
-## target each frame (round-robin by index), each doing a linear scan of the
-## ~200 opposing living units (~10k comparisons/frame total, trivial). A
-## combatant whose target just died force-retargets immediately regardless
-## of stagger slot. Aliens additionally consider the player as a target
-## candidate (gated by aggro_radius_player) — friendlies never do.
+## air_superiority += (friendly_in_dome - enemy_in_dome) * delta * the
+## as_generation_multiplier, clamped to [-100, 100] — one enemy in the dome
+## cancels one friendly's contribution, exactly 1-for-1. Either side hitting
+## +/-100, or the 10-minute match timer expiring (higher AS wins), ends it.
 ##
 ## BOLTS are two separate systems. Ambient unit-vs-unit fire ("lasers
 ## everywhere") uses a pooled, non-Node bolt array (Dictionaries), rendered
 ## via a third MultiMeshInstance3D, hit-checked with the same closest-point-
 ## on-segment swept test laser_bolt.gd already uses (a plain point/distance
-## check would let bolts tunnel through targets at 900 m/s — this project
-## already fixed that bug once for the player's own bolts). Hit checks are
-## spatially bucketed into a per-frame grid keyed by
-## city_generator.gd's own block_pitch (450m cells) — unstaggered bolt-vs-
-## unit checks are the single biggest CPU cost in this system, dwarfing
-## retargeting, so they're the one thing that gets bucketed instead of
-## staggered (a bolt's hit check can't skip frames without reintroducing
-## tunneling). Aliens shooting AT THE PLAYER specifically instead reuse the
-## existing LaserBolt.tscn/laser_bolt.gd Node-based system
-## (fired_by_player=false) — low volume by construction (aggro-gated), and
-## it's what feeds player_damage.gd's already-built hit path.
+## check would let bolts tunnel through targets — this project already fixed
+## that bug once for the player's own bolts). Hit checks are spatially
+## bucketed into a per-frame grid keyed by city_generator.gd's own
+## block_pitch (450m cells) — unstaggered bolt-vs-unit checks are the single
+## biggest CPU cost in this system, dwarfing retargeting, so they're the one
+## thing that gets bucketed instead of staggered (a bolt's hit check can't
+## skip frames without reintroducing tunneling). Aliens shooting AT THE
+## PLAYER specifically instead reuse the existing
+## LaserBolt.tscn/laser_bolt.gd Node-based system (fired_by_player=false) —
+## low volume by construction (aggro-gated), and it's what feeds
+## player_damage.gd's already-built hit path.
+##
+## SPAWN-TIME PROPERTY GOTCHA (a real bug this cost us): add_child() runs the
+## child's _ready() immediately, so any exported/plain property a scene's
+## _ready() reads MUST be assigned BEFORE add_child(), not after. Both
+## _fire_at_player() and _fire_missile_at_player() originally set
+## `fired_by_player = false` / `target_is_player = true` after add_child,
+## so those scripts' _ready() saw the defaults, never resolved their player
+## references, and the player could not be damaged by aliens AT ALL — while
+## still hearing the missile's own impact sound, which is exactly what
+## "I hear the hull taking hits but I'm not getting hurt" was.
+##
+## EFFECT BUDGETS. Now that the AI actually fights, kills happen constantly,
+## and every kill used to spawn an unconditional ShipExplosion (a particle
+## tree plus a 6000m-range OmniLight3D). At battle scale that is a real
+## frame-budget problem, so kill effects are now budgeted three ways: a hard
+## cap on concurrent explosions, no light beyond explosion_light_range, and
+## nothing at all beyond explosion_cull_range. Battle audio is budgeted the
+## same way — see _play_battle_sound().
 ##
 ## The PLAYER's own weapon damages aliens through this manager too —
 ## laser_bolt.gd's _check_enemy_hit() calls get_nearest_alive_alien() /
-## apply_damage() below instead of the old hardcoded single-enemy node.
-## Friendlies are a structurally separate array the player-facing API never
-## touches, so they can never be targeted or damaged — not an explicit
-## exclusion check, just a consequence of the split.
+## apply_damage() below. Friendlies are a structurally separate array the
+## player-facing API never touches, so they can never be targeted or damaged
+## — not an explicit exclusion check, just a consequence of the split.
 
 const LASER_BOLT := preload("res://scenes/LaserBolt.tscn")
 const SHIP_EXPLOSION := preload("res://scenes/ShipExplosion.tscn")
 const FLARE := preload("res://scenes/Flare.tscn")
 const MISSILE := preload("res://scenes/Missile.tscn")
-const MISSILE_ENGAGE_RANGE := 2500.0  # longer stand-off than the ambient-bolt ENGAGE_RANGE — missiles are a real threat, not routine
-const MISSILE_COOLDOWN_MIN := 15.0
-const MISSILE_COOLDOWN_MAX := 30.0
+const HIT_SPARK := preload("res://scenes/HitSpark.tscn")
+const BATTLE_EXPLOSION_SOUND := preload("res://Assets/Audio/battle_explosion.mp3")
+const BATTLE_LASER_SOUND := preload("res://Assets/Audio/battle_laser.mp3")
+
 const SHIP_MESH_PATH := "res://Assets/EnemyShip/ship1.obj"
 const SHIP_SCALE := 2.0  # matches EnemyShip.tscn / Player.tscn's ShipHull
 
 const MAX_HEALTH := 30.0  # ~3 player hits (10 dmg/bolt) to kill — visible, not one-shot
 const BOLT_DAMAGE := 10.0
-const BOLT_SPEED := 900.0  # matches laser_bolt.gd's speed, for a consistent laser feel
+
+## Dropped from 900 m/s. At 900 an ambient bolt crossed a whole engagement
+## in a couple of frames — individually invisible, so a battle of hundreds
+## of simultaneous shots read as nothing at all. Slower + much longer/
+## brighter bolt geometry (see _build_multimesh_nodes) is what turns the
+## fighting into something you can actually watch from a distance. It also
+## means the AI's lead/intercept solution has real work to do.
+const BOLT_SPEED := 520.0
 const BOLT_LIFETIME := 3.0
-const BOLT_HIT_RADIUS := 4.0  # matches laser_bolt.gd's enemy_hit_radius
+const BOLT_HIT_RADIUS := 6.0  # a little wider than laser_bolt.gd's, since ambient bolts are bucketed one frame stale
+
+const MISSILE_ENGAGE_RANGE := 2500.0  # longer stand-off than ENGAGE_RANGE — missiles are a real threat, not routine
+const MISSILE_COOLDOWN_MIN := 15.0
+const MISSILE_COOLDOWN_MAX := 30.0
 
 const RETARGET_STAGGER := 8
-const GRID_CELL_SIZE := 450.0  # city_generator.gd's block_pitch — reused as the bolt-hit bucket size
-const ENGAGE_RANGE := 700.0
+const GRID_CELL_SIZE := 450.0  # city_generator.gd's block_pitch — reused as the bolt-hit / separation bucket size
+const ENGAGE_RANGE := 800.0  # inside this a pilot will actually shoot
 const MAX_ACQUISITION_RANGE := 3000.0  # targets beyond this aren't acquired at all — see _retarget_if_needed
-const TURN_RATE := 0.6  # rad/s-ish steering response
+const FIRE_CONE := deg_to_rad(14.0)  # must have the target roughly ahead, not abeam, to fire
+const TURN_RATE := 0.9  # rad/s-ish steering response (up from 0.6 — dogfights need more authority)
 const MIN_GROUND_CLEARANCE := 200.0  # meters; pull up if under this, same convention as enemy_ai.gd
 const LOOKAHEAD_TIME := 3.0  # seconds ahead to also check clearance for
+const LOOKAHEAD_STAGGER := 4  # only 1/4 of the population re-runs the lookahead terrain sample per frame
 const RESPAWN_DELAY := 8.0
-const SPAWN_SCATTER_RADIUS := 1500.0
+
+## PERFORMANCE GATES. The physics building point-query and the terrain
+## sampler are called per ship AND per bolt, every frame, which at battle
+## scale was measured (headless, 100v100) at ~8ms of physics per frame on
+## its own — more than an entire 90Hz VR frame budget, and the most likely
+## explanation for the live FPS collapse this project has been chasing.
+##
+## The tallest landmark in city_generator.gd is ~625m, so anything flying
+## more than MAX_BUILDING_HEIGHT above the terrain underneath it cannot
+## possibly be intersecting a building, and the physics query can be skipped
+## outright. The ground height is already sampled for the terrain check, so
+## the gate itself is free. In practice this eliminates the large majority
+## of those queries, since combat mostly happens well above the rooftops.
+const MAX_BUILDING_HEIGHT := 700.0
+
+## Air Superiority is a slow scalar (as_generation_multiplier is 0.01) and
+## counting every ship in the dome costs a terrain sample each. Recomputing
+## it 60x/second was pure waste, so it runs every AS_UPDATE_INTERVAL frames
+## and integrates the accumulated delta — mathematically identical, ~6x
+## fewer samples.
+const AS_UPDATE_INTERVAL := 6
+
+## Squadron organisation.
+const SQUAD_SIZE_MIN := 1
+const SQUAD_SIZE_MAX := 5
+const FORMATION_SPACING := 75.0  # meters between formation stations
+const FORMATION_SPEED_GAIN := 0.45  # how hard a wingman throttles to close on its station
+
+## Attack-run shaping.
+const BREAK_OFF_RANGE := 140.0  # closing inside this ends the run — fly through, then turn back
+const BREAK_OFF_TIME_MIN := 1.8
+const BREAK_OFF_TIME_MAX := 3.4
+const REACTION_TIME_MIN := 0.35
+const REACTION_TIME_MAX := 1.1
+const AIM_ERROR_SCALE := 0.055  # aim offset = (1 - accuracy) * range * this
+
+## Morale.
+const RETREAT_HEALTH_FRACTION := 0.35
+const RETREAT_ROLL_CHANCE := 0.55  # a hurt pilot only sometimes breaks — not every one, every time
+const RETREAT_TIME_MIN := 7.0
+const RETREAT_TIME_MAX := 14.0
+const SQUAD_RETREAT_TIME := 14.0
+const SQUAD_REGROUP_TIME := 10.0
+
+## Separation — the actual fix for "the AI clusters together in huge packs".
+const SEPARATION_RADIUS := 130.0
+const SEPARATION_WEIGHT := 2.2
+const MAX_SEPARATION_NEIGHBORS := 6
+
+const SPAWN_FRONT_HALF_WIDTH := 7000.0  # squads spread along this much of the front line, perpendicular to the approach
+const SPAWN_DEPTH := 2500.0
 const SPAWN_ALT_MIN := 300.0
-const SPAWN_ALT_MAX := 900.0
+const SPAWN_ALT_MAX := 1400.0
 
 const FRIENDLY_COLOR := Color(0.25, 0.65, 1.0)
 const ENEMY_COLOR := Color(0.85, 0.1, 0.85)
+const FRIENDLY_BOLT_COLOR := Color(0.35, 0.8, 1.0)
+const ENEMY_BOLT_COLOR := Color(1.0, 0.25, 0.15)
 
-@export var friendly_count: int = 100  # scaled down from 200 pending the FPS investigation — see CLAUDE.md's Known gaps
+const KILL_FEED_MAX_ENTRIES := 6
+const KILL_FEED_ENTRY_LIFETIME := 8.0
+
+@export var friendly_count: int = 100
 @export var enemy_count: int = 100
 @export var dome_radius: float = 8000.0  # covers the city's ~7637m corner-to-corner footprint
 @export var dome_ceiling: float = 3500.0  # above terrain
 @export var match_duration: float = 600.0  # 10 minutes
 @export var aggro_radius_player: float = 2500.0
-@export var max_ambient_bolts: int = 180
+@export var max_ambient_bolts: int = 320  # raised with the slower bolts — they live longer on screen
 @export var enable_building_collision_check: bool = true
-@export var as_generation_multiplier: float = 0.01  # 10% of the previous 0.1 (i.e. 1% of the original 1 AS/sec per net ship)
+@export var as_generation_multiplier: float = 0.01
+
+## How many aliens may hunt the player at once. An "attacker cap" is a
+## standard modern-combat-AI pacing device: without it, every alien inside
+## aggro_radius_player converges on the player at the same time and the
+## fight stops being winnable or readable.
+@export var max_aliens_targeting_player: int = 3
+
+## The player is weighted as if this much closer than it really is when an
+## alien picks a target, so the player actually gets hunted instead of
+## always losing out to whichever friendly ship happens to be marginally
+## nearer (the player flies with the friendly fleet, so that was almost
+## always the case).
+@export var player_target_bias: float = 0.55
+
+@export_group("Effect budget")
+@export var max_concurrent_explosions: int = 14
+@export var explosion_light_range: float = 4000.0  # past this, the kill fireball spawns without its OmniLight3D
+@export var explosion_cull_range: float = 15000.0  # past this, no kill effect at all
+@export var max_concurrent_sparks: int = 10
+@export var spark_range: float = 2500.0  # non-lethal hit sparks only spawn this close to the player
+@export var max_battle_sounds: int = 12
+@export var explosion_sound_range: float = 7000.0
+@export var laser_sound_range: float = 1500.0
+@export var laser_sound_chance: float = 0.07  # only this fraction of nearby shots get a sound — the rest would be a wall of noise
 
 ## Live status, readable by battle_hud.gd / target_lock.gd / enemy_locator.gd.
 var air_superiority: float = 0.0  # -100 (enemy control) .. +100 (friendly control)
@@ -110,16 +249,18 @@ var simulation_active: bool = false
 ## kill_feed_hud.gd — see _add_kill_feed_entry()/_update_kill_feed().
 var kill_feed_text: String = ""
 
-const KILL_FEED_MAX_ENTRIES := 6
-const KILL_FEED_ENTRY_LIFETIME := 8.0
 var _kill_feed_entries: Array = []  # Array of {"text": String, "age": float}
 
 var _friendlies: Array[Combatant] = []
 var _enemies: Array[Combatant] = []
+var _friendly_squads: Array[Squad] = []
+var _enemy_squads: Array[Squad] = []
 var _ambient_bolts: Array[Dictionary] = []
 var _friendly_grid: Dictionary = {}
 var _enemy_grid: Dictionary = {}
 var _frame_counter: int = 0
+var _aliens_on_player: int = 0
+var _as_accumulated_delta: float = 0.0
 
 var _friendly_spawn_center: Vector3
 var _enemy_spawn_center: Vector3
@@ -130,6 +271,10 @@ var _player: Node3D
 var _friendly_mmi: MultiMeshInstance3D
 var _enemy_mmi: MultiMeshInstance3D
 var _bolt_mmi: MultiMeshInstance3D
+
+var _live_explosions: Array = []
+var _live_sounds: Array = []
+var _live_sparks: Array = []
 
 
 func _ready() -> void:
@@ -146,8 +291,12 @@ func _ready() -> void:
 	match_time_remaining = match_duration
 
 	_build_multimesh_nodes()
-	_spawn_faction(_friendlies, friendly_count, _friendly_spawn_center, Combatant.Faction.FRIENDLY)
-	_spawn_faction(_enemies, enemy_count, _enemy_spawn_center, Combatant.Faction.ENEMY)
+	_spawn_faction(_friendlies, friendly_count, Combatant.Faction.FRIENDLY)
+	_spawn_faction(_enemies, enemy_count, Combatant.Faction.ENEMY)
+	_build_squads(_friendlies, _friendly_squads, Combatant.Faction.FRIENDLY, _friendly_spawn_center)
+	_build_squads(_enemies, _enemy_squads, Combatant.Faction.ENEMY, _enemy_spawn_center)
+	_place_all_at_spawn()
+
 	_friendly_mmi.multimesh.instance_count = friendly_count
 	_enemy_mmi.multimesh.instance_count = enemy_count
 
@@ -156,12 +305,24 @@ func _physics_process(delta: float) -> void:
 	if simulation_active and not game_over:
 		_update_match_timer(delta)
 
-		for i in _friendlies.size():
-			_update_combatant(_friendlies[i], i, _enemies, false, delta)
-		for i in _enemies.size():
-			_update_combatant(_enemies[i], i, _friendlies, true, delta)
-
+		# Grids are rebuilt at the TOP of the frame so separation steering
+		# below can use them. Only the bucketing is a frame stale by the time
+		# the bolt checks run (positions themselves are read live), and at
+		# 450m cells a frame of movement can't move anything meaningfully
+		# between buckets.
 		_rebuild_spatial_grids()
+		_aliens_on_player = 0
+
+		for sq in _friendly_squads:
+			_update_squad(sq, _friendlies, delta)
+		for sq in _enemy_squads:
+			_update_squad(sq, _enemies, delta)
+
+		for i in _friendlies.size():
+			_update_combatant(_friendlies[i], i, _enemies, _friendlies, _friendly_grid, _friendly_squads, false, delta)
+		for i in _enemies.size():
+			_update_combatant(_enemies[i], i, _friendlies, _enemies, _enemy_grid, _enemy_squads, true, delta)
+
 		_update_ambient_bolts(delta)
 		_update_air_superiority(delta)
 		_update_kill_feed(delta)
@@ -190,10 +351,11 @@ func reset_battle() -> void:
 	_ambient_bolts.clear()
 	_kill_feed_entries.clear()
 	kill_feed_text = ""
-	for c in _friendlies:
-		_respawn_combatant(c, _friendly_spawn_center)
-	for c in _enemies:
-		_respawn_combatant(c, _enemy_spawn_center)
+	for sq in _friendly_squads:
+		_reset_squad(sq)
+	for sq in _enemy_squads:
+		_reset_squad(sq)
+	_place_all_at_spawn()
 
 
 # ---------------------------------------------------------------------------
@@ -205,23 +367,29 @@ func _build_multimesh_nodes() -> void:
 	_friendly_mmi = _make_ship_multimesh(ship_mesh, FRIENDLY_COLOR)
 	_enemy_mmi = _make_ship_multimesh(ship_mesh, ENEMY_COLOR)
 
+	# Long and fat compared to the player's own bolt. These are being viewed
+	# from hundreds or thousands of meters away across a whole battle, where
+	# the original 2.5m x 0.06m sliver was far below one pixel. Vertex colour
+	# carries the per-bolt faction tint (see _bolt_transform / set_instance_color).
 	var bolt_mesh := CylinderMesh.new()
-	bolt_mesh.top_radius = 0.0
-	bolt_mesh.bottom_radius = 0.06
-	bolt_mesh.height = 2.5
-	bolt_mesh.radial_segments = 8
+	bolt_mesh.top_radius = 0.15
+	bolt_mesh.bottom_radius = 0.55
+	bolt_mesh.height = 26.0
+	bolt_mesh.radial_segments = 6
 
 	var bolt_mat := StandardMaterial3D.new()
 	bolt_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	bolt_mat.albedo_color = Color(1.0, 0.15, 0.1, 1.0)
+	bolt_mat.vertex_color_use_as_albedo = true
+	bolt_mat.albedo_color = Color(1.0, 1.0, 1.0, 1.0)
 	bolt_mat.emission_enabled = true
-	bolt_mat.emission = Color(1.0, 0.15, 0.1, 1.0)
-	bolt_mat.emission_energy_multiplier = 8.0
+	bolt_mat.emission = Color(1.0, 1.0, 1.0, 1.0)
+	bolt_mat.emission_energy_multiplier = 6.0
 
 	_bolt_mmi = MultiMeshInstance3D.new()
 	add_child(_bolt_mmi)
 	var bolt_multimesh := MultiMesh.new()
 	bolt_multimesh.transform_format = MultiMesh.TRANSFORM_3D
+	bolt_multimesh.use_colors = true
 	bolt_multimesh.mesh = bolt_mesh
 	bolt_multimesh.instance_count = max_ambient_bolts
 	bolt_multimesh.visible_instance_count = 0
@@ -250,70 +418,205 @@ func _make_ship_multimesh(mesh: Mesh, tint: Color) -> MultiMeshInstance3D:
 	return mmi
 
 
-func _spawn_faction(target: Array, count: int, spawn_center: Vector3, faction: int) -> void:
+func _spawn_faction(target: Array, count: int, faction: int) -> void:
 	for i in count:
 		var c := Combatant.new()
 		c.faction = faction
-		c.speed = randf_range(120.0, 200.0)
-		_respawn_combatant(c, spawn_center)
-		c.respawn_time_remaining = 0.0
+		c.base_speed = randf_range(140.0, 210.0)
+		c.speed = c.base_speed
+		c.accuracy = randf_range(0.55, 0.95)
+		c.health = MAX_HEALTH
+		c.alive = true
 		target.append(c)
+
+
+## Cuts a faction's flat array into squads of 1-5, each with its own spawn
+## point along a wide front and its own objective inside the dome. Squad
+## membership is fixed for the whole match — a dead member respawns back
+## into the same slot, matching the MultiMesh instance buffer's fixed
+## indexing.
+func _build_squads(units: Array, squads: Array[Squad], faction: int, base_center: Vector3) -> void:
+	var i := 0
+	while i < units.size():
+		var size: int = mini(randi_range(SQUAD_SIZE_MIN, SQUAD_SIZE_MAX), units.size() - i)
+		var sq := Squad.new()
+		sq.faction = faction
+		sq.spawn_center = _random_squad_spawn(base_center)
+		sq.objective = _random_point_in_dome()
+		sq.rally_point = sq.spawn_center
+		for k in size:
+			var idx: int = i + k
+			var c: Combatant = units[idx]
+			c.squad_id = squads.size()
+			c.squad_slot = k
+			sq.members.append(idx)
+		sq.leader = sq.members[0]
+		squads.append(sq)
+		i += size
+
+
+## Squad spawn points are spread along a wide front perpendicular to the
+## approach axis (the fleets close along X, so the front runs along Z), with
+## some depth stagger. This is half of the anti-clustering fix — the other
+## half is separation steering. One shared spawn cluster is what produced
+## the original single converging blob.
+func _random_squad_spawn(base_center: Vector3) -> Vector3:
+	return base_center + Vector3(
+			randf_range(-SPAWN_DEPTH, SPAWN_DEPTH),
+			0.0,
+			randf_range(-SPAWN_FRONT_HALF_WIDTH, SPAWN_FRONT_HALF_WIDTH))
+
+
+func _place_all_at_spawn() -> void:
+	for sq in _friendly_squads:
+		for idx in sq.members:
+			_respawn_combatant(_friendlies[idx], sq)
+			_friendlies[idx].respawn_time_remaining = 0.0
+	for sq in _enemy_squads:
+		for idx in sq.members:
+			_respawn_combatant(_enemies[idx], sq)
+			_enemies[idx].respawn_time_remaining = 0.0
+
+
+func _reset_squad(sq: Squad) -> void:
+	sq.state = Squad.State.ADVANCE
+	sq.state_timer = 0.0
+	sq.losses = 0
+	sq.focus_target = -1
+	sq.focus_is_player = false
+	sq.objective = _random_point_in_dome()
+	sq.leader = sq.members[0] if not sq.members.is_empty() else -1
+
+
+# ---------------------------------------------------------------------------
+# Squad-level orders
+# ---------------------------------------------------------------------------
+
+func _update_squad(sq: Squad, units: Array, delta: float) -> void:
+	sq.state_timer -= delta
+
+	# Leadership succession — a squad whose leader is dead has no formation
+	# anchor, so promote the first living member.
+	var leader: Combatant = units[sq.leader] if sq.leader >= 0 else null
+	if leader == null or not leader.alive:
+		sq.leader = -1
+		for idx in sq.members:
+			if (units[idx] as Combatant).alive:
+				sq.leader = idx
+				break
+		if sq.leader < 0:
+			return
+		leader = units[sq.leader]
+
+	# The leader's target becomes the squad's focus, so wingmen concentrate
+	# on one ship instead of each independently chasing its own nearest.
+	sq.focus_target = leader.target_index
+	sq.focus_is_player = leader.targeting_player
+
+	match sq.state:
+		Squad.State.ADVANCE:
+			if leader.position.distance_to(sq.objective) < 600.0:
+				sq.objective = _random_point_in_dome()
+			if sq.focus_target >= 0 or sq.focus_is_player:
+				sq.state = Squad.State.ENGAGE
+		Squad.State.ENGAGE:
+			if sq.losses >= _squad_break_threshold(sq):
+				sq.state = Squad.State.RETREAT
+				sq.state_timer = SQUAD_RETREAT_TIME
+				sq.rally_point = _squad_rally_point(sq)
+			elif sq.focus_target < 0 and not sq.focus_is_player:
+				sq.state = Squad.State.ADVANCE
+		Squad.State.RETREAT:
+			if sq.state_timer <= 0.0:
+				sq.state = Squad.State.REGROUP
+				sq.state_timer = SQUAD_REGROUP_TIME
+		Squad.State.REGROUP:
+			if sq.state_timer <= 0.0:
+				sq.losses = 0
+				sq.objective = _random_point_in_dome()
+				sq.state = Squad.State.ADVANCE
+
+
+## Half the squad (rounded up) is what it takes to break them. A single-ship
+## "squad" is governed by its own health instead — it's dead before this
+## could ever fire.
+func _squad_break_threshold(sq: Squad) -> int:
+	return maxi(1, ceili(float(sq.members.size()) * 0.5))
+
+
+## Somewhere back toward the squad's own side of the map, well away from the
+## dome — where a broken squad runs to before re-forming.
+func _squad_rally_point(sq: Squad) -> Vector3:
+	var away := (sq.spawn_center - dome_center)
+	away.y = 0.0
+	if away.length() < 1.0:
+		away = Vector3.RIGHT * 1000.0
+	return dome_center + away.normalized() * (dome_radius + 3000.0) + Vector3(0.0, 1200.0, 0.0)
 
 
 # ---------------------------------------------------------------------------
 # Per-combatant update
 # ---------------------------------------------------------------------------
 
-func _update_combatant(c: Combatant, my_index: int, opposing: Array, can_target_player: bool, delta: float) -> void:
+func _update_combatant(c: Combatant, my_index: int, opposing: Array, own_units: Array,
+		own_grid: Dictionary, squads: Array[Squad], can_target_player: bool, delta: float) -> void:
 	if not c.alive:
 		c.respawn_time_remaining -= delta
 		if c.respawn_time_remaining <= 0.0:
-			var spawn_center := _friendly_spawn_center if c.faction == Combatant.Faction.FRIENDLY else _enemy_spawn_center
-			_respawn_combatant(c, spawn_center)
+			_respawn_combatant(c, squads[c.squad_id])
 		return
 
-	_retarget_if_needed(c, my_index, opposing, can_target_player)
+	c.state_timer -= delta
+	c.reaction_timer -= delta
+
+	# Sampled once and reused by both the ground-avoidance test and the
+	# terrain/building crash test below — they used to sample independently.
+	var ground_here: float = _terrain.get_height_at(c.position.x, c.position.z) if _terrain else 0.0
+
+	var sq: Squad = squads[c.squad_id]
+	_retarget_if_needed(c, my_index, opposing, sq, can_target_player)
 
 	var has_target := false
 	var target_pos := Vector3.ZERO
+	var target_vel := Vector3.ZERO
 	if c.targeting_player and _player:
 		has_target = true
 		target_pos = _player.global_position
-	elif c.target_index >= 0 and c.target_index < opposing.size() and opposing[c.target_index].alive:
+	elif c.target_index >= 0 and c.target_index < opposing.size() and (opposing[c.target_index] as Combatant).alive:
 		has_target = true
-		target_pos = opposing[c.target_index].position
+		var t: Combatant = opposing[c.target_index]
+		target_pos = t.position
+		target_vel = t.heading * t.speed
 
-	var desired_dir: Vector3 = (target_pos - c.position) if has_target else _wander_or_advance_direction(c)
+	_update_pilot_state(c, sq, has_target, target_pos)
 
-	# Ground avoidance overrides combat/wander steering when low or about to
-	# be low — same reactive-pull-up pattern enemy_ai.gd already uses for the
-	# player's own foe (current + lookahead clearance checks). The mass
-	# battle never got this ported over initially; ships flying level from
-	# spawn can clip real terrain elevation along the way otherwise (this
-	# map's mountains reach into the thousands of meters, confirmed via a
-	# live-tested run — flying level is not automatically safe here).
-	if _needs_pull_up(c):
+	var desired_dir := _steering_direction(c, sq, own_units, has_target, target_pos, target_vel)
+	desired_dir += _separation(c, own_units, own_grid) * SEPARATION_WEIGHT
+
+	# Ground avoidance overrides everything else when low or about to be low —
+	# same reactive-pull-up pattern enemy_ai.gd used. Ships fly a straight
+	# line at a fixed altitude offset from their own spawn point's ground
+	# height, and this map's mountains reach into the thousands of meters, so
+	# flying level is not automatically safe here.
+	if _needs_pull_up(c, my_index, ground_here):
 		var level_forward := desired_dir if desired_dir.length() > 0.01 else c.heading
-		desired_dir = (level_forward.normalized() + Vector3.UP * 1.5)
+		desired_dir = level_forward.normalized() + Vector3.UP * 1.5
 
 	if desired_dir.length() > 0.01:
 		var new_heading := c.heading.slerp(desired_dir.normalized(), clampf(TURN_RATE * delta, 0.0, 1.0))
 		if new_heading.length() > 0.01:
 			c.heading = new_heading.normalized()
 
+	_update_throttle(c, sq, own_units, has_target, target_pos, delta)
 	c.position += c.heading * c.speed * delta
 
-	if _check_ground_or_building(c):
-		_kill_combatant(c, my_index, "crashed")
+	if _check_ground_or_building(c, ground_here):
+		_kill_combatant(c, my_index, sq, "crashed")
 		return
 
 	c.fire_cooldown -= delta
-	if has_target and c.fire_cooldown <= 0.0 and c.position.distance_to(target_pos) <= ENGAGE_RANGE:
-		c.fire_cooldown = randf_range(0.6, 1.4)
-		if c.targeting_player:
-			_fire_at_player(c, target_pos)
-		else:
-			_spawn_ambient_bolt(c, my_index, c.faction, target_pos)
+	if has_target and c.state != Combatant.State.RETREAT and c.reaction_timer <= 0.0 and c.fire_cooldown <= 0.0:
+		_try_fire(c, my_index, target_pos, target_vel)
 
 	# Rare, longer-range, longer-cooldown missile shot at the player
 	# specifically — independent of the ambient laser cooldown above, so a
@@ -321,21 +624,170 @@ func _update_combatant(c: Combatant, my_index: int, opposing: Array, can_target_
 	# often, an actual homing missile (see missile.gd's target_is_player
 	# mode). This is what gives flare_system.gd's X button a real target.
 	c.missile_cooldown -= delta
-	if c.targeting_player and c.missile_cooldown <= 0.0 and c.position.distance_to(target_pos) <= MISSILE_ENGAGE_RANGE:
+	if c.targeting_player and c.state != Combatant.State.RETREAT and c.missile_cooldown <= 0.0 \
+			and c.position.distance_to(target_pos) <= MISSILE_ENGAGE_RANGE:
 		c.missile_cooldown = randf_range(MISSILE_COOLDOWN_MIN, MISSILE_COOLDOWN_MAX)
 		_fire_missile_at_player(c, target_pos)
 
 
-func _retarget_if_needed(c: Combatant, my_index: int, opposing: Array, can_target_player: bool) -> void:
+## Pilot-level state machine, layered under the squad's orders. A squad that
+## has broken drags all its members into RETREAT; individually, a hurt pilot
+## may break off on its own while the rest of its squad keeps fighting.
+func _update_pilot_state(c: Combatant, sq: Squad, has_target: bool, target_pos: Vector3) -> void:
+	if sq.state == Squad.State.RETREAT or sq.state == Squad.State.REGROUP:
+		c.state = Combatant.State.RETREAT
+		return
+
+	if c.state == Combatant.State.RETREAT:
+		if c.state_timer > 0.0:
+			return
+		c.state = Combatant.State.FORMATION
+
+	# Hurt enough to think about leaving — rolled once per crossing, not
+	# every frame, via the health check plus the state guard above.
+	if c.health <= MAX_HEALTH * RETREAT_HEALTH_FRACTION and randf() < RETREAT_ROLL_CHANCE * 0.02:
+		c.state = Combatant.State.RETREAT
+		c.state_timer = randf_range(RETREAT_TIME_MIN, RETREAT_TIME_MAX)
+		return
+
+	if c.state == Combatant.State.BREAK_OFF:
+		if c.state_timer > 0.0:
+			return
+		c.state = Combatant.State.PURSUE
+
+	if not has_target:
+		c.state = Combatant.State.FORMATION
+		return
+
+	if c.state == Combatant.State.FORMATION:
+		c.state = Combatant.State.PURSUE
+
+	# The attack run ends when the attacker gets close — it flies through and
+	# past its target rather than sticking to its tail, then turns back for
+	# another pass. This is what makes the battle read as dogfighting.
+	if c.state == Combatant.State.PURSUE and c.position.distance_to(target_pos) < BREAK_OFF_RANGE:
+		c.state = Combatant.State.BREAK_OFF
+		c.state_timer = randf_range(BREAK_OFF_TIME_MIN, BREAK_OFF_TIME_MAX)
+
+
+func _steering_direction(c: Combatant, sq: Squad, own_units: Array, has_target: bool,
+		target_pos: Vector3, target_vel: Vector3) -> Vector3:
+	match c.state:
+		Combatant.State.RETREAT:
+			var run_to := sq.rally_point if sq.state != Squad.State.ENGAGE else _squad_rally_point(sq)
+			return run_to - c.position
+
+		Combatant.State.BREAK_OFF:
+			# Keep flying the heading it already had, pulled slightly off-axis
+			# and up so the pass separates cleanly instead of driving straight
+			# through the target's position.
+			return c.heading * 3.0 + Vector3.UP * 0.6 + c.heading.cross(Vector3.UP) * 0.8
+
+		Combatant.State.PURSUE:
+			if has_target:
+				return _lead_point(c.position, target_pos, target_vel, BOLT_SPEED) - c.position
+			return _formation_or_objective(c, sq, own_units)
+
+		_:
+			return _formation_or_objective(c, sq, own_units)
+
+
+## Leaders fly the squad's objective; wingmen hold a station on the leader.
+func _formation_or_objective(c: Combatant, sq: Squad, own_units: Array) -> Vector3:
+	if sq.leader < 0 or c.squad_slot == 0 or sq.leader >= own_units.size():
+		return _advance_direction(c, sq)
+	var leader: Combatant = own_units[sq.leader]
+	if not leader.alive:
+		return _advance_direction(c, sq)
+	return _formation_station(leader, c.squad_slot) - c.position
+
+
+func _advance_direction(c: Combatant, sq: Squad) -> Vector3:
+	var horiz := Vector2(c.position.x - dome_center.x, c.position.z - dome_center.z).length()
+	if horiz > dome_radius:
+		# Head for the dome at this ship's OWN altitude, not dome_center's
+		# raw y (which is sea level while this terrain is mountainous).
+		return Vector3(sq.objective.x, c.position.y, sq.objective.z) - c.position
+	return sq.objective - c.position
+
+
+## Staggered V/echelon: odd slots to the right, even slots to the left,
+## stepping further back and out with each rank.
+func _formation_station(leader: Combatant, slot: int) -> Vector3:
+	var fwd := leader.heading
+	var up_ref := Vector3.FORWARD if absf(fwd.dot(Vector3.UP)) > 0.99 else Vector3.UP
+	var right := fwd.cross(up_ref).normalized()
+	var up := right.cross(fwd).normalized()
+	var side := 1.0 if (slot % 2) == 1 else -1.0
+	var rank := float((slot + 1) / 2)
+	return leader.position \
+			- fwd * (FORMATION_SPACING * rank) \
+			+ right * (side * FORMATION_SPACING * rank * 0.85) \
+			+ up * (side * 15.0)
+
+
+## Wingmen throttle up to close on their station and back off when they
+## overshoot it — flying at one fixed speed either strings a squad out
+## behind its leader or piles it into them.
+func _update_throttle(c: Combatant, sq: Squad, own_units: Array, has_target: bool, target_pos: Vector3, delta: float) -> void:
+	var wanted := c.base_speed
+	if c.state == Combatant.State.RETREAT:
+		wanted = c.base_speed * 1.15
+	elif has_target and c.state == Combatant.State.PURSUE:
+		wanted = c.base_speed * 1.1
+	elif c.squad_slot > 0 and sq.leader >= 0 and sq.leader < own_units.size():
+		var leader: Combatant = own_units[sq.leader]
+		if leader.alive:
+			var gap := c.position.distance_to(_formation_station(leader, c.squad_slot))
+			wanted = clampf(leader.speed + gap * FORMATION_SPEED_GAIN, c.base_speed * 0.6, c.base_speed * 1.6)
+	c.speed = move_toward(c.speed, wanted, 90.0 * delta)
+
+
+## Pushes away from nearby same-faction ships. Without this, formation and
+## objective steering alone let whole squadrons converge onto identical
+## points and fly as one solid mass — the "huge packs" problem. Capped at
+## MAX_SEPARATION_NEIGHBORS and read from the 3x3 grid neighbourhood so the
+## cost stays bounded no matter how dense the local traffic gets.
+func _separation(c: Combatant, units: Array, grid: Dictionary) -> Vector3:
+	var push := Vector3.ZERO
+	var counted := 0
+	var cx := int(floor(c.position.x / GRID_CELL_SIZE))
+	var cz := int(floor(c.position.z / GRID_CELL_SIZE))
+	for dx in [-1, 0, 1]:
+		for dz in [-1, 0, 1]:
+			var key := Vector2i(cx + dx, cz + dz)
+			if not grid.has(key):
+				continue
+			for idx in (grid[key] as Array):
+				var o: Combatant = units[idx]
+				if o == c or not o.alive:
+					continue
+				var away := c.position - o.position
+				var dist := away.length()
+				if dist > SEPARATION_RADIUS or dist < 0.01:
+					continue
+				push += (away / dist) * (1.0 - dist / SEPARATION_RADIUS)
+				counted += 1
+				if counted >= MAX_SEPARATION_NEIGHBORS:
+					return push
+	return push
+
+
+func _retarget_if_needed(c: Combatant, my_index: int, opposing: Array, sq: Squad, can_target_player: bool) -> void:
 	var target_invalid := true
 	if c.targeting_player:
 		target_invalid = not _player
 	elif c.target_index >= 0:
-		target_invalid = c.target_index >= opposing.size() or not opposing[c.target_index].alive
+		target_invalid = c.target_index >= opposing.size() or not (opposing[c.target_index] as Combatant).alive
 
 	var is_stagger_turn := (my_index % RETARGET_STAGGER) == (_frame_counter % RETARGET_STAGGER)
 	if not target_invalid and not is_stagger_turn:
+		if c.targeting_player:
+			_aliens_on_player += 1
 		return
+
+	var previous_target := c.target_index
+	var was_targeting_player := c.targeting_player
 
 	var best_index := -1
 	var best_dist := INF
@@ -345,19 +797,27 @@ func _retarget_if_needed(c: Combatant, my_index: int, opposing: Array, can_targe
 		if not o.alive:
 			continue
 		var d := c.position.distance_squared_to(o.position)
-		if d < best_dist and d <= max_acquisition_sq:
+		if d > max_acquisition_sq:
+			continue
+		# Squad focus fire: the leader's target is treated as substantially
+		# closer than it is, so a squad concentrates rather than fragmenting
+		# onto five separate targets the moment it arrives.
+		if j == sq.focus_target and not sq.focus_is_player:
+			d *= 0.35
+		if d < best_dist:
 			best_dist = d
 			best_index = j
 
 	var use_player := false
-	if can_target_player and _player:
+	if can_target_player and _player and _aliens_on_player < max_aliens_targeting_player:
 		var pd := c.position.distance_squared_to(_player.global_position)
-		if pd <= aggro_radius_player * aggro_radius_player and pd < best_dist:
+		if pd <= aggro_radius_player * aggro_radius_player and pd * player_target_bias < best_dist:
 			use_player = true
 
 	if use_player:
 		c.target_index = -1
 		c.targeting_player = true
+		_aliens_on_player += 1
 	elif best_index >= 0:
 		c.target_index = best_index
 		c.targeting_player = false
@@ -365,24 +825,14 @@ func _retarget_if_needed(c: Combatant, my_index: int, opposing: Array, can_targe
 		c.target_index = -1
 		c.targeting_player = false
 
-
-## No opposing/player target in range: outside the dome, advance toward it
-## ("both teams fly toward the city"); inside with nothing to fight, loiter
-## around a slowly-refreshed random point within the dome rather than
-## wandering back out — "AI wants to be in the dome always."
-func _wander_or_advance_direction(c: Combatant) -> Vector3:
-	var horiz := Vector2(c.position.x - dome_center.x, c.position.z - dome_center.z).length()
-	if horiz > dome_radius:
-		return Vector3(dome_center.x, c.position.y, dome_center.z) - c.position
-
-	if c.position.distance_to(c.wander_point) < 300.0:
-		c.wander_point = _random_point_in_dome()
-	return c.wander_point - c.position
+	# Acquiring something NEW costs a reaction beat before it can shoot.
+	if (c.targeting_player and not was_targeting_player) or (c.target_index >= 0 and c.target_index != previous_target):
+		c.reaction_timer = randf_range(REACTION_TIME_MIN, REACTION_TIME_MAX)
 
 
 func _random_point_in_dome() -> Vector3:
 	var angle := randf() * TAU
-	var dist := randf_range(0.0, dome_radius * 0.8)
+	var dist := randf_range(0.0, dome_radius * 0.85)
 	var x := dome_center.x + cos(angle) * dist
 	var z := dome_center.z + sin(angle) * dist
 	var ground: float = _terrain.get_height_at(x, z) if _terrain else 0.0
@@ -396,68 +846,106 @@ func _random_point_in_dome() -> Vector3:
 ## version (no ground_avoidance_enabled toggle, no engine-health gating —
 ## nothing here has engine damage) but the same core current+lookahead
 ## check, since that's the part that actually matters.
-func _needs_pull_up(c: Combatant) -> bool:
+func _needs_pull_up(c: Combatant, my_index: int, ground_here: float) -> bool:
 	if not _terrain:
 		return false
-	var ground_here: float = _terrain.get_height_at(c.position.x, c.position.z)
+	# Immediate clearance is checked every frame — this is the one that
+	# actually saves a ship's life.
 	if c.position.y - ground_here < MIN_GROUND_CLEARANCE:
 		return true
 
+	# The lookahead sample is staggered and its result latched on the
+	# Combatant — see Combatant.pull_up_latched for why that's accurate.
+	if (my_index % LOOKAHEAD_STAGGER) != (_frame_counter % LOOKAHEAD_STAGGER):
+		return c.pull_up_latched
+
 	var lookahead_pos := c.position + c.heading * c.speed * LOOKAHEAD_TIME
 	var ground_ahead: float = _terrain.get_height_at(lookahead_pos.x, lookahead_pos.z)
-	return lookahead_pos.y - ground_ahead < MIN_GROUND_CLEARANCE
+	c.pull_up_latched = lookahead_pos.y - ground_ahead < MIN_GROUND_CLEARANCE
+	return c.pull_up_latched
 
 
-func _check_ground_or_building(c: Combatant) -> bool:
-	if _terrain:
-		var ground_height: float = _terrain.get_height_at(c.position.x, c.position.z)
-		if c.position.y <= ground_height:
-			return true
-	if enable_building_collision_check:
-		if CrashEffects.check_building_collision(get_world_3d().direct_space_state, c.position):
-			return true
+func _check_ground_or_building(c: Combatant, ground_here: float) -> bool:
+	if _terrain and c.position.y <= ground_here:
+		return true
+	# Altitude gate — see MAX_BUILDING_HEIGHT. Nothing flying this far above
+	# the terrain can be inside a building, so the physics query is skipped.
+	if enable_building_collision_check and (c.position.y - ground_here) <= MAX_BUILDING_HEIGHT:
+		return CrashEffects.check_building_collision(get_world_3d().direct_space_state, c.position)
 	return false
 
 
-func _respawn_combatant(c: Combatant, spawn_center: Vector3) -> void:
+func _respawn_combatant(c: Combatant, sq: Squad) -> void:
+	var spawn_center: Vector3 = sq.spawn_center
 	var angle := randf() * TAU
-	var dist := randf_range(0.0, SPAWN_SCATTER_RADIUS)
+	var dist := randf_range(0.0, 400.0)  # tight — squads spawn as a flight, spread comes from the per-squad centers
 	var x := spawn_center.x + cos(angle) * dist
 	var z := spawn_center.z + sin(angle) * dist
 	var ground: float = _terrain.get_height_at(x, z) if _terrain else 0.0
 	var altitude := randf_range(SPAWN_ALT_MIN, SPAWN_ALT_MAX)
 
 	c.position = Vector3(x, ground + altitude, z)
-	# Horizontal-only heading toward the dome, at spawn altitude — NOT
-	# `(dome_center - c.position)` directly. dome_center.y is 0 (sea
-	# level), but the terrain here is genuinely mountainous (the friendly
-	# spawn point alone sits at ~2713m per a live-tested run), so aiming
-	# at dome_center's raw position would point every freshly-spawned ship
-	# thousands of meters downward and send it straight into the ground
-	# before it ever gets a chance to level out.
-	var level_dome_target := Vector3(dome_center.x, c.position.y, dome_center.z)
-	c.heading = (level_dome_target - c.position).normalized()
+	# Horizontal-only heading toward the objective, at spawn altitude — NOT
+	# `(dome_center - c.position)` directly. dome_center.y is 0 (sea level),
+	# but the terrain here is genuinely mountainous (the friendly spawn point
+	# alone sits at ~2713m per a live-tested run), so aiming at dome_center's
+	# raw position would point every freshly-spawned ship thousands of meters
+	# downward and send it straight into the ground before it ever gets a
+	# chance to level out.
+	var level_target := Vector3(sq.objective.x, c.position.y, sq.objective.z)
+	c.heading = (level_target - c.position).normalized()
 	c.wander_point = c.position + c.heading * 500.0
 	c.health = MAX_HEALTH
 	c.alive = true
+	c.speed = c.base_speed
+	c.state = Combatant.State.FORMATION
+	c.state_timer = 0.0
 	c.target_index = -1
 	c.targeting_player = false
-	c.fire_cooldown = randf_range(0.6, 1.4)
+	c.reaction_timer = randf_range(REACTION_TIME_MIN, REACTION_TIME_MAX)
+	c.fire_cooldown = randf_range(0.4, 1.0)
 	c.missile_cooldown = randf_range(MISSILE_COOLDOWN_MIN, MISSILE_COOLDOWN_MAX)
 	c.respawn_time_remaining = RESPAWN_DELAY
 
 
-func _kill_combatant(c: Combatant, index: int, cause: String) -> void:
+func _kill_combatant(c: Combatant, index: int, sq: Squad, cause: String) -> void:
 	c.alive = false
 	c.target_index = -1
 	c.targeting_player = false
 	c.respawn_time_remaining = RESPAWN_DELAY
+	if sq:
+		sq.losses += 1
+
+	_spawn_kill_effect(c.position)
+	_add_kill_feed_entry("%s %s" % [_combatant_label(c.faction, index), cause])
+
+
+## Budgeted three ways, because now that the AI actually fights, kills are
+## constant and each unbudgeted ShipExplosion is a particle tree plus a
+## 6000m-range OmniLight3D: nothing at all beyond explosion_cull_range, no
+## light beyond explosion_light_range, and a hard cap on how many can be
+## live at once.
+func _spawn_kill_effect(at_position: Vector3) -> void:
+	_purge_freed(_live_explosions)
+	if _live_explosions.size() >= max_concurrent_explosions:
+		return
+
+	var player_dist := INF
+	if _player:
+		player_dist = _player.global_position.distance_to(at_position)
+	if player_dist > explosion_cull_range:
+		return
 
 	var explosion := SHIP_EXPLOSION.instantiate()
+	# Assigned BEFORE add_child — add_child() runs _ready() immediately, and
+	# ship_explosion.gd reads this there. See this file's header for the bug
+	# that taught us to be careful about this ordering.
+	explosion.enable_light = player_dist <= explosion_light_range
 	get_tree().current_scene.add_child(explosion)
-	explosion.global_position = c.position
+	explosion.global_position = at_position
+	_live_explosions.append(explosion)
 
-	_add_kill_feed_entry("%s %s" % [_combatant_label(c.faction, index), cause])
+	_play_battle_sound(BATTLE_EXPLOSION_SOUND, at_position, explosion_sound_range, 900.0, -30.0)
 
 
 func _combatant_label(faction: int, index: int) -> String:
@@ -494,23 +982,92 @@ func _rebuild_kill_feed_text() -> void:
 
 
 # ---------------------------------------------------------------------------
-# Bolts
+# Firing
 # ---------------------------------------------------------------------------
 
-func _fire_at_player(c: Combatant, target_pos: Vector3) -> void:
-	var dir := (target_pos - c.position).normalized()
+## Shoots only if the target is in range AND roughly ahead (FIRE_CONE) —
+## ships used to fire at anything within range regardless of where their nose
+## was pointed, which is both unreadable and free damage from impossible
+## angles.
+func _try_fire(c: Combatant, my_index: int, target_pos: Vector3, target_vel: Vector3) -> void:
+	var range_to_target := c.position.distance_to(target_pos)
+	if range_to_target > ENGAGE_RANGE:
+		return
+
+	var aim := _aim_point(c, target_pos, target_vel, range_to_target)
+	var to_aim := aim - c.position
+	if to_aim.length() < 0.01 or c.heading.angle_to(to_aim.normalized()) > FIRE_CONE:
+		return
+
+	c.fire_cooldown = randf_range(0.35, 0.9)
+	if c.targeting_player:
+		_fire_at_player(c, aim)
+	else:
+		_spawn_ambient_bolt(c, my_index, c.faction, aim)
+
+
+## True intercept solution, displaced by this pilot's own inaccuracy. The
+## error grows with range, so a distant AI sprays and a close one is
+## genuinely dangerous — the standard way to make combat AI feel skilled
+## without being impossible.
+func _aim_point(c: Combatant, target_pos: Vector3, target_vel: Vector3, range_to_target: float) -> Vector3:
+	var solution := _lead_point(c.position, target_pos, target_vel, BOLT_SPEED)
+	c.aim_jitter = Vector3(randf() - 0.5, randf() - 0.5, randf() - 0.5).normalized()
+	return solution + c.aim_jitter * ((1.0 - c.accuracy) * range_to_target * AIM_ERROR_SCALE)
+
+
+## Where to shoot so a bolt at `bolt_speed` meets a target moving at
+## `target_vel`. Same quadratic firing solution target_lock.gd's PIP ring
+## uses for the player — see docs/gunnery-reference.md. Falls back to the
+## target's current position when there's no valid positive-time solution.
+func _lead_point(shooter_pos: Vector3, target_pos: Vector3, target_vel: Vector3, bolt_speed: float) -> Vector3:
+	var rel := target_pos - shooter_pos
+	var a := target_vel.dot(target_vel) - bolt_speed * bolt_speed
+	var b := 2.0 * rel.dot(target_vel)
+	var cc := rel.dot(rel)
+
+	var t := -1.0
+	if absf(a) < 0.0001:
+		if absf(b) > 0.0001:
+			t = -cc / b
+	else:
+		var disc := b * b - 4.0 * a * cc
+		if disc >= 0.0:
+			var sqrt_d := sqrt(disc)
+			var t1 := (-b + sqrt_d) / (2.0 * a)
+			var t2 := (-b - sqrt_d) / (2.0 * a)
+			if t1 > 0.0 and t2 > 0.0:
+				t = minf(t1, t2)
+			elif t1 > 0.0:
+				t = t1
+			elif t2 > 0.0:
+				t = t2
+
+	if t <= 0.0:
+		return target_pos
+	return target_pos + target_vel * t
+
+
+func _fire_at_player(c: Combatant, aim_point: Vector3) -> void:
+	var dir := (aim_point - c.position).normalized()
 	var up_ref := Vector3.FORWARD if absf(dir.dot(Vector3.UP)) > 0.99 else Vector3.UP
 
 	var bolt := LASER_BOLT.instantiate()
+	# MUST be set before add_child(): add_child() runs laser_bolt.gd's
+	# _ready(), which only resolves its Player/PlayerDamage references when
+	# this is already false. Setting it afterwards (as this originally did)
+	# left those references null, so alien fire could never damage the player.
+	bolt.fired_by_player = false
 	get_tree().current_scene.add_child(bolt)
 	bolt.global_transform = Transform3D(Basis.looking_at(dir, up_ref), c.position)
-	bolt.fired_by_player = false
+
+	_play_battle_sound(BATTLE_LASER_SOUND, c.position, laser_sound_range, 2400.0, -18.0)
 
 
 ## Rare, longer-range shot — see the missile_cooldown gate in
-## _update_combatant(). Reuses missile.gd's target_is_player mode exactly
-## as the player's own missile_system.gd uses it for aliens, just aimed
-## the other way.
+## _update_combatant(). Reuses missile.gd's target_is_player mode exactly as
+## the player's own missile_system.gd uses it for aliens, just aimed the
+## other way.
 func _fire_missile_at_player(c: Combatant, target_pos: Vector3) -> void:
 	if not _player:
 		return
@@ -518,17 +1075,22 @@ func _fire_missile_at_player(c: Combatant, target_pos: Vector3) -> void:
 	var up_ref := Vector3.FORWARD if absf(dir.dot(Vector3.UP)) > 0.99 else Vector3.UP
 
 	var missile := MISSILE.instantiate()
-	get_tree().current_scene.add_child(missile)
-	missile.global_transform = Transform3D(Basis.looking_at(dir, up_ref), c.position)
+	# Same before-add_child rule as _fire_at_player above — missile.gd's
+	# _ready() joins the "player_seeking_missiles" group and resolves
+	# PlayerDamage/FlareSystem only when target_is_player is already true.
+	# Setting these afterwards meant alien missiles did no damage and never
+	# triggered missile_alert.gd.
 	missile.target_is_player = true
 	missile.player = _player
 	missile.battle = self
+	get_tree().current_scene.add_child(missile)
+	missile.global_transform = Transform3D(Basis.looking_at(dir, up_ref), c.position)
 
 
-func _spawn_ambient_bolt(c: Combatant, shooter_index: int, faction: int, target_pos: Vector3) -> void:
+func _spawn_ambient_bolt(c: Combatant, shooter_index: int, faction: int, aim_point: Vector3) -> void:
 	if _ambient_bolts.size() >= max_ambient_bolts:
 		return
-	var dir := (target_pos - c.position).normalized()
+	var dir := (aim_point - c.position).normalized()
 	_ambient_bolts.append({
 		"position": c.position,
 		"velocity": dir * BOLT_SPEED,
@@ -537,6 +1099,13 @@ func _spawn_ambient_bolt(c: Combatant, shooter_index: int, faction: int, target_
 		"life": BOLT_LIFETIME,
 	})
 
+	if randf() < laser_sound_chance:
+		_play_battle_sound(BATTLE_LASER_SOUND, c.position, laser_sound_range, 2400.0, -18.0)
+
+
+# ---------------------------------------------------------------------------
+# Bolts
+# ---------------------------------------------------------------------------
 
 func _update_ambient_bolts(delta: float) -> void:
 	var i := 0
@@ -562,36 +1131,73 @@ func _update_ambient_bolts(delta: float) -> void:
 
 
 ## Ambient bolt misses (terrain/building) despawn silently — no impact
-## effect. At 100-200+ concurrent bolts, spawning CrashEffects.
-## spawn_laser_impact()'s full Node3D+GPUParticles3D tree per miss would
-## recreate the exact "hundreds of piling-up effects" problem that function
-## was built to avoid, just at 10-40x the scale it was tuned for. The
-## travelling bolts themselves are already the "lasers everywhere" visual;
-## only kills (bounded by population size, not bolt volume) get an effect —
-## see _kill_combatant().
+## effect. At hundreds of concurrent bolts, spawning
+## CrashEffects.spawn_laser_impact()'s full Node3D+GPUParticles3D tree per
+## miss would recreate the exact "hundreds of piling-up effects" problem
+## that function was built to avoid, just at far greater scale. The
+## travelling bolts themselves are the "lasers everywhere" visual; only
+## kills (bounded by population, not bolt volume, and budgeted further in
+## _spawn_kill_effect) get an effect.
 func _check_bolt_environment(pos: Vector3) -> bool:
+	var ground_height := 0.0
 	if _terrain:
-		var ground_height: float = _terrain.get_height_at(pos.x, pos.z)
+		ground_height = _terrain.get_height_at(pos.x, pos.z)
 		if pos.y <= ground_height:
 			return true
+	# Same altitude gate as the ships use — see MAX_BUILDING_HEIGHT. Most
+	# bolts fly well above the city, so this removes the large majority of
+	# the per-bolt physics queries.
+	if (pos.y - ground_height) > MAX_BUILDING_HEIGHT:
+		return false
 	return CrashEffects.check_building_collision(get_world_3d().direct_space_state, pos)
 
 
+## Iterates the 3x3 grid neighbourhood inline rather than building a
+## candidate Array per bolt per frame — at hundreds of bolts that allocation
+## was pure garbage churn in the hottest loop in the system.
 func _check_ambient_bolt_hit(b: Dictionary, prev_pos: Vector3, new_pos: Vector3) -> bool:
 	var owner_faction: int = b["faction"]
 	var opposing: Array = _enemies if owner_faction == Combatant.Faction.FRIENDLY else _friendlies
 	var grid: Dictionary = _enemy_grid if owner_faction == Combatant.Faction.FRIENDLY else _friendly_grid
 
-	for idx in _grid_candidates(grid, new_pos):
-		var o: Combatant = opposing[idx]
-		if not o.alive:
-			continue
-		var closest := _closest_point_on_segment(o.position, prev_pos, new_pos)
-		if closest.distance_to(o.position) <= BOLT_HIT_RADIUS:
-			var shooter_label := _combatant_label(owner_faction, b["shooter_index"])
-			_apply_damage_internal(opposing, idx, BOLT_DAMAGE, "shot down by %s" % shooter_label)
-			return true
+	var cx := int(floor(new_pos.x / GRID_CELL_SIZE))
+	var cz := int(floor(new_pos.z / GRID_CELL_SIZE))
+	for dx in [-1, 0, 1]:
+		for dz in [-1, 0, 1]:
+			var key := Vector2i(cx + dx, cz + dz)
+			if not grid.has(key):
+				continue
+			for idx in (grid[key] as Array):
+				var o: Combatant = opposing[idx]
+				if not o.alive:
+					continue
+				var closest := _closest_point_on_segment(o.position, prev_pos, new_pos)
+				if closest.distance_to(o.position) <= BOLT_HIT_RADIUS:
+					var shooter_label := _combatant_label(owner_faction, b["shooter_index"])
+					_apply_damage_internal(opposing, idx, BOLT_DAMAGE, "shot down by %s" % shooter_label)
+					# Only for hits the target SURVIVED — a kill already spawns
+					# the far bigger ShipExplosion at the same spot.
+					if o.alive:
+						_spawn_hit_spark(closest)
+					return true
 	return false
+
+
+## Budgeted the same way kill effects are: capped concurrently and only
+## spawned near the player. At full battle intensity ships are being hit
+## many times a second across the whole map, and an unbudgeted particle
+## burst per hit is exactly the kind of thing that quietly eats a VR frame
+## budget.
+func _spawn_hit_spark(at_position: Vector3) -> void:
+	if not _player or _player.global_position.distance_to(at_position) > spark_range:
+		return
+	_purge_freed(_live_sparks)
+	if _live_sparks.size() >= max_concurrent_sparks:
+		return
+	var spark := HIT_SPARK.instantiate()
+	get_tree().current_scene.add_child(spark)
+	spark.global_position = at_position
+	_live_sparks.append(spark)
 
 
 func _closest_point_on_segment(p: Vector3, a: Vector3, b: Vector3) -> Vector3:
@@ -621,25 +1227,55 @@ func _bucket_faction(units: Array, grid: Dictionary) -> void:
 		(grid[key] as Array).append(i)
 
 
-func _grid_candidates(grid: Dictionary, pos: Vector3) -> Array:
-	var result: Array = []
-	var cx := int(floor(pos.x / GRID_CELL_SIZE))
-	var cz := int(floor(pos.z / GRID_CELL_SIZE))
-	for dx in [-1, 0, 1]:
-		for dz in [-1, 0, 1]:
-			var key := Vector2i(cx + dx, cz + dz)
-			if grid.has(key):
-				result.append_array(grid[key])
-	return result
-
-
 func _apply_damage_internal(units: Array, index: int, amount: float, cause: String) -> void:
 	var c: Combatant = units[index]
 	if not c.alive:
 		return
 	c.health -= amount
 	if c.health <= 0.0:
-		_kill_combatant(c, index, cause)
+		var squads: Array[Squad] = _friendly_squads if c.faction == Combatant.Faction.FRIENDLY else _enemy_squads
+		var sq: Squad = squads[c.squad_id] if c.squad_id >= 0 and c.squad_id < squads.size() else null
+		_kill_combatant(c, index, sq, cause)
+
+
+# ---------------------------------------------------------------------------
+# Battle ambience
+# ---------------------------------------------------------------------------
+
+## A short-lived positional sound for something happening out in the battle,
+## budgeted against max_battle_sounds and distance-gated so a fight on the
+## other side of the city doesn't spend a voice. `cutoff`/`filter_db` drive
+## Godot's built-in distance low-pass, which is what makes far-off fighting
+## read as muffled rather than merely quiet.
+func _play_battle_sound(stream: AudioStream, at_position: Vector3, max_range: float,
+		cutoff: float, filter_db: float) -> void:
+	if not _player:
+		return
+	if _player.global_position.distance_to(at_position) > max_range:
+		return
+	_purge_freed(_live_sounds)
+	if _live_sounds.size() >= max_battle_sounds:
+		return
+
+	var sound := AudioStreamPlayer3D.new()
+	get_tree().current_scene.add_child(sound)
+	sound.global_position = at_position
+	sound.stream = stream
+	sound.max_distance = max_range
+	sound.attenuation_filter_cutoff_hz = cutoff
+	sound.attenuation_filter_db = filter_db
+	sound.play()
+	sound.finished.connect(sound.queue_free)
+	_live_sounds.append(sound)
+
+
+func _purge_freed(list: Array) -> void:
+	var i := 0
+	while i < list.size():
+		if is_instance_valid(list[i]):
+			i += 1
+		else:
+			list.remove_at(i)
 
 
 # ---------------------------------------------------------------------------
@@ -652,14 +1288,23 @@ func _update_match_timer(delta: float) -> void:
 		_end_game()
 
 
+## Staggered — see AS_UPDATE_INTERVAL. The accumulated delta is integrated
+## on the frames it does run, so the scoring rate is exactly what it would
+## have been running every frame.
 func _update_air_superiority(delta: float) -> void:
+	_as_accumulated_delta += delta
+	if (_frame_counter % AS_UPDATE_INTERVAL) != 0:
+		return
+	var scoring_delta := _as_accumulated_delta
+	_as_accumulated_delta = 0.0
+
 	var friendly_in_dome := _count_in_dome(_friendlies)
 	if _player and _is_in_dome(_player.global_position):
 		friendly_in_dome += 1
 	var enemy_in_dome := _count_in_dome(_enemies)
 
 	var net_rate := float(friendly_in_dome - enemy_in_dome) * as_generation_multiplier
-	air_superiority = clampf(air_superiority + net_rate * delta, -100.0, 100.0)
+	air_superiority = clampf(air_superiority + net_rate * scoring_delta, -100.0, 100.0)
 
 	if absf(air_superiority) >= 100.0 and not game_over:
 		_end_game()
@@ -703,7 +1348,10 @@ func _write_multimesh_transforms() -> void:
 
 	_bolt_mmi.multimesh.visible_instance_count = _ambient_bolts.size()
 	for i in _ambient_bolts.size():
-		_bolt_mmi.multimesh.set_instance_transform(i, _bolt_transform(_ambient_bolts[i]))
+		var b: Dictionary = _ambient_bolts[i]
+		_bolt_mmi.multimesh.set_instance_transform(i, _bolt_transform(b))
+		_bolt_mmi.multimesh.set_instance_color(i,
+				FRIENDLY_BOLT_COLOR if b["faction"] == Combatant.Faction.FRIENDLY else ENEMY_BOLT_COLOR)
 
 
 ## Dead combatants are scaled to zero rather than removed from the array
@@ -718,10 +1366,10 @@ func _combatant_transform(c: Combatant) -> Transform3D:
 	return Transform3D(basis, c.position)
 
 
-## LaserBolt.tscn's own mesh child carries a fixed -90 deg X rotation
-## (its CylinderMesh's long axis is Y by default; the bolt travels along
-## -Z), baked in here too so the pooled ambient bolts match the player's
-## bolt visually.
+## LaserBolt.tscn's own mesh child carries a fixed -90 deg X rotation (its
+## CylinderMesh's long axis is Y by default; the bolt travels along -Z),
+## baked in here too so the pooled ambient bolts match the player's bolt
+## visually.
 func _bolt_transform(b: Dictionary) -> Transform3D:
 	var dir: Vector3 = (b["velocity"] as Vector3).normalized()
 	var up_ref := Vector3.FORWARD if absf(dir.dot(Vector3.UP)) > 0.99 else Vector3.UP
@@ -730,7 +1378,8 @@ func _bolt_transform(b: Dictionary) -> Transform3D:
 
 
 # ---------------------------------------------------------------------------
-# Public API — laser_bolt.gd (player shooting aliens) / target_lock.gd
+# Public API — laser_bolt.gd (player shooting aliens) / target_lock.gd /
+# missile_system.gd / missile.gd
 # ---------------------------------------------------------------------------
 
 func get_nearest_alive_alien(from_position: Vector3) -> int:
@@ -761,9 +1410,10 @@ func get_alive_aliens_sorted_by_distance(from_position: Vector3) -> Array:
 
 
 ## Nearest living alien within `max_angle` (radians) of `direction` from
-## `origin`, and within `max_range` — used by missile_system.gd's lock-on
-## (the player's aim cone), as opposed to get_nearest_alive_alien()'s pure
-## nearest-by-distance (used for gun hits / target_lock.gd's Y-button lock).
+## `origin`, and within `max_range` — used by missile_system.gd's
+## hold-trigger lock to pick what the player is actually pointing at, as
+## opposed to get_nearest_alive_alien()'s pure nearest-by-distance (used for
+## gun hits and target_lock.gd's Y-button cycling).
 func get_nearest_alive_alien_in_cone(origin: Vector3, direction: Vector3, max_angle: float, max_range: float) -> int:
 	var dir := direction.normalized()
 	var max_range_sq := max_range * max_range
@@ -811,10 +1461,9 @@ func apply_damage(index: int, amount: float, cause: String = "destroyed by PLAYE
 ## Spawns a flare at the given alien's current position — called by
 ## missile.gd the first time an incoming player missile enters the flare
 ## countermeasure window, since aliens have no button to press themselves
-## (flare_system.gd is the equivalent player-side control, currently
-## unconsumed since nothing fires missiles at the player yet). Always
-## spawns (no limited flare supply was specified) — the missile itself
-## owns the redirect-chance roll.
+## (flare_system.gd is the equivalent player-side control). Always spawns
+## (no limited flare supply was specified) — the missile itself owns the
+## redirect-chance roll.
 func try_deploy_alien_flare(index: int) -> Node3D:
 	if index < 0 or index >= _enemies.size() or not _enemies[index].alive:
 		return null

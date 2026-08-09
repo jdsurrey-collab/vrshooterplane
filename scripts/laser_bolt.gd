@@ -18,15 +18,22 @@ extends Node3D
 ## hardcoded HOSTILE-1 enemy is retired.
 ##
 ## `fired_by_player` gates which side a bolt can damage — true (the
-## default, and the only value weapon_system.gd currently spawns bolts
-## with) checks only for an enemy hit; false would check only for a player
-## hit. Without this split, checking player hits unconditionally would
+## default, and the value weapon_system.gd spawns the player's own bolts
+## with) checks only for an enemy hit; false checks only for a player hit.
+## Without this split, checking player hits unconditionally would
 ## self-damage the player on every shot, since a bolt spawns right at its
 ## own gun mount, well inside the player's own ShipHull bounding radius.
-## No enemy weapon exists yet to spawn a `fired_by_player = false` bolt —
-## see player_damage.gd — but the check is real and ready for when one does.
+## faction_battle.gd's _fire_at_player() spawns the false case.
+##
+## SPAWN ORDER: whoever spawns a `fired_by_player = false` bolt must assign
+## it BEFORE add_child(), because add_child() runs _ready() immediately and
+## that's where the Player/PlayerDamage references get resolved. Getting
+## this backwards is exactly why alien laser fire did no damage at all for a
+## while. _resolve_player_refs() is also called lazily from
+## _check_player_hit() as a belt-and-braces guard against a future caller
+## making the same mistake.
 
-@export var speed: float = 900.0  # m/s — was 500; bumped up to shrink the window where a bolt can get occluded by the ship's own nose right after firing during a hard pitch
+@export var speed: float = 600.0  # m/s — down from 900. A bolt that crosses the whole engagement in two frames can't be seen; slower + a much longer mesh (see LaserBolt.tscn) is what makes your own fire readable
 @export var lifetime: float = 3.0  # seconds
 @export var damage: float = 10.0  # consumed by enemy_ai.gd's / player_damage.gd's apply_damage()
 @export var enemy_hit_radius: float = 4.0  # meters — approximates the enemy ship's bounding sphere
@@ -47,9 +54,13 @@ func _ready() -> void:
 	_terrain = get_tree().current_scene.get_node_or_null("Terrain")
 	_battle = get_tree().current_scene.get_node_or_null("FactionBattle")
 	if not fired_by_player:
-		_player = get_tree().current_scene.get_node_or_null("Player")
-		if _player:
-			_player_damage = _player.get_node_or_null("PlayerDamage")
+		_resolve_player_refs()
+
+
+func _resolve_player_refs() -> void:
+	_player = get_tree().current_scene.get_node_or_null("Player")
+	if _player:
+		_player_damage = _player.get_node_or_null("PlayerDamage")
 
 
 func _physics_process(delta: float) -> void:
@@ -105,7 +116,11 @@ func _check_enemy_hit(previous_position: Vector3) -> bool:
 ## player_damage.gd for the zone/health design.
 func _check_player_hit(previous_position: Vector3) -> bool:
 	if not _player or not _player_damage:
-		return false
+		# Lazy recovery for a caller that set fired_by_player after
+		# add_child() — see the class comment.
+		_resolve_player_refs()
+		if not _player or not _player_damage:
+			return false
 
 	var closest := _closest_point_on_segment(_player.global_position, previous_position, global_position)
 	if closest.distance_to(_player.global_position) > player_hit_radius:

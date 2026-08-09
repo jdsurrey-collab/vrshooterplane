@@ -58,6 +58,7 @@ var player: Node3D  # set by faction_battle.gd when target_is_player is true
 
 var _player_damage: Node
 var _flare_system: Node
+var _terrain: Node
 var _velocity: Vector3 = Vector3.ZERO
 var _flare_target: Node3D = null
 var _flare_check_done: bool = false
@@ -67,6 +68,7 @@ var _lost_lock: bool = false
 func _ready() -> void:
 	get_tree().create_timer(lifetime).timeout.connect(queue_free)
 	_velocity = -global_transform.basis.z * speed
+	_terrain = get_tree().current_scene.get_node_or_null("Terrain")
 	if target_is_player:
 		add_to_group("player_seeking_missiles")
 		if player:
@@ -112,6 +114,14 @@ func _physics_process(delta: float) -> void:
 	var up_ref := Vector3.FORWARD if absf(facing.dot(Vector3.UP)) > 0.99 else Vector3.UP
 	global_transform.basis = Basis.looking_at(facing, up_ref)
 
+	# Terrain/buildings stop a missile like they stop everything else in this
+	# project — otherwise a missile chasing a low target (or one that has gone
+	# ballistic after an overshoot) simply flies on through a mountain.
+	if _hit_environment():
+		_play_hit_sound(global_position)
+		queue_free()
+		return
+
 	var closest := _closest_point_on_segment(target_pos, previous_position, global_position)
 	if closest.distance_to(target_pos) > HIT_RADIUS:
 		return
@@ -129,6 +139,14 @@ func _physics_process(delta: float) -> void:
 		battle.apply_damage(target_index, DAMAGE, "destroyed by PLAYER missile")
 		_play_hit_sound(closest)
 		queue_free()
+
+
+func _hit_environment() -> bool:
+	if _terrain:
+		var ground_height: float = _terrain.get_height_at(global_position.x, global_position.z)
+		if global_position.y <= ground_height:
+			return true
+	return CrashEffects.check_building_collision(get_world_3d().direct_space_state, global_position)
 
 
 func _maybe_check_flare(target_pos: Vector3) -> void:

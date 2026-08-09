@@ -34,6 +34,8 @@ var respawn_time_remaining: float = 0.0
 var _player: Node3D
 var _flight_controller: Node
 var _weapon_system: Node
+var _missile_system: Node
+var _flare_system: Node
 var _terrain: Node
 var _crash_audio: AudioStreamPlayer
 var _player_damage: Node
@@ -43,9 +45,25 @@ func _ready() -> void:
 	_player = get_parent()
 	_flight_controller = _player.get_node_or_null("FlightController")
 	_weapon_system = _player.get_node_or_null("WeaponSystem")
+	_missile_system = _player.get_node_or_null("MissileSystem")
+	_flare_system = _player.get_node_or_null("FlareSystem")
 	_terrain = get_node_or_null(terrain_path)
 	_crash_audio = get_node_or_null("CrashAudio")
 	_player_damage = _player.get_node_or_null("PlayerDamage")
+
+
+## Freezing on a crash has to cover every player weapon, not just the guns —
+## otherwise missiles and flares stay live through the whole wreck/respawn
+## sequence.
+func _set_systems_paused(value: bool) -> void:
+	if _flight_controller:
+		_flight_controller.paused = value
+	if _weapon_system:
+		_weapon_system.paused = value
+	if _missile_system:
+		_missile_system.paused = value
+	if _flare_system:
+		_flare_system.paused = value
 
 
 func _physics_process(delta: float) -> void:
@@ -79,11 +97,9 @@ func trigger_crash() -> void:
 func _crash(impact: Vector3) -> void:
 	crashed = true
 	respawn_time_remaining = RESPAWN_DELAY
+	_set_systems_paused(true)
 	if _flight_controller:
-		_flight_controller.paused = true
 		_flight_controller.reset_velocity()
-	if _weapon_system:
-		_weapon_system.paused = true
 	if _crash_audio:
 		_crash_audio.play()
 
@@ -97,9 +113,6 @@ func _respawn() -> void:
 	# tumbling/upside-down from however you hit the ground.
 	_player.global_transform = Transform3D(
 			Basis(), Vector3(respawn_position_xz.x, ground_height + respawn_height_offset, respawn_position_xz.y))
-	if _flight_controller:
-		_flight_controller.paused = false
-	if _weapon_system:
-		_weapon_system.paused = false
+	_set_systems_paused(false)
 	if _player_damage:
 		_player_damage.reset_health()

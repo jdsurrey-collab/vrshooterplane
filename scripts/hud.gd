@@ -19,6 +19,7 @@ extends Label3D
 
 var _flight_controller: Node
 var _weapon_system: Node
+var _missile_system: Node
 var _crash_handler: Node
 var _enemy_locator: Node
 
@@ -29,6 +30,7 @@ func _ready() -> void:
 	var player := camera.get_parent()
 	_flight_controller = player.get_node_or_null("FlightController")
 	_weapon_system = player.get_node_or_null("WeaponSystem")
+	_missile_system = player.get_node_or_null("MissileSystem")
 	_crash_handler = player.get_node_or_null("CrashHandler")
 	_enemy_locator = camera.get_node_or_null("EnemyLocator")
 
@@ -56,11 +58,29 @@ func _process(_delta: float) -> void:
 				_weapon_system.shots_fired,
 		]
 
+	# Missile lock state. Worth a permanent HUD line: the weapon is a
+	# hold-the-left-trigger lock (see missile_system.gd) and without a
+	# readout there's no way to tell "nothing is designated" apart from
+	# "locking" apart from "the weapon is broken" — which is exactly how the
+	# previous lock design failed silently.
+	var missile_text := "MSL: --"
+	if _missile_system:
+		if _missile_system.locked:
+			missile_text = "MSL: LOCKED — release to fire"
+		elif _missile_system.acquiring:
+			if _missile_system.tracked_target_index >= 0:
+				missile_text = "MSL: LOCKING %d%%" % roundi(
+						100.0 * _missile_system.lock_progress / maxf(_missile_system.lock_time, 0.001))
+			else:
+				missile_text = "MSL: no target in cone"
+		else:
+			missile_text = "MSL: hold left trigger"
+
 	var enemy_text := "CITY: --"
 	if _enemy_locator and _enemy_locator.distance_to_objective >= 0.0:
 		enemy_text = "CITY: %d m — follow the yellow arrow" % roundi(_enemy_locator.distance_to_objective)
 
-	var lines := [fps_text, perf_text, speed_text, gun_text, enemy_text]
+	var lines := [fps_text, perf_text, speed_text, gun_text, missile_text, enemy_text]
 	if _crash_handler and _crash_handler.crashed:
 		lines.append("CRASHED — respawning in %ds" % ceili(_crash_handler.respawn_time_remaining))
 

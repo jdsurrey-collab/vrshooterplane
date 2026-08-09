@@ -36,6 +36,8 @@ var _player: Node3D
 var _ship: Node3D
 var _flight_controller: Node
 var _weapon_system: Node
+var _missile_system: Node
+var _flare_system: Node
 var _enemy_locator: Node
 var _left_controller: XRController3D
 
@@ -53,6 +55,8 @@ func _ready() -> void:
 	_ship = _player.get_node_or_null("Ship")
 	_flight_controller = _player.get_node_or_null("FlightController")
 	_weapon_system = _player.get_node_or_null("WeaponSystem")
+	_missile_system = _player.get_node_or_null("MissileSystem")
+	_flare_system = _player.get_node_or_null("FlareSystem")
 	_enemy_locator = camera.get_node_or_null("EnemyLocator")
 	_left_controller = _player.get_node_or_null("LeftHand")
 
@@ -112,6 +116,11 @@ func _apply_enemy_tracking() -> void:
 		_enemy_locator.tracking_enabled = _enemy_tracking_enabled
 
 
+## Every player weapon system has to be paused here, not just flight and
+## guns. The X button is shared: this menu uses it to toggle enemy tracking
+## while open, and flare_system.gd uses it to deploy a flare during normal
+## flight — so leaving FlareSystem live meant every menu toggle also burned
+## a flare. MissileSystem has the same problem with the left trigger.
 func _toggle_menu() -> void:
 	_menu_open = not _menu_open
 	visible = _menu_open
@@ -119,6 +128,10 @@ func _toggle_menu() -> void:
 		_flight_controller.paused = _menu_open
 	if _weapon_system:
 		_weapon_system.paused = _menu_open
+	if _missile_system:
+		_missile_system.paused = _menu_open
+	if _flare_system:
+		_flare_system.paused = _menu_open
 
 	if _menu_open:
 		_update_text()

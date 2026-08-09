@@ -15,12 +15,18 @@ extends Node
 ## enemy's progressive speed/turn-rate falloff wasn't ported over — out of
 ## scope for this pass, see CLAUDE.md's known gaps).
 ##
-## Every hit plays one of the four DamageAudio hit sounds.
+## Every hit plays one of the four DamageAudio hit sounds AND fires
+## damage_feedback.gd (screen shake, red flash, controller haptics) — the
+## audio alone was reported as "I hear the hull taking hits but nothing
+## happens", which was half a missing-feedback problem and half a real bug:
+## faction_battle.gd was assigning `fired_by_player` / `target_is_player`
+## AFTER add_child(), so alien bolts and missiles never resolved their
+## player references and this function was genuinely never being called.
+## Both halves are fixed; see faction_battle.gd's header for the ordering
+## rule.
 ##
-## Nothing can actually call apply_damage() yet — laser_bolt.gd only spawns
-## player-owned bolts right now (see its `fired_by_player` flag), and no
-## enemy weapon exists. This is real and testable via apply_damage()
-## directly, but has no live trigger until an enemy can fire back.
+## Live callers: laser_bolt.gd's `fired_by_player = false` path (alien gun
+## fire) and missile.gd's `target_is_player` path (alien missiles).
 
 const ZONE_FRONT_Z := -3.27
 const ZONE_BACK_Z := 3.88
@@ -38,6 +44,7 @@ var _player: Node3D
 var _ship_hull: Node3D
 var _crash_handler: Node
 var _damage_audio: Node
+var _feedback: Node
 
 
 func _ready() -> void:
@@ -45,6 +52,7 @@ func _ready() -> void:
 	_ship_hull = _player.get_node_or_null("ShipHull")
 	_crash_handler = _player.get_node_or_null("CrashHandler")
 	_damage_audio = _player.get_node_or_null("DamageAudio")
+	_feedback = _player.get_node_or_null("DamageFeedback")
 	reset_health()
 
 
@@ -86,6 +94,9 @@ func apply_damage(amount: float, zone: String) -> void:
 
 	if _damage_audio and _damage_audio.has_method("play_random_hit"):
 		_damage_audio.play_random_hit()
+
+	if _feedback and _feedback.has_method("play_hit"):
+		_feedback.play_hit(amount)
 
 	if (cockpit_health <= 0.0 or hull_health <= 0.0) and _crash_handler and _crash_handler.has_method("trigger_crash"):
 		_crash_handler.trigger_crash()

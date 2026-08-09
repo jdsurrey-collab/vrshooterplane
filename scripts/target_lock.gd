@@ -41,12 +41,8 @@ extends Node
 ## its own origin and distort the square. The PIP ring and info label are
 ## single mesh instances, so ordinary billboard_mode works fine for them.
 ##
-## Only one enemy exists right now, so "lock on" just means "lock onto the
-## enemy ship" — no target-selection logic needed yet. If more enemies are
-## added later, this is the place to add nearest/look-at-based selection.
-##
 ## PIP MATH — a real firing-solution intercept, not a visual approximation:
-## given the target's current position/velocity (enemy_ai.gd's
+## given the target's current position/velocity (faction_battle.gd's
 ## get_velocity(), exact since that AI is purely kinematic) and the bolt's
 ## fixed speed, solves the quadratic for the smallest positive time t where
 ## a bolt fired now would meet the target's projected position:
@@ -57,7 +53,7 @@ extends Node
 @export var battle_path: NodePath = ^"../../FactionBattle"
 @export var gun_left_path: NodePath = ^"../Ship/GunMountLeft"
 @export var gun_right_path: NodePath = ^"../Ship/GunMountRight"
-@export var bolt_speed: float = 900.0  # must match laser_bolt.gd's `speed`
+@export var bolt_speed: float = 600.0  # must match laser_bolt.gd's `speed` — both were lowered from 900 so bolts are actually visible in flight
 @export var max_lock_range: float = 12000.0  # meters — auto-unlocks past this
 
 @export_group("Visor HUD")

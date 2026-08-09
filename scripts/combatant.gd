@@ -1,18 +1,35 @@
 class_name Combatant
 extends RefCounted
 
-## Lightweight per-ship data record for faction_battle.gd's 400-combatant
-## battle — deliberately NOT a Node3D+script instance (that's the pattern
-## enemy_ai.gd used for the single old enemy, and would mean 400x that
-## script/Node overhead). One manager iterates an Array[Combatant] in tight
-## loops and writes the results into a MultiMesh; nothing here ever enters
-## the scene tree on its own.
+## Lightweight per-ship data record for faction_battle.gd's mass battle —
+## deliberately NOT a Node3D+script instance (that's the pattern enemy_ai.gd
+## used for the single old enemy, and would mean 200-400x that script/Node
+## overhead). One manager iterates an Array[Combatant] in tight loops and
+## writes the results into a MultiMesh; nothing here ever enters the scene
+## tree on its own.
+##
+## Ships belong to a Squad (squad.gd) of 1-5 — `squad_id` indexes into its
+## own faction's squad array and `squad_slot` is its formation position
+## within that squad (slot 0 is the leader). Squad-level orders live on the
+## Squad; `state` below is what THIS pilot is doing right now, which can
+## legitimately differ from its squad's orders (one hurt pilot breaking off
+## while the rest of the squad keeps fighting).
 
 enum Faction { FRIENDLY, ENEMY }
 
+## FORMATION — holding station on the squad leader (or, if leader, flying
+##   the squad's objective).
+## PURSUE — actively running in on a target.
+## BREAK_OFF — just made a firing pass and is flying through/past the
+##   target before turning back, rather than gluing itself to its tail.
+##   This is what makes fights read as real dogfight passes.
+## RETREAT — disengaging entirely (own damage, or squad losses).
+enum State { FORMATION, PURSUE, BREAK_OFF, RETREAT }
+
 var position: Vector3 = Vector3.ZERO
 var heading: Vector3 = Vector3.FORWARD  # normalized, local -Z equivalent
-var speed: float = 0.0
+var speed: float = 0.0  # current, throttled around base_speed to hold formation
+var base_speed: float = 0.0  # this pilot's natural cruise
 var faction: int = Faction.FRIENDLY
 var health: float = 30.0
 var alive: bool = true
@@ -22,3 +39,31 @@ var fire_cooldown: float = 0.0
 var missile_cooldown: float = 0.0  # aliens only — see faction_battle.gd's alien-fires-missiles-at-player logic
 var respawn_time_remaining: float = 0.0
 var wander_point: Vector3 = Vector3.ZERO
+
+var squad_id: int = -1
+var squad_slot: int = 0
+
+var state: int = State.FORMATION
+var state_timer: float = 0.0
+
+## Set when a NEW target is acquired — the pilot won't open fire until it
+## expires. Without it, ships snap onto a target and fire in the same frame
+## they first see it, which reads as inhuman.
+var reaction_timer: float = 0.0
+
+## 0..1 skill. Scales how far the aim point is randomly displaced from the
+## true intercept solution (see faction_battle.gd's _aim_point) — the knob
+## that keeps the AI threatening without being unfair.
+var accuracy: float = 0.8
+
+## Random unit vector, re-rolled per shot, scaled by (1 - accuracy) and
+## range into the actual aim error.
+var aim_jitter: Vector3 = Vector3.ZERO
+
+## Last result of the ground-avoidance LOOKAHEAD test. That test costs a
+## terrain sample, and faction_battle.gd only re-runs it on a stagger (see
+## _needs_pull_up), so the latched result is what's used on the frames in
+## between. Terrain elevation along a 3-second flight path doesn't change
+## meaningfully frame to frame, so holding the last answer is accurate and
+## removes a per-ship-per-frame sample from the hottest loop in the game.
+var pull_up_latched: bool = false

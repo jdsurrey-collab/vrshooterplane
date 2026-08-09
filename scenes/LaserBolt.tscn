@@ -3,9 +3,9 @@
 [ext_resource type="Script" path="res://scripts/laser_bolt.gd" id="1_laserbolt"]
 
 [sub_resource type="CylinderMesh" id="CylinderMesh_bolt"]
-top_radius = 0.0
-bottom_radius = 0.06
-height = 2.5
+top_radius = 0.05
+bottom_radius = 0.28
+height = 14.0
 radial_segments = 8
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_bolt"]

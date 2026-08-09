@@ -3,13 +3,13 @@
 ## Project
 
 A 6DOF VR space shooter: fly a fighter in first person from the cockpit,
-over a sprawling sci-fi city contested by a 400-ship alien-invasion battle
-(200 friendly, 200 enemy, plus the player) fighting for "Air Superiority"
-over an invisible dome around the city — see Faction Battle below. This is
-a pivot from an earlier "in-VR map editor" concept (see History) — that
-system still exists on disk but is disabled, the same as the single
-hardcoded HOSTILE-1 enemy this session's faction battle replaced (see
-Retired systems).
+over a sprawling sci-fi city contested by a large alien-invasion battle —
+two fleets of 1-5 ship squadrons (currently 100 a side, plus the player)
+fighting for "Air Superiority" over an invisible dome around the city, see
+Faction Battle below. This is a pivot from an earlier "in-VR map editor"
+concept (see History) — that system still exists on disk but is disabled,
+the same as the single hardcoded HOSTILE-1 enemy the faction battle
+replaced (see Retired systems).
 
 Engine: **Godot 4.4.1**, using the **Godot XR Tools** addon
 (`addons/godot-xr-tools/`) for the VR player rig and grab system (though
@@ -92,12 +92,18 @@ writes and wires up scenes/scripts directly.
   from an original 0.6) to give bolts more clearance from the cockpit's own
   silhouette before depth-testing can occlude them mid-pitch.
 - `scripts/laser_bolt.gd` (`scenes/LaserBolt.tscn`) — the projectile: a
-  small tapered/arrow-shaped bolt (non-billboarded — billboarding was tried
+  tapered/arrow-shaped bolt (non-billboarded — billboarding was tried
   first and caused it to always orient vertically, since full billboard
   aligns to camera-up, not the bolt's actual travel direction) traveling at
-  900 m/s (raised from an original 500 to shrink the window where a
-  just-fired bolt can be occluded by the ship's own nose during a hard
-  pitch). Each frame it does a **swept segment check** (previous position
+  **600 m/s** and 14m long. Speed went 500 -> 900 -> 600 and length 2.5m ->
+  14m: the 900 m/s bump was to stop a just-fired bolt being occluded by the
+  ship's own nose mid-pitch, but it overshot — at 900 m/s a bolt crosses the
+  whole 229m convergence distance in a quarter second, which live-tested as
+  "lasers are moving too fast to see as a player." Making the bolt much
+  longer solves the occlusion problem better than raw speed did, and lets
+  the speed come back down to something you can actually watch travel.
+  `target_lock.gd`'s `bolt_speed` (its PIP intercept solution) must be kept
+  equal to this. Each frame it does a **swept segment check** (previous position
   to current, not just a point test — at 900 m/s a bolt can cover 10-15m
   per physics frame, easily enough to tunnel through a ship between two
   sampled positions) against terrain, buildings, and — depending on
@@ -132,10 +138,25 @@ writes and wires up scenes/scripts directly.
   `crash_handler.gd`'s `_respawn()` now also calls `reset_health()`.
   `scripts/player_health_hud.gd` (`HealthHUD` Label3D, top-left of the
   visor) reads the three fractions every frame and shows them as
-  percentages. This system was built one session before the alien invasion
-  that would actually trigger it — see `laser_bolt.gd`'s `fired_by_player`
-  bullet above and Faction Battle below for how aliens now actually fire on
-  the player, closing that loop.
+  percentages.
+- **The player genuinely could not be damaged** until the bug described
+  under Faction Battle's "before-`add_child()`" rule was fixed — every
+  alien bolt and missile silently no-op'd. The reported symptom was
+  "I hear the hull taking hits but I'm actually not getting hurt", which
+  was exactly right: `missile.gd` plays its impact sound unconditionally,
+  but the `apply_damage()` call behind it was reaching a null reference.
+- `scripts/damage_feedback.gd` (`DamageFeedback` node under `Player`) —
+  called from `player_damage.gd.apply_damage()` on every hit, scaled by
+  damage amount. Three layers: a **translational-only** camera shake
+  (rotational shake is the classic VR nausea trigger, so it's deliberately
+  never used), a red **damage flash** quad parented to `XRCamera3D`, and a
+  **haptic pulse** on both controllers. The shake offsets the `XROrigin3D`
+  because `XRCamera3D`'s own transform is overwritten every frame by the XR
+  tracker and can't be offset directly — and it does so by *subtracting
+  last frame's offset before adding this frame's*, never by setting a
+  position, so it composes cleanly with `flight_controller.gd` writing
+  `_origin.global_position += velocity * delta` on the same node and can
+  never integrate into a permanent drift.
 - **Crash system** — the player ship has no physics body, so nothing was
   ever stopping it flying through terrain or buildings. Fixed by direct
   position checks instead of full physics simulation:
@@ -211,13 +232,18 @@ writes and wires up scenes/scripts directly.
   400m+" supertall towers). Dimensions were measured directly from the
   imported meshes via a one-off headless AABB script, not guessed.
 - `scripts/target_lock.gd` — left controller's **Y button**
-  (`by_button`) toggles a lock onto the **nearest living alien** from
-  `faction_battle.gd`'s 200-ship roster (`get_nearest_alive_alien()`; the
-  old single hardcoded HOSTILE-1 enemy is retired). Because it only ever
-  queries the alien-faction array, friendlies are structurally impossible
+  (`by_button`) **cycles** a lock through living aliens from
+  `faction_battle.gd`'s roster, nearest-to-farthest
+  (`get_alive_aliens_sorted_by_distance()`), wrapping back to nearest after
+  the last one. There is no manual unlock; it drops automatically when the
+  target dies or drifts past `max_lock_range`. Because it only ever queries
+  the alien-faction array, friendlies are structurally impossible
   to lock onto — not an explicit exclusion check, just a consequence of the
-  two factions being separate arrays in the manager. While locked: a red
-  targeting square,
+  two factions being separate arrays in the manager. `missile_system.gd`
+  prefers this target for its own missile lock when one is active (see
+  Homing missiles). Its `bolt_speed` export must stay equal to
+  `laser_bolt.gd`'s `speed` (both 600) or the PIP ring lies. While locked:
+  a red targeting square,
   an info readout (name/distance/closing-or-opening speed), and a yellow
   PIP ("predicted impact point") ring showing exactly where to put the
   crosshair to hit a moving target — a real firing-solution intercept
@@ -248,7 +274,8 @@ writes and wires up scenes/scripts directly.
   moves instead, changing where it sits relative to your untouched tracked
   head.
 - `scripts/hud.gd` + `scripts/enemy_locator.gd` — camera-attached HUD (FPS,
-  a **PERF** line, speed, gun status, crash/respawn countdown, distance to
+  a **PERF** line, speed, gun status, an **MSL** missile-lock line (see
+  Homing missiles), crash/respawn countdown, distance to
   the city — the FPS line exists specifically to tell "the game is
   dropping frames" apart from "something external, like OBS or Virtual
   Desktop's own encoding, is the bottleneck") and a small arrow that
@@ -268,306 +295,448 @@ writes and wires up scenes/scripts directly.
   reverse-grip), both always playing but faded by volume/pitch based on
   input, not started/stopped per event.
 
-## Faction Battle — 400-ship Air Superiority mode
+## Faction Battle — squadron Air Superiority mode
 
-Up to 200 friendly ships and 200 alien ships fight each other for control
-of the city, plus the player — replacing the old single wandering
-HOSTILE-1 enemy (see Retired systems). `friendly_count`/`enemy_count`
-currently default to **100/100**, dialed down from the full 200/200 while
-the live FPS-collapse investigation is open (see Known gaps) — the
-manager, rendering, and combat logic all still support the full 400-ship
+Two fleets of squadrons fight each other for control of the city, plus the
+player — replacing the old single wandering HOSTILE-1 enemy (see Retired
+systems). `friendly_count`/`enemy_count` default to **100/100**; the
+manager, rendering, and combat logic all still support the original 200/200
 scale, this is purely a runtime-tunable knob. This was a large enough
 feature that it went through a full plan-mode design pass (including a
-sub-agent architecture
-review) before implementation — the reasoning below reflects what that
-review caught, not just the first-draft idea.
+sub-agent architecture review) before implementation.
 
-- **One manager, not 400 nodes** (`scripts/faction_battle.gd`, `FactionBattle`
-  node in `Town.tscn`) — 400 individual `Node3D`+script instances (the old
-  `enemy_ai.gd` pattern) would mean 400x that per-instance overhead. Every
-  ship is a lightweight `Combatant` (`scripts/combatant.gd`,
-  `class_name Combatant extends RefCounted` — not a Node, never enters the
-  scene tree directly): position, heading, speed, faction, a single HP pool
-  (30, not the player's 3-zone model — deliberately simplified for this
-  ship count), target index, fire cooldown. One `_physics_process()` on the
-  manager updates all 400 in tight loops, same reasoning already documented
-  for why `enemy_ai.gd` keeps AI and damage in one script rather than
-  paying constant cross-script calls.
-- **Rendering** — two `MultiMeshInstance3D` (`instance_count=200` each,
-  built in `_ready()`, same GPU-instancing technique `city_generator.gd`
-  already uses for its ~1200 street tiles), both reusing `ship1.obj` (no
-  separate alien model exists in this project). `ship1.mtl` has exactly one
-  material, so team identity is just a `material_override` tint
-  (cyan/blue friendly, magenta/purple enemy) rather than per-instance
-  vertex coloring. A third `MultiMeshInstance3D` renders the ambient bolt
-  pool (see Bolts). Dead ships are hidden by scaling their instance
-  transform to zero (`Basis().scaled(Vector3.ZERO)`) rather than removed —
-  `MultiMesh` has no per-instance visibility flag for an arbitrary middle
-  index, only `visible_instance_count`, which trims from the buffer's tail.
-- **Air Superiority (AS)** — a single scalar, `air_superiority`, -100 (full
-  enemy control) to +100 (full friendly control), starting at 0. Every
-  physics frame: `air_superiority += (friendly_in_dome - enemy_in_dome) *
-  delta`, clamped to [-100, 100] — the player's own presence inside the
-  dome counts as one friendly. One enemy in the dome cancels one friendly's
-  contribution exactly 1-for-1, per the user's own framing of the mechanic.
-  Either side hitting +/-100, or the 10-minute `match_time_remaining`
-  timer expiring (higher AS wins the timeout case; exactly 0 is a draw —
-  this tie-break wasn't specified by the user, it's the assumption this
-  was built against), sets `game_over = true` and stops the battle
-  simulation — the player's own flight/weapons are *not* frozen, only the
-  400-ship spectacle stops.
-- **The dome** — implemented as a cylinder, not a literal hemisphere (it's
-  invisible, so only the gameplay volume needs to be right, not a rendered
-  shape): horizontal distance from `dome_center` (read from
-  `CityGenerator.city_center`, `(6000, 0, 0)`) within `dome_radius` (8000m
-  — comfortably covers the city's own ~7637m corner-to-corner footprint)
-  and altitude above terrain within `dome_ceiling` (3500m).
-- **Spawn & advance** — both factions spawn ~10km from the city on opposite
-  sides (friendly toward the player's own origin spawn, enemy on the far
-  side) and steer toward `dome_center` until they're inside it or find a
-  target — a design assumption about which side each team spawns on, not
-  something the user specified precisely. AI priority per ship: outside the
-  dome, advance toward it; a live target (opposing ship, or — aliens only —
-  the player) takes over steering if one's in range; inside the dome with
-  nothing to fight, loiter around a slowly-refreshed random point within it
-  rather than wandering back out ("AI wants to be in the dome always").
-- **Retargeting is staggered, not full-scan every frame** — only ~1/8 of
-  the population re-evaluates its target each frame (round-robin by
-  index), each scanning the ~200 opposing living units (~10k
-  comparisons/frame total). A ship whose target just died force-retargets
-  immediately regardless of stagger slot. Aliens additionally weigh the
-  player as a target candidate, gated by `aggro_radius_player` (2500m) —
-  friendlies never do; this is also what makes aliens actually reachable by
-  `laser_bolt.gd`'s `fired_by_player=false` path (see `player_damage.gd`
-  above) for the first time since that system was built.
-- **Bolts — two separate systems.** Ambient unit-vs-unit fire ("lasers
-  everywhere") is a pooled, non-Node bolt array (plain `Dictionary`
-  records, capped at `max_ambient_bolts=180`), rendered via the third
-  `MultiMeshInstance3D`, hit-checked with the same closest-point-on-segment
-  swept test `laser_bolt.gd` already uses — a plain point/distance check
-  would let bolts tunnel through targets at 900 m/s, the same bug this
-  project already fixed once for the player's own bolts. Hit checks are
-  spatially bucketed into a per-frame grid keyed by `city_generator.gd`'s
-  own `block_pitch` (450m cells) — unstaggered bolt-vs-unit checks are the
-  single biggest CPU cost in the whole system (up to ~40-100k checks/frame
-  unbucketed), so bucketing is the one thing that isn't staggered like
-  retargeting is (a bolt's hit check can't skip a frame without
-  reintroducing tunneling). A ship whose fire attempt finds the pool full
-  just doesn't fire that cooldown tick — never evicts an in-flight bolt
-  early, since that pops a bolt off-screen mid-flight, a visible glitch in
-  the exact spectacle this system exists to produce. Ambient bolt
-  terrain/building **misses** despawn silently (no impact effect); only
-  **kills** spawn one — a big fireball (see Kill effect below), naturally
-  rate-limited by population size (max 400 total) rather than bolt volume,
-  unlike misses would be. Aliens shooting *at the player* specifically
-  instead reuse the existing
-  `LaserBolt.tscn`/`laser_bolt.gd` Node-based system exactly as already
-  built (`fired_by_player=false`) — low volume by construction (aggro-gated
-  to nearby aliens only), so no pooling needed there.
-- **Respawn, not attrition** — dead ships respawn after `RESPAWN_DELAY`
-  (8s) at their faction's spawn cluster, same pattern
-  `crash_handler.gd`/the old `enemy_ai.gd` used — needed so the population
-  (and the "lasers everywhere" spectacle) stays sustained for the full
-  10-minute match instead of thinning out and going quiet halfway through.
-- **Building collision stayed on for mass units** — an earlier draft of
-  this design considered skipping the physics-based building point-query
-  for 400 units to save CPU; the architecture review corrected this
-  (`project.godot` has no `physics/3d` threading override, so
-  `intersect_point()` calls are same-thread and broad-phase-accelerated —
-  cheap even at 400/frame, and "ships occasionally crash into buildings
-  mid-battle" is good spectacle, not a cost worth avoiding). Kept as
-  `@export var enable_building_collision_check: bool = true`, a one-line
-  escape hatch if live-in-VR profiling ever says otherwise.
-- **Public API surface** other scripts depend on:
-  `get_nearest_alive_alien(pos)`, `is_alive(index)`,
-  `get_alien_position(index)`, `get_velocity(index)`,
-  `apply_damage(index, amount)`, plus the live `air_superiority` /
-  `match_time_remaining` / `game_over` / `winning_faction` /
-  `dome_center` vars. (`get_position` was the first name tried for
-  `get_alien_position` — collided with `Node3D`'s own built-in
-  `get_position()` and failed to import until renamed; a real gotcha
-  worth remembering for any future manager method on a `Node3D`-derived
-  script.) `scripts/target_lock.gd` and `scripts/laser_bolt.gd` (player
-  shooting aliens) both consume this API instead of a hardcoded enemy
-  node reference.
-- `scripts/battle_hud.gd` (`BattleHUD` `Label3D`, top-center of the visor,
-  alongside the existing bottom-right speed/gun and top-left damage HUDs)
-  — shows the AS split as a friendly/enemy percentage
-  (`(air_superiority + 100) / 2`), the MM:SS countdown, and a
-  VICTORY/DEFEAT/DRAW + "PULL TRIGGER FOR MAIN MENU" line once `game_over`
-  is true — see Game Flow below for what reads that same trigger press.
-- `as_generation_multiplier` (`FactionBattle`, default `0.1`) — a straight
-  multiplier on `net_rate`, tunable without touching the underlying
-  dome-count logic. Tuned down twice: first to `0.5` (half the original 1
-  AS/sec-per-net-ship rate), then to `0.1` (20% of that `0.5`, i.e. 10% of
-  the original rate).
+The AI was then **rebuilt** after a live playtest, which reported it as
+"clustering together and flying in huge packs" and generally not engaging.
+The sections below marked *(AI rebuild)* are that work.
+
+- **One manager, not hundreds of nodes** (`scripts/faction_battle.gd`,
+  `FactionBattle` node in `Town.tscn`) — individual `Node3D`+script
+  instances (the old `enemy_ai.gd` pattern) would mean that per-instance
+  overhead multiplied by the whole population. Every ship is a lightweight
+  `Combatant` (`scripts/combatant.gd`, `class_name Combatant extends
+  RefCounted` — not a Node, never enters the scene tree directly), and
+  ships are grouped into `Squad`s (`scripts/squad.gd`, also `RefCounted`).
+  One `_physics_process()` on the manager updates everything in tight
+  loops, same reasoning already documented for why `enemy_ai.gd` kept AI
+  and damage in one script rather than paying constant cross-script calls.
+
+### Squads *(AI rebuild)*
+
+The single biggest change. Previously every ship independently spawned in
+one cluster and flew at one shared `dome_center`, which produced exactly
+what it sounds like — two enormous undifferentiated clouds. Now:
+
+- The population is cut into **squads of 1-5** (`SQUAD_SIZE_MIN/MAX`).
+  Verified in a headless run: 100 ships became ~31-34 squads with a healthy
+  spread across all five sizes.
+- Each squad gets its **own spawn point** scattered along a wide front
+  (`SPAWN_FRONT_HALF_WIDTH` 7000m perpendicular to the approach axis,
+  `SPAWN_DEPTH` 2500m of stagger) and its **own objective** inside the
+  dome, instead of everyone sharing one.
+- Wingmen hold a **formation station** on their leader (staggered
+  V/echelon, `_formation_station()`) with a **throttle** that speeds up or
+  slows down to close on that station — flying at one fixed speed either
+  strings a squad out behind its leader or piles it into them.
+- Squads **focus fire**: the leader's target is weighted as much closer
+  than it is during retargeting, so a squad concentrates rather than
+  fragmenting onto five separate targets the moment it arrives.
+- Squad membership is **fixed for the match** — a dead member respawns back
+  into the same slot, matching the `MultiMesh` instance buffer's fixed
+  indexing. Leadership is reassigned to a living member when the leader
+  dies.
+
+### Pilot behaviour *(AI rebuild)*
+
+Per-pilot state machine (`Combatant.State`), layered under the squad's
+orders, modelled on how modern combat-flight AI reads:
+
+- **FORMATION** — holding station (or, for a leader, flying the objective).
+- **PURSUE** — running in on a target using a real lead/intercept solution
+  (`_lead_point()`, the same quadratic firing solution `target_lock.gd`'s
+  PIP ring uses for the player), not a straight chase of where the target
+  is *now*.
+- **BREAK_OFF** — after closing inside `BREAK_OFF_RANGE` (140m), the
+  attacker flies **through and past** its target for a couple of seconds
+  before turning back. This is the single biggest readability win: fights
+  became a series of recognisable passes instead of two dots stuck
+  together forever.
+- **RETREAT** — disengaging. Both halves the user asked for are real: a
+  pilot under `RETREAT_HEALTH_FRACTION` (35%) health may break off on its
+  own, and a squad that has lost **half its members** breaks off as a unit
+  (`Squad.State.RETREAT`), runs to a rally point outside the dome,
+  `REGROUP`s, resets its loss count and comes back.
+- **Separation** — every ship pushes away from same-faction ships within
+  `SEPARATION_RADIUS` (130m), read from the existing 3x3 spatial-grid
+  neighbourhood and capped at `MAX_SEPARATION_NEIGHBORS` so the cost stays
+  bounded however dense traffic gets. This is what actually stops squads
+  collapsing into one mass.
+- **Reaction delay and per-pilot accuracy** — a ship doesn't fire the
+  instant it acquires (`reaction_timer`, 0.35-1.1s), and its aim is
+  displaced from the true firing solution by `(1 - accuracy) * range *
+  AIM_ERROR_SCALE`, with `accuracy` rolled per pilot (0.55-0.95). Error
+  grows with range, so distant AI sprays and close AI is genuinely
+  dangerous. This is the "threatening but not unfair" knob.
+- **Firing requires the target roughly ahead** (`FIRE_CONE`, 14°). They
+  used to fire at anything in range regardless of where their nose pointed
+  — both unreadable and free damage from impossible angles.
+
+Measured in a 120s headless run at 100v100: a steady mix of ~60% PURSUE,
+~20% BREAK_OFF, ~10% RETREAT, ~10% FORMATION, with squads split across
+ENGAGE/ADVANCE/RETREAT/REGROUP — i.e. all of it is actually firing, not
+just present in the code. Mean distance to the nearest same-faction ship
+rose from ~150m (the old clustered behaviour) to ~550-620m in combat.
+
+### Hunting the player *(AI rebuild)*
+
+Two knobs, both standard modern-encounter pacing devices:
+
+- `max_aliens_targeting_player` (3) — an **attacker cap**. Without it,
+  every alien inside `aggro_radius_player` converges on the player at once
+  and the fight stops being winnable or readable.
+- `player_target_bias` (0.55) — the player is weighted as if that much
+  closer than they really are when an alien picks a target. The player
+  flies *with* the friendly fleet, so without this there was almost always
+  a friendly ship marginally nearer and the player was essentially never
+  hunted.
+
+### Rendering
+
+Two `MultiMeshInstance3D` (one per faction, built in `_ready()`, the same
+GPU-instancing technique `city_generator.gd` uses for its ~1200 street
+tiles), both reusing `ship1.obj` (no separate alien model exists in this
+project). `ship1.mtl` has exactly one material, so team identity is just a
+`material_override` tint (cyan/blue friendly, magenta/purple enemy). A
+third `MultiMeshInstance3D` renders the ambient bolt pool, now with
+`use_colors` so friendly and hostile tracers are tinted differently
+per-instance. Dead ships are hidden by scaling their instance transform to
+zero (`Basis().scaled(Vector3.ZERO)`) rather than removed — `MultiMesh` has
+no per-instance visibility flag for an arbitrary middle index, only
+`visible_instance_count`, which trims from the buffer's tail.
+
+### Air Superiority (AS)
+
+A single scalar, `air_superiority`, -100 (full enemy control) to +100 (full
+friendly control), starting at 0: `air_superiority += (friendly_in_dome -
+enemy_in_dome) * delta * as_generation_multiplier`, clamped to [-100, 100]
+— the player's own presence inside the dome counts as one friendly, and one
+enemy in the dome cancels one friendly exactly 1-for-1, per the user's own
+framing. Either side hitting +/-100, or the 10-minute `match_time_remaining`
+timer expiring (higher AS wins the timeout case; exactly 0 is a draw — an
+assumption, not something the user specified), sets `game_over = true` and
+stops the battle simulation — the player's own flight/weapons are *not*
+frozen, only the spectacle stops.
+
+`as_generation_multiplier` is now `0.01`, tuned down across four separate
+user requests after seeing each previous rate in play (`1.0 -> 0.5 -> 0.1
+-> 0.01`).
+
+Scoring is **recomputed every `AS_UPDATE_INTERVAL` (6) frames**, not every
+frame, integrating the accumulated delta — mathematically identical, but it
+cuts the per-frame terrain sampling that counting every ship in the dome
+requires. See Performance below.
+
+### The dome
+
+Implemented as a cylinder, not a literal hemisphere (it's invisible, so
+only the gameplay volume needs to be right, not a rendered shape):
+horizontal distance from `dome_center` (read from
+`CityGenerator.city_center`, `(6000, 0, 0)`) within `dome_radius` (8000m —
+comfortably covers the city's own ~7637m corner-to-corner footprint) and
+altitude above terrain within `dome_ceiling` (3500m).
+
+### Bolts — two separate systems
+
+Ambient unit-vs-unit fire ("lasers everywhere") is a pooled, non-Node bolt
+array (plain `Dictionary` records, capped at `max_ambient_bolts`, now 320),
+rendered via the third `MultiMeshInstance3D`, hit-checked with the same
+closest-point-on-segment swept test `laser_bolt.gd` uses — a plain
+point/distance check would let bolts tunnel through targets, the same bug
+this project already fixed once for the player's own bolts. Hit checks are
+spatially bucketed into a per-frame grid keyed by `city_generator.gd`'s own
+`block_pitch` (450m cells); the 3x3 neighbourhood is now walked **inline**
+rather than building a candidate `Array` per bolt per frame, which at
+hundreds of bolts was pure garbage churn in the hottest loop in the game.
+A ship whose fire attempt finds the pool full just doesn't fire that
+cooldown tick — never evicts an in-flight bolt early, since that pops a
+bolt off-screen mid-flight.
+
+**Ambient bolts are now visible.** They were 900 m/s and 2.5m x 0.06m — far
+below one pixel from any real viewing distance, so a battle of hundreds of
+simultaneous shots read as nothing at all. Now **520 m/s** and **26m x
+0.55m**, brightly emissive and faction-tinted. The slower speed also gives
+the AI's lead/intercept solution real work to do. Grids are rebuilt at the
+**top** of the frame so separation steering can use them; only the
+bucketing is a frame stale by the time bolt checks run (positions
+themselves are read live), and at 450m cells a frame of movement can't move
+anything meaningfully between buckets.
+
+Aliens shooting *at the player* specifically instead reuse the existing
+`LaserBolt.tscn`/`laser_bolt.gd` Node-based system (`fired_by_player=false`)
+— low volume by construction, and it's what feeds `player_damage.gd`.
+
+### The before-`add_child()` rule — a real, load-bearing bug
+
+`add_child()` runs the child's `_ready()` **immediately**, so any property
+that scene's `_ready()` reads must be assigned **before** `add_child()`,
+not after. Both `_fire_at_player()` and `_fire_missile_at_player()`
+originally set `fired_by_player = false` / `target_is_player = true`
+*after* `add_child()`. Consequences, all of which were live for several
+sessions:
+
+- `laser_bolt.gd`'s `_ready()` saw `fired_by_player` still `true`, so it
+  never resolved `Player`/`PlayerDamage`, so **alien gun fire could not
+  damage the player at all**.
+- `missile.gd`'s `_ready()` saw `target_is_player` still `false`, so it
+  never joined the `"player_seeking_missiles"` group (so `missile_alert.gd`
+  never fired) and never resolved `PlayerDamage`/`FlareSystem` (so alien
+  missiles did no damage and the flare countermeasure had nothing to
+  defend against).
+- The reported symptom was **"I hear the hull taking hits but I'm actually
+  not getting hurt"** — precisely correct, because `missile.gd` plays its
+  impact sound unconditionally while the damage call behind it hit a null
+  reference.
+
+`laser_bolt.gd` additionally got a lazy `_resolve_player_refs()` fallback
+in its hit check as belt-and-braces against a future caller repeating the
+mistake. `ship_explosion.gd`'s new `enable_light` follows the same rule.
+
+### Effect and audio budgets
+
+Now that the AI actually fights, kills are constant — and every kill used
+to spawn an unconditional `ShipExplosion` (a particle tree plus a 6000m
+`OmniLight3D`). Everything spawned from the battle is now budgeted:
+
+- **Kill fireballs** — hard cap (`max_concurrent_explosions`, 14), no
+  `OmniLight3D` beyond `explosion_light_range` (4000m, passed in as
+  `enable_light` before `add_child()`), nothing at all beyond
+  `explosion_cull_range` (15000m).
+- **Hit sparks** (`scenes/HitSpark.tscn` / `scripts/hit_spark.gd`) — a small
+  mid-air spark burst for a hit the target **survived** (a kill already
+  spawns the far bigger fireball at the same spot). Deliberately not
+  `CrashEffects.spawn_laser_impact()`, which is built around a scorch
+  crater on a *surface* and makes no sense floating in the sky. Capped and
+  only spawned within `spark_range` (2500m) of the player.
+- **Battle audio** — `_play_battle_sound()` spawns short-lived
+  `AudioStreamPlayer3D`s for distant fighting, capped at
+  `max_battle_sounds` (12) and distance-gated. Uses Godot's built-in
+  distance low-pass (`attenuation_filter_cutoff_hz`) aggressively, which is
+  what makes far-off combat read as *muffled* rather than merely quiet.
+  Two new assets, both `ffmpeg`-processed from existing sounds rather than
+  sourced new: `battle_explosion.mp3` (from `crash.mp3` — pitched down via
+  `asetrate`, heavy bass, `lowpass=1250`, echo) and `battle_laser.mp3`
+  (from `laser.mp3`, quieter and rolled off). Ambient laser fire only plays
+  a sound for `laser_sound_chance` (7%) of nearby shots — every shot would
+  be a wall of noise.
+
+### Respawn, not attrition
+
+Dead ships respawn after `RESPAWN_DELAY` (8s) at their **squad's** spawn
+cluster, same pattern `crash_handler.gd`/the old `enemy_ai.gd` used —
+needed so the population (and the spectacle) stays sustained for the full
+10-minute match instead of thinning out and going quiet halfway through.
+
+### Performance
+
+The physics building point-query and the terrain sampler were being called
+per ship *and* per bolt, every frame. Three gates were added, all of which
+are exact rather than approximations:
+
+- **Altitude gate** (`MAX_BUILDING_HEIGHT`, 700m) — the tallest landmark in
+  `city_generator.gd` is ~625m, so anything flying further than that above
+  the terrain underneath it *cannot* be intersecting a building and the
+  physics query is skipped outright. The ground height is already sampled
+  for the terrain check, so the gate itself is free. Applied to both
+  combatants and ambient bolts.
+- **One terrain sample per ship per frame**, reused by both the
+  ground-avoidance test and the terrain-crash test, which previously
+  sampled independently.
+- **Staggered lookahead** (`LOOKAHEAD_STAGGER`, 4) — the ground-avoidance
+  *lookahead* sample runs for a quarter of the population per frame and
+  latches its result on `Combatant.pull_up_latched`. Terrain elevation
+  along a 3-second flight path doesn't change meaningfully frame to frame.
+  The *immediate* clearance check still runs every frame — that's the one
+  that actually saves a ship's life.
+- Plus the AS staggering and the bolt-grid allocation removal noted above.
+
+`enable_building_collision_check` remains as an `@export` escape hatch.
+
+### Earlier fixes still in force
+
 - **Target acquisition is range-capped** (`MAX_ACQUISITION_RANGE`, 3000m) —
   a real bug caught after the first live playtest ("no one is shooting
-  lasers"): `_retarget_if_needed()` originally picked the *globally*
-  nearest opposing ship with no distance limit, so every combatant had
-  `has_target = true` from the instant it spawned (its nearest enemy was
-  just ~20km away, both spawn clusters being 10km out on opposite sides of
-  the city) — meaning `_update_combatant()` always steered straight at
-  that far-off individual instead of ever taking the intended
-  `_wander_or_advance_direction()` path toward the dome. Capping
-  acquisition range restores that fallback: ships with nothing in range
-  advance on `dome_center` (a tighter, faster convergence than each one
-  independently chasing whatever ship happened to be nearest across the
-  whole map) and only pick up an actual target once something's within
-  3000m. Verified fixed via a scripted headless simulation (loads
-  `Town.tscn`, calls `FactionBattle.start_battle()`, lets the real engine
-  loop run — not manually driven ticks, which don't work here since
-  `_ready()` is deferred a frame after `add_child()`): first ambient bolt
-  fired at t=59.4s, consistent with the ~1-minute travel time the 10km
-  spawn-out design requires before any real engagement — that lag is
-  expected behavior, not a bug, and worth remembering before re-diagnosing
-  "nothing's happening" reports that are really just "it hasn't been a
-  minute yet."
-- **Ships spawning into an immediate nosedive** — a second real bug the
-  same live playtest surfaced ("the other team was exploding by running
-  into the ground immediately"). `_respawn_combatant()`'s initial heading
-  was `(dome_center - c.position).normalized()` — but `dome_center.y` is 0
-  (sea level) while this terrain has real mountains (confirmed ~2713m
-  elevation right at the friendly spawn point via the sim's own debug
-  print), so every freshly-spawned ship aimed itself thousands of meters
-  *below* its own spawn altitude and dove straight into the ground before
-  it ever leveled out. Fixed by aiming at a horizontally-projected dome
-  target at the ship's OWN spawn altitude
-  (`Vector3(dome_center.x, c.position.y, dome_center.z)`) instead — the
-  same horizontal-only approach `_wander_or_advance_direction()` already
-  used correctly (that one was never affected, only the one-time spawn
-  heading was).
-- **Ground avoidance, ported from `enemy_ai.gd`** — fixing the nosedive
-  surfaced a third, subtler issue via the same simulation: even flying
-  level, ships still died to terrain mid-transit (28/200 friendlies dead
-  by t=20s with combat not yet possible) because the mass battle never got
-  `enemy_ai.gd`'s reactive ground-avoidance — ships fly a straight line at
-  a fixed altitude offset from *their own spawn point's* ground height, and
-  this terrain's elevation varies by thousands of meters along the way.
-  `_needs_pull_up(c)` ports the same current-position + lookahead
-  (`LOOKAHEAD_TIME=3s`) clearance check `enemy_ai.gd`'s
-  `_get_desired_forward()` already uses (deliberately simplified — no
-  `ground_avoidance_enabled` toggle or engine-health gating, since nothing
-  in the mass battle has engine damage), overriding combat/wander steering
-  with an urgent climb (`+Vector3.UP * 1.5`) whenever a ship is under
-  `MIN_GROUND_CLEARANCE` (200m) now or on its projected path. All three
-  fixes verified together via the same scripted simulation: 200/200 alive
-  on both sides through t=20s (previously casualties before any combat was
-  even possible), first shot fired even sooner than before (t=43.7s) since
-  fleets no longer detour into mountains en route.
-- `as_generation_multiplier` was tuned down twice more after initial
-  playtesting, now `0.01` (1% of the original 1 AS/sec-per-net-ship rate) —
-  see the bullet above for the `1.0 -> 0.5 -> 0.1` history; each cut was a
-  direct user request after seeing the previous rate in play.
-- **Kill effect** (`scenes/ShipExplosion.tscn` / `scripts/ship_explosion.gd`)
-  — replaces `CrashEffects.spawn_laser_impact()` for `_kill_combatant()`
-  specifically: a much bigger, brighter fireball meant to be visible from
-  well across the city, not just up close. Three parts: a large one-shot
-  particle flash (bright orange/white, big scale), a short `OmniLight3D`
-  pulse (`omni_range=6000`, `shadow_enabled=false` to keep it cheap,
-  energy faded out over 0.6s in `_process()`) — the light is what actually
-  carries the "seen anywhere around the city" requirement, since at city
-  scale (multi-km) any particle's real-world size is sub-pixel long before
-  its light would be, and a taller/longer-lived rising smoke column (12s)
-  than the small per-shot effect. Still self-cleaning
-  (`queue_free()` after 14s total) like `spawn_laser_impact()`, unlike
-  `CrashEffects.spawn()`'s deliberately permanent player-crash effect —
-  kill volume across a 400-ship battle would pile up permanent effects
-  fast otherwise, the same reasoning that kept `spawn_laser_impact()`
-  temporary in the first place. Not yet confirmed live in the headset —
-  the flash/light/smoke sizing and the light's actual visible range at
-  real VR viewing distances are best-effort starting values, same as every
-  other first-pass visual tuning in this project.
-- The player now spawns **with the friendly fleet**, not at the world
-  origin: `heightmap_terrain.gd` gained `spawn_position_xz` (a plain
-  exported `Vector2`, not read live from `FactionBattle`, to avoid a
-  `_ready()`-order dependency between the two scripts) and
-  `crash_handler.gd` gained the matching `respawn_position_xz` — both set
-  to `(-4000, 0)` in their `.tscn` nodes, matching
-  `FactionBattle.friendly_spawn_center`'s formula
-  (`city_center + (-10000, 0, 0)`). All three locations need updating by
-  hand together if that formula ever changes — a documented, intentional
-  coupling, same pattern already accepted for the dome/`block_pitch`/
-  `city_center` reuse.
+  lasers"): retargeting originally picked the *globally* nearest opposing
+  ship with no distance limit, so every combatant had a target from the
+  instant it spawned (its nearest enemy just ~20km away) and steered
+  straight at that far-off individual instead of ever advancing on the
+  dome.
+- **Ships spawning into an immediate nosedive** — the initial heading was
+  `(dome_center - position).normalized()`, but `dome_center.y` is 0 (sea
+  level) while this terrain is genuinely mountainous (~2713m right at the
+  friendly spawn, confirmed by the sim's own debug print), so every
+  freshly-spawned ship aimed thousands of meters *below* its own altitude
+  and dove into the ground. Fixed by aiming at a horizontally-projected
+  target at the ship's own altitude.
+- **Ground avoidance**, ported from `enemy_ai.gd` — ships fly a straight
+  line at a fixed altitude offset from their own spawn point's ground
+  height, and this terrain's elevation varies by thousands of meters along
+  the way, so flying level is not automatically safe here.
+- Note that the ~40-60s lag before the first shot is **expected**, not a
+  bug: both fleets spawn 10km out and have to close. Measured at t=41.5s
+  and t=44.0s across two runs. Worth remembering before re-diagnosing
+  "nothing's happening" reports that are really "it hasn't been a minute
+  yet."
+
+### Kill attribution — verified
+
+The live report that the kill feed "is not displaying friendly kills" did
+**not** reproduce. Instrumented headless runs counted 18-22 FRIENDLY losses
+against 19-32 HOSTILE losses over 120s, with `FRIENDLY-NNN shot down by
+HOSTILE-NNN` entries present throughout the feed. The most likely
+explanation is the old AI: before the rebuild, combat was rare and lopsided
+enough (and the feed expires entries after 8s) that friendly deaths simply
+weren't happening often enough to see. Kept under observation rather than
+"fixed", since nothing was found to fix.
+
+### Public API surface
+
+`get_nearest_alive_alien(pos)`, `get_alive_aliens_sorted_by_distance(pos)`,
+`get_nearest_alive_alien_in_cone(origin, dir, angle, range)`,
+`is_alive(index)`, `get_alien_position(index)`, `get_velocity(index)`,
+`apply_damage(index, amount, cause)`, `try_deploy_alien_flare(index)`, plus
+the live `air_superiority` / `match_time_remaining` / `game_over` /
+`winning_faction` / `dome_center` / `kill_feed_text` vars.
+(`get_position` was the first name tried for `get_alien_position` — it
+collided with `Node3D`'s own built-in `get_position()` and failed to
+import until renamed; a real gotcha worth remembering for any future
+manager method on a `Node3D`-derived script.)
+
+### Player spawn coupling
+
+The player spawns **with the friendly fleet**, not at the world origin:
+`heightmap_terrain.gd`'s `spawn_position_xz`, `crash_handler.gd`'s
+`respawn_position_xz` and `game_flow.gd`'s `player_spawn_xz` are all set to
+`(-4000, 0)` by hand, matching `FactionBattle`'s friendly spawn formula
+(`city_center + (-10000, 0, 0)`). All of them need updating together if
+that formula changes — a documented, intentional coupling, same pattern
+already accepted for the dome/`block_pitch`/`city_center` reuse.
 
 ## Homing missiles
 
-Second weapon, left trigger (guns stay on the right trigger) — a deliberate
-lock-on-first weapon rather than a second trigger-happy gun. Went through
-two real design iterations this session (see below) before landing here.
+Second weapon, **left trigger** (guns stay on the right trigger) — a
+deliberate lock-on-first weapon rather than a second trigger-happy gun.
+This system went through **three** design iterations; the current one is
+hold-to-lock, release-to-fire.
 
-- **Lock now depends on `target_lock.gd`'s Y-button lock, not its own aim
-  cone.** The first version had `missile_system.gd` do its own independent
-  aim-cone detection against the ship's gun crosshair — replaced per direct
-  request so missile lock only ever happens against a target the player
-  has deliberately Y-locked, not just "whatever's under the crosshair."
-  `target_lock.gd` itself changed to match: **Y no longer toggles lock
-  on/off — it CYCLES** through living aliens nearest-to-farthest
-  (`FactionBattle.get_alive_aliens_sorted_by_distance()`, a new query),
-  wrapping back to nearest after the last one. First press locks nearest;
-  each press after that steps to the next one out. There's no manual
-  unlock anymore — it only drops automatically (target dies, or drifts
-  past `max_lock_range`). `target_lock.gd`'s previously-private `_locked`/
-  `_locked_index` are now public (`locked`/`locked_index`) so
-  `missile_system.gd` can read them directly.
-- `scripts/missile_system.gd` (`MissileSystem` node under `Player`) —
-  every physics frame, checks whether `target_lock.locked` is true and its
-  target is still alive; if so, tracks lock progress against that same
-  index. Losing the Y-lock, it cycling to a different target, or the
-  target dying all reset progress to zero, no partial credit. Holding it
-  for `LOCK_TIME` (5s) completes the lock (`LockAudio` beep plays once,
-  edge-triggered). Left trigger only fires while locked, and firing
-  **consumes** the lock, so every shot needs a fresh 5-second track.
+### Current design: hold the left trigger
+
+Modelled on how modern combat flight games (Ace Combat, Star Wars:
+Squadrons, Project Wingman) actually do it:
+
+1. **Hold** the left trigger. Whatever you're pointed at gets designated.
+2. A **search tone** pulses while the lock builds, accelerating as it
+   approaches completion (`beep_interval_start` 0.55s -> `beep_interval_end`
+   0.11s) — the audio alone tells you how close you are.
+3. At `lock_time` (**3.0s**, exported and tunable) the tone goes solid:
+   lock acquired.
+4. **Release** the trigger and the missile launches. If the lock hadn't
+   completed, nothing fires and progress is discarded.
+
+Target designation, in priority order: `target_lock.gd`'s Y-locked target
+if one is active and alive (Y-lock remains the way to deliberately pick a
+specific ship out of a furball, and it's what the targeting box and PIP
+ring are already drawn around, so honouring it keeps one obvious "this is
+my target" concept rather than two competing ones); otherwise the nearest
+living alien inside `lock_cone_degrees` (9°) of the nose and within
+`lock_range` (6km), via `FactionBattle.get_nearest_alive_alien_in_cone()`.
+Progress resets to zero — no partial credit — if the designated target
+changes, dies, or leaves the cone while you're holding.
+
+`hud.gd` gained a permanent **MSL** line (`hold left trigger` / `no target
+in cone` / `LOCKING n%` / `LOCKED — release to fire`). Without a readout
+there is no way to tell "nothing is designated" from "locking" from "the
+weapon is broken", which is exactly how the previous design failed
+silently.
+
+### Why the two earlier designs failed
+
+Worth keeping, because both failures were about the same mistake — making
+lock *acquisition* implicit.
+
+- **v1 (own aim cone against the gun crosshair)** re-picked "nearest in
+  cone" every frame, so it flickered between clustered targets and never
+  accumulated progress.
+- **v2 (required `target_lock.gd`'s Y-lock held for 5 continuous seconds)**
+  meant the missile could only be used after a separate, unrelated button
+  ritual, with no feedback at all if that precondition wasn't met. From the
+  cockpit it simply looked like the weapon did nothing — reported as "the
+  rocket targeting system is not working."
+
+### The backwards-launch bug
+
+Independent of the lock design, and enough on its own to make the weapon
+look broken: **do not take the ship's facing from the `Ship` node.** `Ship`
+carries a 180° flip basis to correct the cockpit glTF's backwards-authored
+forward direction (see Player.tscn), so `-Ship.global_transform.basis.z`
+points *behind* the craft. `missile_system.gd` was spawning the missile
+with `Ship`'s basis, so every missile launched **rearward** — and because
+`missile.gd` then measured ~180° between its heading and the bearing to
+target on frame one, it immediately latched its overshoot/ballistic handoff
+(`MAX_ENGAGE_ANGLE` 150°, see below) and flew away forever without ever
+steering. Both the aim cone and the launch orientation now use the
+**`XROrigin3D` rig**, whose -Z is unambiguously forward and is what
+`flight_controller.gd` actually flies. The guns were never affected because
+`weapon_system.gd` spawns from the gun mounts, which carry their own
+compensating flip.
+
+### The missile itself
+
 - `scripts/missile.gd` (`scenes/Missile.tscn`) — unlike `laser_bolt.gd`'s
   straight-line travel, this steers toward its target's *current* position
-  every physics frame at a capped turn rate (1.2 rad/s) — real pursuit,
-  not an instant snap. `speed` is 400 m/s (raised from an original 220) —
-  still well under the 900 m/s laser bolt, deliberately slow enough to be
+  every physics frame at a capped turn rate (1.2 rad/s) — real pursuit, not
+  an instant snap. `speed` is **400 m/s**, deliberately slow enough to be
   dodgeable with hard defensive maneuvering, a direct user requirement.
-  Damage (30) always meets-or-exceeds a mass-battle alien's max health
-  (30, see Faction Battle), so every hit is a kill —
-  `FactionBattle.apply_damage()`'s own kill path already spawns the big
-  `ShipExplosion` fireball and a kill-feed entry (see below), so the
-  missile doesn't need a separate impact visual, just its hit sound.
+  Damage (30) always meets-or-exceeds a mass-battle alien's max health, so
+  every hit is a kill — `FactionBattle.apply_damage()`'s kill path already
+  spawns the fireball and a kill-feed entry, so the missile needs no
+  separate impact visual, just its hit sound.
 - **Overshoot -> ballistic handoff** (`MAX_ENGAGE_ANGLE`, 150°) — a target
-  breaking hard enough can end up almost directly behind the missile
-  before it can turn back onto its bearing. Past 150° between the
-  missile's current heading and the bearing to target, `_lost_lock`
-  (sticky) latches true and the missile gives up steering for good,
-  continuing straight along whatever heading it already had for the rest
-  of its `lifetime` — a real missile can't pull an instant U-turn either,
-  and endlessly circling back would look wrong. It can still score a hit
-  via the ordinary swept-segment check if something crosses its path, it
-  just stops actively chasing.
+  breaking hard enough can end up almost directly behind the missile. Past
+  150° between the missile's heading and the bearing to target, `_lost_lock`
+  (sticky) latches and the missile gives up steering for good, continuing
+  straight for the rest of its `lifetime` — a real missile can't pull an
+  instant U-turn either, and endlessly circling back would look wrong. It
+  can still score a hit via the ordinary swept-segment check if something
+  crosses its path.
+- **Terrain and buildings now stop a missile** like they stop everything
+  else in this project. Previously a missile chasing a low target, or one
+  that had gone ballistic after an overshoot, simply flew on through a
+  mountain forever.
 - **Muffled + proximity audio**: launch/hit sounds are user-supplied
   (`weapons/missle/misslelaunch.mp3` / `misslehit.mp3`, outside the Godot
   project — processed once via `ffmpeg` with a bass boost + lowpass
-  (`bass=g=8:f=100,lowpass=f=3200` launch, slightly heavier
-  `f=90,lowpass=f=2600` hit) into `Assets/Audio/missile_launch.mp3` /
-  `missile_hit.mp3`, matching the existing laser/crash "processed so it
-  doesn't sound tinny" treatment) and played via `AudioStreamPlayer3D` for
-  real proximity falloff. The hit sound specifically also tunes Godot's
-  built-in distance-based low-pass (`attenuation_filter_cutoff_hz=1800`,
-  `attenuation_filter_db=-36`, both more aggressive than this project's
-  other 3D sounds) — missile hits can happen well away from the player,
-  unlike every other sound in this project which sits close to the
-  listener and never needed it; farther hits should read as quieter *and*
-  more muffled, not just quieter. The hit sound is a short-lived
-  standalone `AudioStreamPlayer3D` spawned at the impact point
-  (`missile.gd`'s `_play_hit_sound()`), since the missile node itself is
-  freed on impact. The lock beep (`missile_lock.tres`) has no source file
-  to process — procedurally generated (a short 1400Hz sine tone with a
-  fade envelope, `AudioStreamWAV` built and saved via a one-off
-  `--headless --script` run) the same way `soft_particle.png` was, since no
-  suitable sound existed for it. **`ResourceSaver.save()` gotcha**: saving
-  as `.wav` failed (`ERR_FILE_UNRECOGNIZED`) — `ResourceSaver` writes
-  Godot resource files, not raw playable containers; saving the same
-  `AudioStreamWAV` as `.tres` instead worked immediately and loads/plays
+  (`bass=g=8:f=100,lowpass=f=3200` launch, heavier `f=90,lowpass=f=2600`
+  hit) into `Assets/Audio/missile_launch.mp3` / `missile_hit.mp3`, matching
+  this project's existing "processed so it doesn't sound tinny" treatment)
+  and played via `AudioStreamPlayer3D` for real proximity falloff. The hit
+  sound also tunes Godot's distance low-pass
+  (`attenuation_filter_cutoff_hz=1800`, `attenuation_filter_db=-36`) —
+  missile hits can happen well away from the player, so farther hits should
+  read as quieter *and* more muffled. It's spawned as a short-lived
+  standalone player at the impact point, since the missile node itself is
+  freed on impact. The lock beep (`missile_lock.tres`) had no source file —
+  procedurally generated (a 1400Hz sine with a fade envelope, built and
+  saved via a one-off `--headless --script` run) the same way
+  `soft_particle.png` was. **`ResourceSaver.save()` gotcha**: saving as
+  `.wav` failed (`ERR_FILE_UNRECOGNIZED`) — `ResourceSaver` writes Godot
+  resource files, not raw playable containers; saving the same
+  `AudioStreamWAV` as `.tres` worked immediately and loads/plays
   identically as an `AudioStream`.
-- `game_flow.gd`'s `_set_player_paused()` now also pauses `MissileSystem`
-  (and `FlareSystem`, see Countermeasure flares below) during the
-  `MENU`/`GAME_OVER` states, same convention as
-  `flight_controller.gd`/`weapon_system.gd`.
+- Pausing: `game_flow.gd`, `options_menu.gd` **and** `crash_handler.gd` all
+  pause `MissileSystem` and `FlareSystem` alongside flight and guns. The
+  latter two only paused flight and guns until a bug sweep caught it —
+  which meant opening the options menu also burned a flare on every X press
+  (the menu and `flare_system.gd` share that button), and you could keep
+  firing missiles while sitting crashed waiting to respawn.
 
 ## Countermeasure flares
 
@@ -609,6 +778,13 @@ player — see Alien missiles at the player below for how that loop closed.
   `smoke_flipbook.png` the rest of this project's smoke uses (see the
   Crash system bullet). Burns for 10 seconds (real flare burn time), then
   self-cleans.
+
+**Both directions of this were dead code until recently** — the flare
+countermeasure had nothing to defend against and no alien missile could
+damage the player, because of the before-`add_child()` property-ordering
+bug documented under Faction Battle. Flares are only genuinely exercised
+now that that's fixed, so the 40% redirect roll and the 100-400m window are
+still unverified in play.
 
 ## Alien missiles at the player
 
@@ -716,17 +892,30 @@ request didn't call for.
     (z=-0.15) than every other menu element or the background scene, using
     **ordinary depth testing** rather than the `no_depth_test` trick the
     rest of this project's HUD uses (deliberate: being genuinely nearest
-    in 3D space makes it reliably occlude both the title/button labels and
-    the flying scene behind it). While `state == MENU`, `Fade` stays fully
-    opaque (alpha 1) — a real black menu screen, not a translucent overlay
-    on top of the flying scene, per a direct correction after the first
-    version faded out immediately on entry. The instant `state` moves off
-    `MENU` (START confirmed — `GameFlow` already unpauses the player and
-    starts the battle immediately, no artificial delay to the actual
-    gameplay logic), `main_menu.gd` notices independently and begins a
-    **reveal**: title/button labels and audio stop right away, but `Fade`
-    keeps rendering by itself, animating alpha 1 -> 0 over `FADE_DURATION`
+    in 3D space makes it reliably occlude the flying scene behind it).
+    While `state == MENU`, `Fade` stays fully opaque (alpha 1) — a real
+    black menu screen, not a translucent overlay on top of the flying
+    scene, per a direct correction after the first version faded out
+    immediately on entry. The instant `state` moves off `MENU` (START
+    confirmed — `GameFlow` already unpauses the player and starts the
+    battle immediately, no artificial delay to the actual gameplay logic),
+    `main_menu.gd` notices independently and begins a **reveal**:
+    title/button labels and audio stop right away, but `Fade` keeps
+    rendering by itself, animating alpha 1 -> 0 over `FADE_DURATION`
     (2.5s), dissolving into the flight that's already underway underneath.
+    **Real bug hit live**: being nearer to the camera than the
+    Title/StartLabel/QuitLabel labels (z=-0.55) also meant `Fade` was
+    painting *over* them — Godot sorts transparent objects back-to-front
+    by camera distance, so the nearer, fully-opaque black quad was drawn
+    last and completely overwrote the label pixels underneath every frame,
+    even though the labels are `visible=true` with `no_depth_test=true`
+    (audio played fine, since that path never touches rendering, which is
+    what actually made this "no text, but sound's there" instead of "menu
+    doesn't work at all"). Fixed with an explicit
+    `render_priority = -1` on `Fade`'s material — transparent-pass sort
+    order is priority-first, distance-second, so this guarantees `Fade`
+    always draws before (visually underneath) the default-priority labels
+    regardless of which one is physically nearer the camera.
     Re-entering `MENU` later (post-match) snaps `Fade` straight back to
     fully opaque.
   - **Two simultaneous audio tracks** — `Music` (`menu_music.mp3`,
@@ -817,6 +1006,29 @@ effect: scene structure, parsing, and all gameplay logic can be verified
 headlessly, but actual flight feel, VR rendering correctness, and audio can
 only be confirmed live in the headset.
 
+**Scripted simulations** (`--headless --script <path>.gd`, a
+`SceneTree`-extending script that instantiates `Town.tscn`, sets
+`current_scene`, calls `FactionBattle.start_battle()` and then `await
+physics_frame` in a loop) are the only way to verify gameplay behaviour
+without the headset, and this project leans on them heavily. Four hard-won
+mechanics, all of which cost real time to rediscover:
+
+- **Pass `--fixed-fps 60`.** Without it the loop is pinned to real time, so
+  a 150-simulated-second run takes 150+ real seconds — and with the battle
+  at full scale it ran *slower* than real time and appeared to hang. With
+  it, the same run takes ~20s and total wall time becomes a clean,
+  trustworthy measure of CPU work (see the A/B in Known gaps).
+- **Log through `FileAccess` with an explicit `flush()`, not just `print`.**
+  Piping Godot's stdout through `tail`/`head`/`grep` buffers or truncates
+  it, which repeatedly looked like "the script never ran" when it had run
+  fine. Writing to `res://<name>.txt` also means partial results survive a
+  hang or a kill.
+- `await process_frame` **twice** before touching anything a `_ready()`
+  sets up — `_ready()` is deferred a frame after `add_child()`.
+- `Performance.get_monitor(TIME_PHYSICS_PROCESS)` is **not trustworthy** in
+  this mode — two identical runs disagreed with their own intermediate
+  readings. Use wall-clock timing of a fixed workload instead.
+
 For measuring imported-but-unauthored mesh dimensions (building heights,
 ship footprints) before choosing scale/placement values: a one-off
 `--headless --script <path>` run with a `SceneTree`-extending script that
@@ -838,37 +1050,50 @@ doesn't ship in an exported build. Verified by an actual
 
 ## Known gaps / natural next steps
 
-- **Open investigation: FPS collapsed to ~6 during a live playtest of the
-  400-ship battle.** Ruled out via an instrumented headless simulation
-  (200v200, 180 simulated seconds): kill rate is near-zero (both sides
-  stayed at ~200/200 alive throughout) and at most 1 `ShipExplosion`
-  effect was ever concurrently active — so the new fireball kill effect is
-  **not** the cause, contrary to the first suspicion (it was the most
-  recently added heavy visual content, but headless testing can measure
-  simulation state directly and disproved it). Beyond that, headless mode
-  cannot measure GPU draw-call cost or actual VR stereo render time, so
-  the real cause is still unknown — could be CPU-side (the ~400-580
-  physics building-collision queries/frame across combatants + ambient
-  bolts, `enable_building_collision_check`'s existing escape hatch) or
-  GPU-side (the ship/bolt `MultiMesh` draw calls, or particle/light cost
-  during combat) or something external (see the FPS line's own original
-  reasoning below). `hud.gd` gained a **PERF** line
-  (`PROC:_ms PHYS:_ms DRAW:_ OBJ:_`, from Godot's `Performance` singleton)
-  specifically to get real numbers on the next live test instead of
-  continuing to guess — compare `PHYS` (physics/AI cost) against `DRAW`
-  (rendering cost) to tell which side of the budget is actually blowing
-  up. `friendly_count`/`enemy_count` (`@export`ed) and
-  `enable_building_collision_check` are both existing knobs that can
-  bisect this further without any code changes — `friendly_count`/
-  `enemy_count` were already dropped from 200/200 to **100/100** as the
-  first bisection step; if FPS recovers at 100v100, the cause is CPU-side
-  and scales with ship count (most likely the physics building-collision
-  queries); if it's still bad, look at rendering/GPU cost instead.
-- Alien bolts fired at the player (`faction_battle.gd`'s `_fire_at_player()`)
-  don't play the laser sound `weapon_system.gd` plays for the player's own
-  shots — that sound lives in the gun mounts' `AudioStreamPlayer3D`s, which
-  the mass-battle path bypasses entirely. Being fired upon currently has no
-  audio cue beyond the eventual `DamageAudio` hit sound if it connects.
+- **Still open: FPS collapsed to ~6 during a live playtest.** Two
+  hypotheses have now been *measured and eliminated*, which is progress
+  even though the cause isn't found:
+  - **Not the `ShipExplosion` kill effect** (the original suspicion, as the
+    most recently added heavy visual). An instrumented headless run showed
+    kill rate was near zero at the time and at most one explosion was ever
+    concurrently live.
+  - **Not the physics building-collision queries.** A wall-clock A/B over
+    an identical 90-second fixed-fps workload measured 22729ms with the
+    queries enabled vs 22353ms with them disabled — a 1.7% difference, i.e.
+    noise. Separately, the new `MAX_BUILDING_HEIGHT` altitude gate was
+    measured to skip **95-97%** of those queries outright, because combat
+    almost always happens well above the rooftops.
+  - Total headless main-loop cost at 100v100 works out to roughly 4ms/frame
+    (5400 frames in ~22.5s wall). Meaningful, but nowhere near the ~166ms
+    a 6 FPS frame implies, so **the remaining suspicion is firmly
+    GPU-side.** The strongest candidate is `ShipExplosion`'s
+    `OmniLight3D` at `omni_range = 6000` — a 6km-radius realtime light over
+    a city of 1200+ buildings is enormous in a clustered renderer, and
+    several at once would be devastating. It is now capped at
+    `max_concurrent_explosions` (14) and dropped entirely beyond
+    `explosion_light_range`, but **that range is still 4000m and the value
+    itself has never been sanity-checked** — dropping `omni_range` hard
+    (to a few hundred meters) is the first thing to try if this recurs.
+    Other candidates: 200 un-LOD'd `ship1.obj` instances rendered in VR
+    stereo, and the city itself.
+  - `hud.gd`'s **PERF** line (`PROC:_ms PHYS:_ms DRAW:_ OBJ:_`) is still the
+    tool for the next live test — compare `PHYS` against `DRAW` to settle
+    CPU vs GPU. `friendly_count`/`enemy_count` and
+    `enable_building_collision_check` remain `@export`ed bisection knobs.
+    Note headless testing genuinely cannot measure GPU draw-call cost or VR
+    stereo render time; this has to be read in the headset.
+- **None of the new visual/audio work is confirmed in VR yet** — bolt size
+  and speed, hit sparks, the kill-fireball budget, the damage flash's
+  intensity, and especially the **screen shake amplitude** (`shake_amplitude`,
+  0.11m, translation-only) are all first-pass values. Shake in particular is
+  a VR comfort risk and is exported specifically so it can be dialled down
+  or to zero without a code change.
+- Alien laser fire at the player now plays the muffled `battle_laser.mp3`
+  from `faction_battle.gd`'s own budgeted battle-audio path (it previously
+  had no audio cue at all, since the gun-mount `AudioStreamPlayer3D`s the
+  player's own shots use are bypassed by the mass-battle path). It is
+  deliberately quiet and heavily low-passed; it may need raising once heard
+  in the headset.
 - The player's engine health has no flight-degradation effect (speed/turn
   rate don't drop as it takes damage) — unlike the retired `enemy_ai.gd`'s
   `_effective_cruise_speed()`/`_effective_turn_rate()` (still the reference
