@@ -23,16 +23,18 @@ extends Node
 ## conflict, since weapon_system.gd only reads the trigger while
 ## `not paused`, and this script sets the whole player `paused` for both
 ## menu states. During MENU specifically, which action a trigger-confirm
-## performs depends on main_menu.gd's gaze-based `selected_action`
+## performs depends on main_menu.gd's thumbstick-driven `selected_action`
 ## ("start" starts the match, "quit" calls get_tree().quit()).
 
 enum State { MENU, PLAYING, GAME_OVER }
 
-## Matches faction_battle.gd's friendly_spawn_center and
-## heightmap_terrain.gd's spawn_position_xz / crash_handler.gd's
-## respawn_position_xz — update all three by hand together if the friendly
-## spawn formula in faction_battle.gd ever changes.
-@export var player_spawn_xz: Vector2 = Vector2(-4000.0, 0.0)
+## FALLBACK ONLY. The real spawn point comes from
+## FactionBattle.get_player_spawn_position() — a spot on the friendly
+## mothership's flight deck — which is now the single source of truth (see
+## _reposition_player). This is used only if there's no FactionBattle in the
+## scene, and is kept roughly in step with faction_battle.gd's
+## `spawn_distance_from_city` so the fallback isn't wildly wrong.
+@export var player_spawn_xz: Vector2 = Vector2(-5000.0, 0.0)
 @export var player_spawn_altitude: float = 102.0
 
 var state: int = State.MENU

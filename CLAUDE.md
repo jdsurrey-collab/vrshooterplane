@@ -656,6 +656,31 @@ height), chosen to read as a capital ship against a city whose tallest
 towers are ~625m. Exported and, like every asset scale in this project,
 unverified in the headset.
 
+### Placement
+
+Three exported knobs on `FactionBattle`, all live-tunable:
+
+- `spawn_distance_from_city` — **11000m** out from `dome_center` on each
+  side (moved out from 10000m on request). This value used to be hardcoded
+  in two places; it's now the single thing that positions a faction's
+  mothership, its fleet, and its rally point.
+- `mothership_altitude` — **1500m** above the terrain below it (raised from
+  1000m on request), putting the flight deck ~1911m above ground.
+- `mothership_length` — see above.
+
+Because everything launches from the deck, `spawn_distance_from_city`
+directly sets the opening transit: roughly 6 seconds of extra flight per
+1000m. Measured across the change, first contact moved from t=54.5s to
+**t=60.5s**, and the fleet is fully airborne at t=34.8s. Worth remembering
+before re-diagnosing "nothing is happening" — for the first minute, that's
+correct behaviour.
+
+The exported `player_spawn_xz` / `respawn_position_xz` /
+`spawn_position_xz` fallbacks in `game_flow.gd`, `crash_handler.gd` and
+`Town.tscn` were updated to `(-5000, 0)` to match. They are **fallbacks
+only** now (see Player spawn below), but a fallback that's 1km wrong is
+worse than no fallback.
+
 The asset arrived with no materials, so `mothership.gd` applies a
 `material_override` per faction — a metallic hull tinted toward the faction
 colour with a very low emission (0.25), enough that the silhouette still

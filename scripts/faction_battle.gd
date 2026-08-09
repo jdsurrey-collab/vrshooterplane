@@ -249,7 +249,12 @@ const KILL_FEED_ENTRY_LIFETIME := 8.0
 ## Unverified in VR, like every other asset scale in this project.
 @export var mothership_length: float = 2000.0
 ## Height of the mothership's underside above the terrain below it.
-@export var mothership_altitude: float = 1000.0
+@export var mothership_altitude: float = 1500.0
+## How far out from dome_center each faction's mothership (and therefore its
+## whole fleet, since everything launches from the deck) sits. Raising this
+## lengthens the opening transit — roughly 6 seconds per extra 1000m at
+## cruise — before the fleets meet.
+@export var spawn_distance_from_city: float = 11000.0
 @export var laser_sound_chance: float = 0.07  # only this fraction of nearby shots get a sound — the rest would be a wall of noise
 
 ## Live status, readable by battle_hud.gd / target_lock.gd / enemy_locator.gd.
@@ -308,8 +313,8 @@ func _ready() -> void:
 	if city and "city_center" in city:
 		dome_center = city.city_center
 
-	_friendly_spawn_center = dome_center + Vector3(-10000.0, 0.0, 0.0)
-	_enemy_spawn_center = dome_center + Vector3(10000.0, 0.0, 0.0)
+	_friendly_spawn_center = dome_center + Vector3(-spawn_distance_from_city, 0.0, 0.0)
+	_enemy_spawn_center = dome_center + Vector3(spawn_distance_from_city, 0.0, 0.0)
 	match_time_remaining = match_duration
 
 	_build_multimesh_nodes()

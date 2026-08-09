@@ -35,7 +35,7 @@ shadow_enabled = true
 script = ExtResource("5_terrain")
 world_size = 100000.0
 height_scale = 8000.0
-spawn_position_xz = Vector2(-4000, 0)
+spawn_position_xz = Vector2(-5000, 0)
 
 [node name="City" type="Node3D" parent="."]
 script = ExtResource("7_citygen")
