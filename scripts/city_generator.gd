@@ -61,16 +61,44 @@ const LANDMARK_BUILDINGS := [
 
 @export var terrain_path: NodePath = ^"../Terrain"
 @export var city_center: Vector3 = Vector3(6000.0, 0.0, 0.0)
-@export var grid_size: int = 24  # grid_size x grid_size city blocks
-@export var block_pitch: float = 450.0  # distance between street centerlines
+## DENSITY WITHOUT SPRAWL. grid_size and block_pitch are deliberately
+## inverse to one another: the city's overall footprint is
+## `grid_size * block_pitch` (10800m across, unchanged since the first
+## version), so packing more blocks in means shrinking the block pitch by
+## the same factor rather than extending the grid outward. 24 blocks at
+## 450m and 30 blocks at 360m cover exactly the same ground.
+##
+## Changing either of these WITHOUT compensating the other changes the
+## city's real size, which would move the goalposts for
+## `FactionBattle.dome_radius` (8000m, sized against the city's ~7637m
+## half-diagonal).
+@export var grid_size: int = 30  # grid_size x grid_size city blocks
+@export var block_pitch: float = 360.0  # distance between street centerlines
 @export var road_width: float = 30.0
-@export var building_jitter: float = 40.0  # small — buildings should still read as grid-aligned
-@export var skip_chance: float = 0.15  # leave some blocks empty (plazas/lots)
+@export var building_jitter: float = 30.0  # small — buildings should still read as grid-aligned, and blocks are tighter now
+## Tuned alongside grid_size so the actual building count lands on the
+## intended increase rather than the raw block count: 30x30 at 0.18 skip
+## gives ~738 buildings against the previous 24x24 at 0.15's ~490, i.e.
+## +50%.
+@export var skip_chance: float = 0.18  # leave some blocks empty (plazas/lots)
 @export var landmark_chance: float = 0.08  # fraction of filled blocks that go supertall
 @export var regular_scale_min: float = 1.0
 @export var regular_scale_max: float = 2.5
 @export var landmark_scale_min: float = 3.5  # ~125m base * 3.5 = 437m, comfortably 400m+
 @export var landmark_scale_max: float = 5.0
+
+## Applied to the Y axis ONLY, on top of the uniform scale above — so
+## buildings get taller without getting wider, and the street grid and
+## overall sprawl are untouched. Scaling all three axes would have widened
+## every footprint to match, crowding the blocks and effectively growing the
+## city.
+##
+## COUPLED TO faction_battle.gd's MAX_BUILDING_HEIGHT, which is the altitude
+## above which its ships and bolts skip their building-collision physics
+## query entirely. If the tallest building here can exceed that value,
+## things fly through the tops of towers. Tallest right now: ~125m base *
+## 5.0 * 2.0 = ~1250m.
+@export var height_multiplier: float = 2.0
 
 var _terrain: Node
 
@@ -165,7 +193,11 @@ func _generate_buildings() -> void:
 			# Grid-aligned facing (0/90/180/270) — reads as a real city
 			# block from a distance instead of randomly-strewn debris.
 			body.rotation.y = (randi() % 4) * (PI * 0.5)
-			body.scale = Vector3.ONE * randf_range(scale_min, scale_max)
+			# Y-only stretch — see height_multiplier. The CollisionShape3D
+			# added below is a child of this body, so it inherits the same
+			# non-uniform scale and the collision box stays correct for free.
+			var s := randf_range(scale_min, scale_max)
+			body.scale = Vector3(s, s * height_multiplier, s)
 
 			body.add_child(building)
 

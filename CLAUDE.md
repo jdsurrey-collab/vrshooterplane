@@ -227,10 +227,30 @@ writes and wires up scenes/scripts directly.
   what actually reads as "a city" from altitude; the first version scattered
   buildings with full random rotation and no streets, which just looked
   like debris from a distance. Two building pools: `REGULAR_BUILDINGS`
-  (shorter base models, modest scale, ~75-250m) and `LANDMARK_BUILDINGS`
-  (tallest base models scaled up hard, ~430-625m — the "some buildings
-  400m+" supertall towers). Dimensions were measured directly from the
-  imported meshes via a one-off headless AABB script, not guessed.
+  (shorter base models) and `LANDMARK_BUILDINGS` (tallest base models
+  scaled up hard — the supertall towers). Dimensions were measured directly
+  from the imported meshes via a one-off headless AABB script, not guessed.
+  **Density and height are tuned independently of sprawl.** `grid_size` and
+  `block_pitch` are deliberately inverse: the footprint is
+  `grid_size * block_pitch`, held at **10800m** across, so packing in more
+  blocks means shrinking the pitch rather than growing the grid outward
+  (24 blocks at 450m and 30 at 360m cover identical ground). `skip_chance`
+  is then tuned so the *building count* lands where intended rather than
+  the raw block count — currently **743 buildings, +52%** over the previous
+  ~490, with the footprint measured unchanged at 10489m x 10495m.
+  `height_multiplier` (2.0) scales **Y only**, so towers are twice as tall
+  without being wider (mean 267m, tallest 1242m); scaling all three axes
+  would have widened every footprint, crowded the blocks and effectively
+  grown the city. The `CollisionShape3D` is a child of the scaled
+  `StaticBody3D`, so it inherits the non-uniform scale and collision stays
+  correct for free.
+  **Coupled to `faction_battle.gd`'s `MAX_BUILDING_HEIGHT`** (now 1400m):
+  that is the altitude above which ships and bolts skip their
+  building-collision physics query entirely, so it must stay above the
+  tallest building this can produce. Raising building height without
+  raising that gate silently makes ships fly through the tops of towers.
+  `dome_radius` (8000m) is likewise sized against the city's ~7637m
+  half-diagonal, which only holds while the footprint does.
 - `scripts/target_lock.gd` — left controller's **Y button**
   (`by_button`) **cycles** a lock through living aliens from
   `faction_battle.gd`'s roster, nearest-to-farthest
@@ -1056,6 +1076,85 @@ this is a cockpit alert, not a world-space effect. Processed once via
 volume trimmed down: `bass=g=8:f=100:w=0.5,lowpass=f=3200,aecho=0.8:0.7:
 60:0.25,volume=0.7`, saved as `Assets/Audio/missile_alert_1.mp3` /
 `missile_alert_2.mp3`.
+
+## Proximity engine audio
+
+Every AI ship has a sphere of influence: fly close enough and you hear its
+engine, falling off and muffling with distance.
+
+- **Source** — `Assets/Audio/ship_engine.ogg`, one 72s mono loop merged
+  from three user-supplied rocket recordings (`externalengines/`) via
+  `ffmpeg`: each pitched down with `asetrate`, mixed with `amix`, then bass
+  boosted, given resonant peaks at 240Hz and 560Hz, run through `vibrato`
+  for the wail, and low-passed. Mono because `AudioStreamPlayer3D` can only
+  position a mono source.
+- **Pooled emitters, not one player per ship** (`scripts/ship_engine_audio.gd`,
+  `ShipEngineAudio` under `FactionBattle`). 200 simultaneous positional
+  voices with per-voice distance filtering is far past what Godot's audio
+  server will do and would be a serious CPU cost on its own — and the
+  combatants aren't Nodes anyway. Instead a fixed pool (`voice_count`, 12)
+  is dynamically attached to whichever ships are nearest the player. This
+  is the standard approach for crowd/vehicle audio; among ships you can't
+  hear, you can't tell which one isn't emitting.
+- **Voice stealing is the part that needs care**, since naive reassignment
+  pops audibly. Two mitigations: **hysteresis** (a voice keeps its ship
+  until it dies or leaves `audible_radius * release_hysteresis`, so ships
+  hovering at the boundary don't cause churn) and **gain ramps** (voices
+  fade rather than cut, and a released voice must fade essentially to
+  silence before it can be reused). The streams never stop — only the gain
+  moves — and each starts at a random offset so the pool doesn't phase-lock
+  into unison.
+- **Distance behaviour** is mostly Godot doing the work: `unit_size` /
+  `max_distance` / inverse-distance attenuation for volume, and crucially
+  `attenuation_filter_cutoff_hz` for **air absorption** — high frequencies
+  die with distance far faster than low ones, so a distant engine is duller
+  as well as quieter. That single property sells distance more than the
+  volume curve does.
+- **Doppler wail** is computed here from the combatant's own known velocity
+  (`_voice_pitch`), NOT Godot's built-in `doppler_tracking`. The built-in
+  derives velocity from how the node moved between frames, and these
+  emitters *teleport* when reassigned — which would fire an enormous pitch
+  spike on every voice steal. Each ship also gets a per-ship base pitch so a
+  formation doesn't sound like one engine played twelve times.
+- Verified headlessly: 12/12 voices attach inside the fleet with 12 distinct
+  pitches, and all release and fade to silence after flying 30km away.
+
+`FactionBattle` gained `get_ships_near()` / `is_ship_alive_by_key()` /
+`get_ship_position_by_key()` / `get_ship_velocity_by_key()` for this. Ship
+"keys" pack faction and index into one int (`SHIP_KEY_ENEMY_OFFSET`), since
+combatants live in two separate arrays and a bare index is ambiguous.
+
+## Death screen
+
+`scripts/death_screen.gd` (`DeathScreen` under `XRCamera3D`) plus
+`GameFlow.State.DEAD`. Previously the player was frozen on death and
+silently auto-respawned on a 10-second timer with no explanation.
+
+- Fades to red on death (`FADE_IN_DURATION` 1.1s) but only to `max_alpha`
+  (0.62), never opaque — a solid red screen would hide the wreck the player
+  presumably wants to see.
+- Offers **RESPAWN** / **MAIN MENU**, selected by thumbstick and confirmed
+  with the right trigger. Built as a close sibling of `main_menu.gd` and
+  for the same reasons — including that selection is NOT gaze-based, since
+  this node is a child of `XRCamera3D` and gaze selection on head-locked UI
+  is mathematically inert (see the Game Flow section for that bug).
+- `crash_handler.gd` no longer respawns on a timer. `RESPAWN_DELAY` dropped
+  from 10s to **2s** and now only gates how soon the choice becomes
+  available (`can_respawn()`), so a trigger still held at the moment of
+  impact can't instantly skip the wreck. `respawn_now()` is the public
+  entry point `game_flow.gd` calls on confirm.
+
+### The persisting hull-damage noise
+
+Reported as hit sounds still playing after respawn. The cause was the
+assets, not the logic: two of the four supplied `damage_hit_*.mp3` files
+were **33 and 64 seconds** long — full recordings rather than impacts — so
+a single hit started a sound that played straight through the death, the
+crash sequence and the respawn. All four are now trimmed to ~1.2s impacts
+(`silenceremove` to strip leading silence, then a 1.3s window with a fade).
+`player_damage_audio.gd` also gained `stop_all()`, called from
+`crash_handler.gd` on both crash and respawn — whatever the assets are,
+nothing it started should survive the player dying.
 
 ## Kill feed
 

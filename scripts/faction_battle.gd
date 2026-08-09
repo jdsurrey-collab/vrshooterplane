@@ -128,7 +128,12 @@ const MISSILE_COOLDOWN_MIN := 15.0
 const MISSILE_COOLDOWN_MAX := 30.0
 
 const RETARGET_STAGGER := 8
-const GRID_CELL_SIZE := 450.0  # city_generator.gd's block_pitch — reused as the bolt-hit / separation bucket size
+## Bolt-hit / separation spatial-hash cell size. Originally chosen to match
+## city_generator.gd's `block_pitch`; that has since dropped to 360m for
+## density, and this is deliberately NOT following it — 450m is a good cell
+## size for this workload on its own, and there's no requirement that the
+## two agree.
+const GRID_CELL_SIZE := 450.0
 const ENGAGE_RANGE := 800.0  # inside this a pilot will actually shoot
 const MAX_ACQUISITION_RANGE := 3000.0  # targets beyond this aren't acquired at all — see _retarget_if_needed
 const FIRE_CONE := deg_to_rad(14.0)  # must have the target roughly ahead, not abeam, to fire
@@ -144,13 +149,18 @@ const RESPAWN_DELAY := 8.0
 ## its own — more than an entire 90Hz VR frame budget, and the most likely
 ## explanation for the live FPS collapse this project has been chasing.
 ##
-## The tallest landmark in city_generator.gd is ~625m, so anything flying
-## more than MAX_BUILDING_HEIGHT above the terrain underneath it cannot
-## possibly be intersecting a building, and the physics query can be skipped
-## outright. The ground height is already sampled for the terrain check, so
-## the gate itself is free. In practice this eliminates the large majority
-## of those queries, since combat mostly happens well above the rooftops.
-const MAX_BUILDING_HEIGHT := 700.0
+## Anything flying more than MAX_BUILDING_HEIGHT above the terrain
+## underneath it cannot possibly be intersecting a building, so the physics
+## query is skipped outright. The ground height is already sampled for the
+## terrain check, so the gate itself is free.
+##
+## MUST STAY ABOVE THE TALLEST BUILDING city_generator.gd can produce, or
+## ships and bolts silently pass through the tops of towers. That is
+## `LANDMARK_BUILDINGS` base height (~125m) * `landmark_scale_max` (5.0) *
+## `height_multiplier` (2.0) = ~1250m, hence 1400m with margin. This value
+## was 700m while buildings were half their current height — if the city's
+## height settings change again, this has to move with them.
+const MAX_BUILDING_HEIGHT := 1400.0
 
 ## Air Superiority is a slow scalar (as_generation_multiplier is 0.01) and
 ## counting every ship in the dome costs a terrain sample each. Recomputing
@@ -1494,6 +1504,76 @@ func _bolt_transform(b: Dictionary) -> Transform3D:
 # Public API — laser_bolt.gd (player shooting aliens) / target_lock.gd /
 # missile_system.gd / missile.gd
 # ---------------------------------------------------------------------------
+
+# --- Ship audio keys ------------------------------------------------------
+#
+# ship_engine_audio.gd holds a stable reference to one specific ship while a
+# pooled emitter is attached to it. Combatants live in two separate arrays,
+# so a plain index is ambiguous — these pack faction and index into a single
+# int so a voice can keep tracking "that ship over there" across frames.
+
+const SHIP_KEY_ENEMY_OFFSET := 100000
+
+
+func _ship_key(faction: int, index: int) -> int:
+	return index + (SHIP_KEY_ENEMY_OFFSET if faction == Combatant.Faction.ENEMY else 0)
+
+
+func _ship_for_key(key: int) -> Combatant:
+	if key < 0:
+		return null
+	if key >= SHIP_KEY_ENEMY_OFFSET:
+		var ei := key - SHIP_KEY_ENEMY_OFFSET
+		return _enemies[ei] if ei < _enemies.size() else null
+	return _friendlies[key] if key < _friendlies.size() else null
+
+
+## Keys of the living ships nearest to `from` within `radius`, nearest
+## first, capped at `max_count`. Called on a slow timer by
+## ship_engine_audio.gd (a few times a second, not per frame) — a linear
+## scan of both factions at that rate is nothing.
+func get_ships_near(from: Vector3, radius: float, max_count: int) -> Array:
+	var radius_sq := radius * radius
+	var candidates: Array = []
+	for i in _friendlies.size():
+		var c: Combatant = _friendlies[i]
+		if not c.alive:
+			continue
+		var d := from.distance_squared_to(c.position)
+		if d <= radius_sq:
+			candidates.append([d, i])
+	for i in _enemies.size():
+		var c: Combatant = _enemies[i]
+		if not c.alive:
+			continue
+		var d := from.distance_squared_to(c.position)
+		if d <= radius_sq:
+			candidates.append([d, i + SHIP_KEY_ENEMY_OFFSET])
+
+	candidates.sort_custom(func(a, b): return a[0] < b[0])
+
+	var out: Array = []
+	for entry in candidates:
+		if out.size() >= max_count:
+			break
+		out.append(entry[1])
+	return out
+
+
+func is_ship_alive_by_key(key: int) -> bool:
+	var c := _ship_for_key(key)
+	return c != null and c.alive
+
+
+func get_ship_position_by_key(key: int) -> Vector3:
+	var c := _ship_for_key(key)
+	return c.position if c else Vector3.ZERO
+
+
+func get_ship_velocity_by_key(key: int) -> Vector3:
+	var c := _ship_for_key(key)
+	return c.heading * c.speed if c else Vector3.ZERO
+
 
 ## Where the player starts the match and respawns: parked on the friendly
 ## mothership's deck with the rest of the fleet. Returned as a world

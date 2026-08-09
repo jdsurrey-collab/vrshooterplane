@@ -1,13 +1,15 @@
 extends Node
 
-## Plays one of several "we just got hit" sounds. Ready-but-unconsumed
-## infrastructure: nothing calls play_random_hit() yet, because there's no
-## player-side damage/health system to trigger it from — the player's own
-## ship has no hit-zone/health pool the way enemy_ai.gd's does (see
-## docs/damage-reference.md's Scope section). Once that exists (most likely
-## as a laser_bolt.gd extension symmetric to _check_enemy_hit(), or an
-## eventual enemy weapon), wire its damage-taken path to call
-## play_random_hit() on this node.
+## Plays one of several "we just got hit" sounds, driven by
+## player_damage.gd's apply_damage().
+##
+## SOUND LENGTH MATTERS HERE. Two of the four supplied files were 33s and
+## 64s long — full recordings rather than impacts — so a single hit started
+## a sound that played straight through the player's death, the crash
+## sequence and the respawn. That was the "hull damage noise persisting at
+## death" report. They're now all trimmed to ~1.2s impacts. `stop_all()`
+## below is the belt-and-braces half of that fix: whatever the assets are,
+## nothing this node started should survive the player dying.
 
 var _players: Array[AudioStreamPlayer] = []
 var _next_index: int = 0
@@ -30,3 +32,10 @@ func play_random_hit() -> void:
 		index = (index + 1) % _players.size()
 	_next_index = index
 	_players[index].play()
+
+
+## Cuts every hit sound immediately — called on death and on respawn, so
+## damage audio can never bleed across a life.
+func stop_all() -> void:
+	for p in _players:
+		p.stop()

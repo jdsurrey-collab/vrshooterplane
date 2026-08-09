@@ -26,7 +26,11 @@ extends Node
 ## performs depends on main_menu.gd's thumbstick-driven `selected_action`
 ## ("start" starts the match, "quit" calls get_tree().quit()).
 
-enum State { MENU, PLAYING, GAME_OVER }
+## DEAD is entered whenever crash_handler.gd reports the player destroyed
+## (terrain/building impact, or cockpit/hull health reaching zero). The
+## player used to be respawned silently on a timer; now death_screen.gd
+## fades the view to red and the player chooses RESPAWN or MAIN MENU.
+enum State { MENU, PLAYING, GAME_OVER, DEAD }
 
 ## FALLBACK ONLY. The real spawn point comes from
 ## FactionBattle.get_player_spawn_position() — a spot on the friendly
@@ -49,6 +53,8 @@ var _battle: Node
 var _terrain: Node
 var _right_controller: XRController3D
 var _main_menu: Node
+var _death_screen: Node
+var _crash_handler: Node
 
 var _confirm_button_was_down: bool = false
 
@@ -63,6 +69,8 @@ func _ready() -> void:
 		_player_damage = _player.get_node_or_null("PlayerDamage")
 		_right_controller = _player.get_node_or_null("RightHand")
 		_main_menu = _player.get_node_or_null("XRCamera3D/MainMenu")
+		_death_screen = _player.get_node_or_null("XRCamera3D/DeathScreen")
+		_crash_handler = _player.get_node_or_null("CrashHandler")
 	_battle = get_node_or_null("../FactionBattle")
 	_terrain = get_node_or_null("../Terrain")
 
@@ -71,8 +79,12 @@ func _ready() -> void:
 
 func _process(_delta: float) -> void:
 	if state == State.PLAYING:
+		# The match ending outranks the player dying — if both land on the
+		# same frame, the summary screen is the more important one.
 		if _battle and _battle.game_over:
 			_enter_game_over()
+		elif _crash_handler and _crash_handler.crashed:
+			_enter_dead()
 		return
 
 	if not _right_controller or not _right_controller.get_is_active():
@@ -87,7 +99,24 @@ func _process(_delta: float) -> void:
 				_start_match()
 		elif state == State.GAME_OVER:
 			_return_to_menu()
+		elif state == State.DEAD:
+			_confirm_death_choice()
 	_confirm_button_was_down = confirm_down
+
+
+## RESPAWN puts the player back on the mothership deck and resumes play;
+## MAIN MENU abandons the match. Gated on crash_handler.can_respawn() so a
+## trigger still held from the moment of impact can't skip the wreck.
+func _confirm_death_choice() -> void:
+	if not _crash_handler or not _crash_handler.can_respawn():
+		return
+	if _death_screen and _death_screen.selected_action == "menu":
+		_crash_handler.respawn_now()  # clears the crashed flag before leaving
+		_return_to_menu()
+		return
+	_crash_handler.respawn_now()
+	state = State.PLAYING
+	_set_player_paused(false)
 
 
 func _set_player_paused(value: bool) -> void:
@@ -135,6 +164,11 @@ func _start_match() -> void:
 	_set_player_paused(false)
 	if _battle:
 		_battle.start_battle()
+
+
+func _enter_dead() -> void:
+	state = State.DEAD
+	_set_player_paused(true)
 
 
 func _enter_game_over() -> void:

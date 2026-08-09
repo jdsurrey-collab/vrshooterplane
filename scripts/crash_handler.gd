@@ -18,7 +18,10 @@ extends Node
 ## site (CrashEffects, shared with enemy_ai.gd), count down RESPAWN_DELAY
 ## seconds, then reset the ship back to the spawn point.
 
-const RESPAWN_DELAY := 10.0
+## How long after impact before the death screen will accept a respawn.
+## Short: it exists to stop a trigger held at the moment of death from
+## instantly skipping the wreck, not to make the player wait.
+const RESPAWN_DELAY := 2.0
 
 @export var terrain_path: NodePath = ^"../../Terrain"
 @export var respawn_height_offset: float = 102.0  # +100m above the old 2.0, matches the initial spawn height
@@ -39,6 +42,7 @@ var _flare_system: Node
 var _terrain: Node
 var _crash_audio: AudioStreamPlayer
 var _player_damage: Node
+var _damage_audio: Node
 
 
 func _ready() -> void:
@@ -50,6 +54,7 @@ func _ready() -> void:
 	_terrain = get_node_or_null(terrain_path)
 	_crash_audio = get_node_or_null("CrashAudio")
 	_player_damage = _player.get_node_or_null("PlayerDamage")
+	_damage_audio = _player.get_node_or_null("DamageAudio")
 
 
 ## Freezing on a crash has to cover every player weapon, not just the guns —
@@ -71,9 +76,12 @@ func _physics_process(delta: float) -> void:
 		return
 
 	if crashed:
+		# Counts down to zero and then WAITS. Respawning is now the player's
+		# call, made from the death screen (death_screen.gd / game_flow.gd's
+		# DEAD state) rather than happening automatically — this timer only
+		# gates how soon that choice becomes available, so a trigger still
+		# held down at the moment of impact can't instantly skip the wreck.
 		respawn_time_remaining = maxf(0.0, respawn_time_remaining - delta)
-		if respawn_time_remaining <= 0.0:
-			_respawn()
 		return
 
 	var pos := _player.global_position
@@ -94,6 +102,18 @@ func trigger_crash() -> void:
 		_crash(_player.global_position)
 
 
+## True once the wreck has played out and the player may choose to respawn.
+func can_respawn() -> bool:
+	return crashed and respawn_time_remaining <= 0.0
+
+
+## Called by game_flow.gd when the player confirms RESPAWN on the death
+## screen. The old behaviour respawned automatically on a timer.
+func respawn_now() -> void:
+	if crashed:
+		_respawn()
+
+
 func _crash(impact: Vector3) -> void:
 	crashed = true
 	respawn_time_remaining = RESPAWN_DELAY
@@ -102,6 +122,9 @@ func _crash(impact: Vector3) -> void:
 		_flight_controller.reset_velocity()
 	if _crash_audio:
 		_crash_audio.play()
+	# Hit sounds must not outlive the ship that was being hit.
+	if _damage_audio and _damage_audio.has_method("stop_all"):
+		_damage_audio.stop_all()
 
 	CrashEffects.spawn(get_tree().current_scene, _terrain, impact)
 
@@ -126,3 +149,5 @@ func _respawn() -> void:
 	_set_systems_paused(false)
 	if _player_damage:
 		_player_damage.reset_health()
+	if _damage_audio and _damage_audio.has_method("stop_all"):
+		_damage_audio.stop_all()

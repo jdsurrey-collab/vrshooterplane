@@ -1,4 +1,4 @@
-[gd_scene load_steps=10 format=3 uid="uid://ceaei3xynkod2"]
+[gd_scene load_steps=11 format=3 uid="uid://ceaei3xynkod2"]
 
 [ext_resource type="PackedScene" uid="uid://c2dyoeywkgf30" path="res://scenes/Player.tscn" id="1_player"]
 [ext_resource type="Texture2D" uid="uid://neat1aug36g3" path="res://Assets/Skybox/panorama.tga" id="4_panorama"]
@@ -6,6 +6,7 @@
 [ext_resource type="Script" uid="uid://dl1fhj8eidhjb" path="res://scripts/faction_battle.gd" id="6_factionbattle"]
 [ext_resource type="Script" uid="uid://k20p8kbj87rh" path="res://scripts/city_generator.gd" id="7_citygen"]
 [ext_resource type="Script" uid="uid://valvihtvt6bi" path="res://scripts/game_flow.gd" id="8_gameflow"]
+[ext_resource type="Script" path="res://scripts/ship_engine_audio.gd" id="9_shipengineaudio"]
 
 [sub_resource type="PanoramaSkyMaterial" id="SkyMat_1"]
 panorama = ExtResource("4_panorama")
@@ -42,6 +43,9 @@ script = ExtResource("7_citygen")
 
 [node name="FactionBattle" type="Node3D" parent="."]
 script = ExtResource("6_factionbattle")
+
+[node name="ShipEngineAudio" type="Node" parent="FactionBattle"]
+script = ExtResource("9_shipengineaudio")
 
 [node name="GameFlow" type="Node" parent="."]
 script = ExtResource("8_gameflow")
