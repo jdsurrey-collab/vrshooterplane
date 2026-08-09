@@ -36,3 +36,13 @@ import/blender/enabled=false
 
 openxr/enabled=true
 shaders/enabled=true
+
+[rendering]
+
+; Volumetric fog froxel grid. Lowered from the 64x64x64 default because
+; volumetric fog is evaluated per eye in VR and this project has an open
+; frame-rate question — see scripts/fog_banks.gd. Raise for finer plume
+; detail, lower if PERF says the GPU is the bottleneck.
+environment/volumetric_fog/volume_size=48
+environment/volumetric_fog/volume_depth=64
+environment/volumetric_fog/use_filter=1

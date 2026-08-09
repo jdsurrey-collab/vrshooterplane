@@ -1,4 +1,4 @@
-[gd_scene load_steps=11 format=3 uid="uid://ceaei3xynkod2"]
+[gd_scene load_steps=12 format=3 uid="uid://ceaei3xynkod2"]
 
 [ext_resource type="PackedScene" uid="uid://c2dyoeywkgf30" path="res://scenes/Player.tscn" id="1_player"]
 [ext_resource type="Texture2D" uid="uid://neat1aug36g3" path="res://Assets/Skybox/panorama.tga" id="4_panorama"]
@@ -7,6 +7,7 @@
 [ext_resource type="Script" uid="uid://k20p8kbj87rh" path="res://scripts/city_generator.gd" id="7_citygen"]
 [ext_resource type="Script" uid="uid://valvihtvt6bi" path="res://scripts/game_flow.gd" id="8_gameflow"]
 [ext_resource type="Script" path="res://scripts/ship_engine_audio.gd" id="9_shipengineaudio"]
+[ext_resource type="Script" path="res://scripts/fog_banks.gd" id="10_fogbanks"]
 
 [sub_resource type="PanoramaSkyMaterial" id="SkyMat_1"]
 panorama = ExtResource("4_panorama")
@@ -36,11 +37,21 @@ fog_sun_scatter = 0.22
 fog_density = 0.425
 fog_aerial_perspective = 0.55
 fog_sky_affect = 0.5
-fog_height = 3200.0
+fog_height = 320.0
 fog_height_density = 0.0175
 fog_depth_curve = 0.55
 fog_depth_begin = 2500.0
 fog_depth_end = 70000.0
+volumetric_fog_enabled = true
+volumetric_fog_density = 0.0
+volumetric_fog_albedo = Color(0.72, 0.74, 0.73, 1)
+volumetric_fog_anisotropy = 0.25
+volumetric_fog_length = 12000.0
+volumetric_fog_detail_spread = 2.5
+volumetric_fog_gi_inject = 0.0
+volumetric_fog_ambient_inject = 0.7
+volumetric_fog_sky_affect = 0.0
+volumetric_fog_temporal_reprojection_amount = 0.92
 adjustment_enabled = true
 adjustment_brightness = 0.98
 adjustment_contrast = 1.14
@@ -68,6 +79,9 @@ script = ExtResource("5_terrain")
 world_size = 100000.0
 height_scale = 8000.0
 spawn_position_xz = Vector2(-16000, 0)
+
+[node name="FogBanks" type="Node3D" parent="."]
+script = ExtResource("10_fogbanks")
 
 [node name="City" type="Node3D" parent="."]
 script = ExtResource("7_citygen")

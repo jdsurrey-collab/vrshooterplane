@@ -1128,9 +1128,16 @@ highlights and oversaturated mids. All of this lives in `Town.tscn`'s
   cueing and `fog_sun_scatter` 0.22 for haze around the sun. Volumetric fog
   was deliberately NOT used — it is expensive in VR stereo and this project
   already has an open frame-rate question.
-- **Height fog** (`fog_height` 2600m, density 0.0175) pools the smog low so
-  the city sits in it. Kept subtle since the right height depends on local
-  terrain elevation, which varies by kilometres across this map.
+- **Height fog is effectively retired** (`fog_height` **320m**, down from
+  3200m). It was swallowing the buildings: `fog_height` is an ABSOLUTE
+  world-Y, but the terrain here ranges over kilometres and the city sits at
+  ~1300-2000m with towers reaching ~3200m — so a single absolute height put
+  the densest fog right through the skyline. Dropping it to 320m puts it
+  below the terrain entirely, which leaves the buildings clear.
+  This is the correct outcome rather than a workaround: absolute-Y height
+  fog fundamentally cannot work on terrain that varies this much, and
+  ground-hugging fog is now the **fog banks'** job (see Rolling fog banks
+  below), which follow the terrain properly.
 - Both densities were **halved after the first look in the headset** —
   `fog_density` 0.85 -> 0.425 and `fog_height_density` 0.035 -> 0.0175.
 - **FOG RANGE MUST EXCEED THE SPAWN DISTANCE.** The next look reported "I
@@ -1157,6 +1164,42 @@ highlights and oversaturated mids. All of this lives in `Town.tscn`'s
 All of it is first-pass and unverified in the headset, like every other
 visual tuning in this project. The exported roughness knobs and the
 Environment's grade values are the dials.
+
+### Rolling fog banks
+
+`scripts/fog_banks.gd` (`FogBanks` in `Town.tscn`) — drifting banks of fog
+that hug the ground and climb terrain. Flat depth fog **cannot** do this:
+it's a per-pixel distance function, so it can only ever be a smooth
+gradient with distance, optionally biased by an absolute height. It has no
+shape, so it can't pool in a valley, break over a ridge, or roll up a
+mountainside. That needs real 3D volumes.
+
+- Implemented as a pool of **`FogVolume`** nodes fed by a shared 3D
+  `NoiseTexture3D`, rendered through the Environment's **volumetric** fog
+  froxel grid. `volumetric_fog_enabled` must be on for FogVolumes to render
+  at all — but `volumetric_fog_density` is set to **0**, so the volumetric
+  pass contributes nothing globally and exists purely to draw these banks.
+  That avoids double-fogging the world on top of the depth fog and keeps
+  the froxel grid mostly empty.
+- **Terrain following is what sells it.** Each bank re-samples the terrain
+  height beneath itself every frame and sits `height_above_terrain` above
+  it, so a bank drifting onto rising ground rides up the slope. Combined
+  with `FogMaterial.height_falloff` (0.75, density concentrated at the
+  bottom of the volume) the fog clings to the surface instead of floating
+  as a detached slab. Measured: terrain-following is exact (0.00m
+  deviation) and banks changed altitude by up to **286m over 60s** of
+  drift.
+- Banks drift on random headings and are **recycled to the far edge** when
+  they pass `spread_radius` (6500m) from the player, so fog is always where
+  you are without paying for the whole 100km map. `edge_fade` blends
+  neighbouring banks so they don't show box seams.
+- **This is the most expensive visual feature in the project** — a 3D
+  froxel grid evaluated every frame, and in VR that happens per eye. It
+  ships deliberately conservative: 8 banks, a reduced 48x48x64 froxel grid
+  (`project.godot`'s `rendering/environment/volumetric_fog/volume_size`),
+  and an `enabled` export that switches the whole system off in one click.
+  **Check the HUD's PERF line with this on before turning it up** — the
+  frame-rate question in Known gaps is still open.
 
 ### Shadows
 
