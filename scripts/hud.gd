@@ -1,10 +1,12 @@
 extends Label3D
 
-## Simple cockpit HUD readout: current speed, live weapon-system status
+## Simple cockpit HUD readout: FPS, current speed, live weapon-system status
 ## (right controller active, trigger state, fire cooldown, shot count),
-## crash/respawn status, and distance to the enemy ship (paired with the
+## crash/respawn status, and distance to the city objective (paired with the
 ## EnemyLocator arrow) — so issues are visible in-headset instead of only
-## in the editor console.
+## in the editor console. The FPS line exists mainly to tell "the game is
+## actually dropping frames" apart from "the game is fine, something
+## external (OBS, Virtual Desktop encoding) is the bottleneck."
 
 var _flight_controller: Node
 var _weapon_system: Node
@@ -23,6 +25,8 @@ func _ready() -> void:
 
 
 func _process(_delta: float) -> void:
+	var fps_text := "FPS: %d" % Engine.get_frames_per_second()
+
 	var speed_text := "SPEED: -- m/s"
 	if _flight_controller:
 		speed_text = "SPEED: %d m/s" % roundi(_flight_controller.get_speed())
@@ -36,11 +40,11 @@ func _process(_delta: float) -> void:
 				_weapon_system.shots_fired,
 		]
 
-	var enemy_text := "ENEMY: --"
-	if _enemy_locator and _enemy_locator.distance_to_enemy >= 0.0:
-		enemy_text = "ENEMY: %d m — follow the yellow arrow" % roundi(_enemy_locator.distance_to_enemy)
+	var enemy_text := "CITY: --"
+	if _enemy_locator and _enemy_locator.distance_to_objective >= 0.0:
+		enemy_text = "CITY: %d m — follow the yellow arrow" % roundi(_enemy_locator.distance_to_objective)
 
-	var lines := [speed_text, gun_text, enemy_text]
+	var lines := [fps_text, speed_text, gun_text, enemy_text]
 	if _crash_handler and _crash_handler.crashed:
 		lines.append("CRASHED — respawning in %ds" % ceili(_crash_handler.respawn_time_remaining))
 

@@ -65,16 +65,37 @@ The crosshair itself is a plain 3D object fixed in the ship's local space
 etched onto the canopy glass, it will show correct parallax as you move
 your head within the cockpit, rather than always snapping to face you.
 
-## Future work: lead / PIP
+## Lead / PIP (implemented — `scripts/target_lock.gd`)
 
-Not implemented yet. A **PIP (predicted impact point)** — sometimes called
-a "pipper" — is the reticle a lead-computing gunsight shows for a *moving*
-target: instead of a fixed point at convergence distance, it's computed
-each frame from target position, target velocity, your own velocity, and
-bolt travel time, so it shows where to aim to actually hit something that's
-maneuvering. This will need target-tracking data (from the eventual bot
-opponent) that doesn't exist yet — noted here as the next step once there's
-something to shoot at.
+A **PIP (predicted impact point)** — sometimes called a "pipper" — is the
+reticle a lead-computing gunsight shows for a *moving* target: instead of a
+fixed point at convergence distance, it's computed each frame from target
+position, target velocity, your own gun position, and bolt travel speed, so
+it shows where to aim to actually hit something that's maneuvering.
+
+Built as part of the Y-button target-lock system: `_solve_intercept()`
+solves the real firing-solution quadratic, not a visual approximation —
+given a bolt fired *now* travels at a fixed speed, find the smallest
+positive time `t` where the bolt's position would coincide with the
+target's projected position:
+
+```
+|target_pos + target_vel*t - shooter_pos| = bullet_speed * t
+```
+
+Expanding and collecting terms gives a standard quadratic `a*t² + b*t + c = 0`
+in `t`, solved directly (falling back to the target's current position if
+there's no valid positive-time root — e.g. the target is outrunning the
+bolt). `target_vel` comes from `enemy_ai.gd`'s `get_velocity()`, which is
+exact rather than estimated: that AI is purely kinematic (always moving at
+`cruise_speed` along its current facing, no separate velocity state to
+drift out of sync), so there's no smoothing/estimation error in the input
+to begin with.
+
+The PIP is a small billboarded ring (`TorusMesh`) placed at the computed
+world-space point — billboarded (unlike the static convergence crosshair)
+because a flat ring needs to face the camera to read as a clean circle
+rather than an ellipse or a line depending on viewing angle.
 
 ## Sources
 

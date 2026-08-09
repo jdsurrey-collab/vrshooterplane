@@ -1,4 +1,4 @@
-[gd_scene load_steps=21 format=3 uid="uid://c2dyoeywkgf30"]
+[gd_scene load_steps=32 format=3 uid="uid://c2dyoeywkgf30"]
 
 [ext_resource type="PackedScene" uid="uid://diyu06cw06syv" path="res://addons/godot-xr-tools/player/player_body.tscn" id="1_body"]
 [ext_resource type="PackedScene" uid="uid://clc5dre31iskm" path="res://addons/godot-xr-tools/xr/start_xr.tscn" id="4_startxr"]
@@ -16,6 +16,17 @@
 [ext_resource type="Script" uid="uid://dkol66j00vro4" path="res://scripts/crash_handler.gd" id="20_crash"]
 [ext_resource type="Script" uid="uid://d1dwdpcemclto" path="res://scripts/enemy_locator.gd" id="21_locator"]
 [ext_resource type="AudioStream" uid="uid://b4qd34rq26q74" path="res://Assets/Audio/laser.mp3" id="22_lasersound"]
+[ext_resource type="AudioStream" uid="uid://cyt0jptp4oxn4" path="res://Assets/Audio/crash.mp3" id="23_crashsound"]
+[ext_resource type="Script" uid="uid://bah1xfpk5wg8r" path="res://scripts/target_lock.gd" id="24_targetlock"]
+[ext_resource type="ArrayMesh" uid="uid://cff6842lbgyob" path="res://Assets/EnemyShip/ship1.obj" id="25_shiphull"]
+[ext_resource type="Script" uid="uid://cvtapnd1ybp53" path="res://scripts/player_damage_audio.gd" id="26_damageaudio"]
+[ext_resource type="AudioStream" uid="uid://c8kd4iqxsblxu" path="res://Assets/Audio/damage_hit_1.mp3" id="27_damagehit1"]
+[ext_resource type="AudioStream" uid="uid://ptkleeimvxrf" path="res://Assets/Audio/damage_hit_2.mp3" id="28_damagehit2"]
+[ext_resource type="AudioStream" uid="uid://cbxnkb1n1iwfp" path="res://Assets/Audio/damage_hit_3.mp3" id="29_damagehit3"]
+[ext_resource type="AudioStream" uid="uid://23i1httftrtg" path="res://Assets/Audio/damage_hit_4.mp3" id="30_damagehit4"]
+[ext_resource type="Script" uid="uid://cl6xo44r8wy6c" path="res://scripts/player_damage.gd" id="31_playerdamage"]
+[ext_resource type="Script" uid="uid://d1l2op8g0xd67" path="res://scripts/player_health_hud.gd" id="32_healthhud"]
+[ext_resource type="Script" uid="uid://dm3jd324byb6k" path="res://scripts/battle_hud.gd" id="33_battlehud"]
 
 [sub_resource type="CylinderMesh" id="CylinderMesh_arrow"]
 top_radius = 0.0
@@ -45,8 +56,8 @@ far = 150000.0
 [node name="VRCommonShaderCache" parent="XRCamera3D" instance=ExtResource("5_shadercache")]
 
 [node name="HUD" type="Label3D" parent="XRCamera3D"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.12, -0.09, -0.4)
-pixel_size = 0.0012
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.22, -0.17, -0.4)
+pixel_size = 0.00018
 billboard = 1
 no_depth_test = true
 text = "SPEED: -- m/s
@@ -63,6 +74,29 @@ script = ExtResource("21_locator")
 transform = Transform3D(1, 0, 0, 0, -4.37114e-08, 1, 0, -1, -4.37114e-08, 0, 0, 0)
 mesh = SubResource("CylinderMesh_arrow")
 surface_material_override/0 = SubResource("StandardMaterial3D_arrow")
+
+[node name="HealthHUD" type="Label3D" parent="XRCamera3D"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.24, 0.2, -0.4)
+pixel_size = 0.00018
+billboard = 1
+no_depth_test = true
+text = "COCKPIT: --
+ENGINE: --
+HULL: --"
+font_size = 30
+horizontal_alignment = 0
+script = ExtResource("32_healthhud")
+
+[node name="BattleHUD" type="Label3D" parent="XRCamera3D"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.28, -0.4)
+pixel_size = 0.00018
+billboard = 1
+no_depth_test = true
+text = "AIR SUPERIORITY
+FRIENDLY 50% - ENEMY 50%
+10:00"
+font_size = 30
+script = ExtResource("33_battlehud")
 
 [node name="OptionsMenu" type="Label3D" parent="XRCamera3D"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -0.5)
@@ -94,18 +128,22 @@ enabled = false
 [node name="FlightController" type="Node" parent="."]
 script = ExtResource("12_flight")
 
+[node name="ShipHull" type="MeshInstance3D" parent="."]
+transform = Transform3D(2, 0, 0, 0, 2, 0, 0, 0, 2, 0, -1.422, -1.18)
+mesh = ExtResource("25_shiphull")
+
 [node name="Ship" parent="." instance=ExtResource("13_ship")]
 transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 0, -1.422, -1.18)
 
 [node name="GunMountLeft" type="Marker3D" parent="Ship"]
-transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, -0.4, 1.9, 0.6)
+transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, -0.4, 1.9, 0.9)
 
 [node name="Audio" type="AudioStreamPlayer3D" parent="Ship/GunMountLeft"]
 stream = ExtResource("22_lasersound")
 max_distance = 500.0
 
 [node name="GunMountRight" type="Marker3D" parent="Ship"]
-transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 0.4, 1.9, 0.6)
+transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 0.4, 1.9, 0.9)
 
 [node name="Audio" type="AudioStreamPlayer3D" parent="Ship/GunMountRight"]
 stream = ExtResource("22_lasersound")
@@ -127,5 +165,29 @@ stream = ExtResource("18_accelsound")
 [node name="ThrustPlayer" type="AudioStreamPlayer" parent="EngineAudio"]
 stream = ExtResource("19_thrustsound")
 
+[node name="PlayerDamage" type="Node" parent="."]
+script = ExtResource("31_playerdamage")
+
 [node name="CrashHandler" type="Node" parent="."]
 script = ExtResource("20_crash")
+
+[node name="CrashAudio" type="AudioStreamPlayer" parent="CrashHandler"]
+stream = ExtResource("23_crashsound")
+
+[node name="TargetLock" type="Node" parent="."]
+script = ExtResource("24_targetlock")
+
+[node name="DamageAudio" type="Node" parent="."]
+script = ExtResource("26_damageaudio")
+
+[node name="Hit1" type="AudioStreamPlayer" parent="DamageAudio"]
+stream = ExtResource("27_damagehit1")
+
+[node name="Hit2" type="AudioStreamPlayer" parent="DamageAudio"]
+stream = ExtResource("28_damagehit2")
+
+[node name="Hit3" type="AudioStreamPlayer" parent="DamageAudio"]
+stream = ExtResource("29_damagehit3")
+
+[node name="Hit4" type="AudioStreamPlayer" parent="DamageAudio"]
+stream = ExtResource("30_damagehit4")

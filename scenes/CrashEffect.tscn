@@ -1,6 +1,7 @@
-[gd_scene load_steps=8 format=3]
+[gd_scene load_steps=9 format=3]
 
 [ext_resource type="Script" path="res://scripts/crash_effect.gd" id="1_crasheffect"]
+[ext_resource type="Texture2D" path="res://Assets/Textures/soft_particle.png" id="2_softparticle"]
 
 [sub_resource type="CylinderMesh" id="CylinderMesh_crater"]
 top_radius = 6.0
@@ -20,6 +21,7 @@ transparency = 1
 shading_mode = 0
 vertex_color_use_as_albedo = true
 albedo_color = Color(0.04, 0.04, 0.04, 1)
+albedo_texture = ExtResource("2_softparticle")
 billboard_mode = 1
 
 [sub_resource type="Gradient" id="Gradient_smoke"]

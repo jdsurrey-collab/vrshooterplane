@@ -14,14 +14,14 @@ extends Node
 ## discrete scattered objects the way there is for terrain.
 ##
 ## On impact: freeze flight/weapons (reusing their `paused` flag — the same
-## convention the options menu uses), spawn the crash site (CrashEffects,
-## shared with enemy_ai.gd), count down RESPAWN_DELAY seconds, then reset
-## the ship back to the spawn point.
+## convention the options menu uses), play the crash sound, spawn the crash
+## site (CrashEffects, shared with enemy_ai.gd), count down RESPAWN_DELAY
+## seconds, then reset the ship back to the spawn point.
 
 const RESPAWN_DELAY := 10.0
 
 @export var terrain_path: NodePath = ^"../../Terrain"
-@export var respawn_height_offset: float = 2.0
+@export var respawn_height_offset: float = 102.0  # +100m above the old 2.0, matches the initial spawn height
 
 ## Live status, readable by the HUD.
 var crashed: bool = false
@@ -31,6 +31,8 @@ var _player: Node3D
 var _flight_controller: Node
 var _weapon_system: Node
 var _terrain: Node
+var _crash_audio: AudioStreamPlayer
+var _player_damage: Node
 
 
 func _ready() -> void:
@@ -38,6 +40,8 @@ func _ready() -> void:
 	_flight_controller = _player.get_node_or_null("FlightController")
 	_weapon_system = _player.get_node_or_null("WeaponSystem")
 	_terrain = get_node_or_null(terrain_path)
+	_crash_audio = get_node_or_null("CrashAudio")
+	_player_damage = _player.get_node_or_null("PlayerDamage")
 
 
 func _physics_process(delta: float) -> void:
@@ -60,6 +64,14 @@ func _physics_process(delta: float) -> void:
 		_crash(pos)
 
 
+## Public entry point for anything other than terrain/building impact to
+## start the crash sequence — currently just player_damage.gd, when cockpit
+## or hull health hits 0.
+func trigger_crash() -> void:
+	if not crashed:
+		_crash(_player.global_position)
+
+
 func _crash(impact: Vector3) -> void:
 	crashed = true
 	respawn_time_remaining = RESPAWN_DELAY
@@ -68,6 +80,8 @@ func _crash(impact: Vector3) -> void:
 		_flight_controller.reset_velocity()
 	if _weapon_system:
 		_weapon_system.paused = true
+	if _crash_audio:
+		_crash_audio.play()
 
 	CrashEffects.spawn(get_tree().current_scene, _terrain, impact)
 
@@ -82,3 +96,5 @@ func _respawn() -> void:
 		_flight_controller.paused = false
 	if _weapon_system:
 		_weapon_system.paused = false
+	if _player_damage:
+		_player_damage.reset_health()

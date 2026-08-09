@@ -32,9 +32,25 @@ extends Node
 @export var gravity_accel: float = 800.0  # m/s^2, scaled for the 100x world
 
 @export_group("Rotation")
-@export var max_angular_speed: float = 1.5  # radians/sec
-@export var angular_acceleration: float = 4.0  # radians/sec^2
-@export var angular_damping: float = 6.0  # radians/sec^2 (braking, no stick input)
+## Pitch/yaw grounded in real F-16 data: max observed pitch rate ~34°/s,
+## sustained turn rate ~17.5°/s at altitude — 0.44 rad/s (~25°/s) sits
+## between those. The previous value (1.5 rad/s, ~86°/s, applied uniformly
+## to all three axes) was 3-4x faster than even a real fighter jet sustains
+## on pitch, which is what made it feel "touchy." See
+## docs/flight-physics-reference.md for the sourced figures.
+@export var max_pitch_yaw_speed: float = 0.44  # radians/sec (~25°/s)
+@export var pitch_yaw_acceleration: float = 1.2  # radians/sec^2
+@export var pitch_yaw_damping: float = 1.8  # radians/sec^2 (braking, no stick input)
+
+## Roll is legitimately much faster than pitch/yaw on a real aircraft —
+## ailerons roll efficiently, while pitch/yaw are limited by G-tolerance and
+## engine/rudder authority. Kept at the original value (not flagged as
+## touchy) rather than pushed toward a real fighter's ~240°/s max, partly
+## because fast rotation is a common VR-comfort issue independent of
+## realism.
+@export var max_roll_speed: float = 1.5  # radians/sec (~86°/s)
+@export var roll_acceleration: float = 4.0  # radians/sec^2
+@export var roll_damping: float = 6.0  # radians/sec^2 (braking, no stick input)
 
 @export_group("Translation")
 @export var max_forward_speed: float = 300.0  # m/s
@@ -111,11 +127,11 @@ func _update_rotation(right_stick: Vector2, left_stick: Vector2, delta: float) -
 	roll_input_value = roll_input
 
 	_angular_velocity.y = _approach_axis(
-			_angular_velocity.y, yaw_input, max_angular_speed, angular_acceleration, angular_damping, delta)
+			_angular_velocity.y, yaw_input, max_pitch_yaw_speed, pitch_yaw_acceleration, pitch_yaw_damping, delta)
 	_angular_velocity.x = _approach_axis(
-			_angular_velocity.x, pitch_input, max_angular_speed, angular_acceleration, angular_damping, delta)
+			_angular_velocity.x, pitch_input, max_pitch_yaw_speed, pitch_yaw_acceleration, pitch_yaw_damping, delta)
 	_angular_velocity.z = _approach_axis(
-			_angular_velocity.z, roll_input, max_angular_speed, angular_acceleration, angular_damping, delta)
+			_angular_velocity.z, roll_input, max_roll_speed, roll_acceleration, roll_damping, delta)
 
 
 func _update_translation(right_grip: float, left_grip: float, left_stick: Vector2, delta: float) -> void:

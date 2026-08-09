@@ -17,13 +17,30 @@ const DEBRIS_SCATTER_MAX := 25.0
 
 ## Spawns the smoke/main-crater effect (permanent — never cleans itself up,
 ## see crash_effect.gd) plus scattered wreckage chunks, each in their own
-## small scorch crater, landed at the terrain height for their own (x, z).
-## The debris is added with no lifetime either — it's meant to persist for
-## the rest of the session, a visible trail of every crash so far.
+## small scorch crater. The debris is added with no lifetime either — it's
+## meant to persist for the rest of the session, a visible trail of every
+## crash so far.
+##
+## Debris does NOT spawn pre-settled on the ground — a ship's gravity
+## compensator (flight_controller.gd's GRAVITY COMPENSATOR STANDARD) is
+## what's been holding it up all along, and that dies with the ship. Each
+## piece spawns at `impact.y` (the ship's actual altitude at the moment it
+## died — high in the air for a mid-flight kill, right at the ground for a
+## terrain/building crash) and genuinely falls to the surface under gravity
+## — see falling_debris.gd, which every DebrisPiece carries.
+##
+## The crater/smoke itself is always placed at GROUND level for its (x, z),
+## not `impact.y` directly — `impact` is the ship's exact death position,
+## which for a mid-air kill is up in the sky. A crater floating where the
+## ship happened to be shot down would make no sense; it belongs on the
+## surface below, with debris raining down around/into it as it falls.
 static func spawn(scene_root: Node, terrain: Node, impact: Vector3) -> void:
+	var ground_y: float = terrain.get_height_at(impact.x, impact.z) if terrain else impact.y
+	var ground_impact := Vector3(impact.x, ground_y, impact.z)
+
 	var effect := CRASH_EFFECT.instantiate()
 	scene_root.add_child(effect)
-	effect.global_position = impact
+	effect.global_position = ground_impact
 
 	var count := randi_range(DEBRIS_COUNT_MIN, DEBRIS_COUNT_MAX)
 	for i in count:
@@ -31,12 +48,13 @@ static func spawn(scene_root: Node, terrain: Node, impact: Vector3) -> void:
 		var dist := randf_range(DEBRIS_SCATTER_MIN, DEBRIS_SCATTER_MAX)
 		var x := impact.x + cos(angle) * dist
 		var z := impact.z + sin(angle) * dist
-		var y: float = terrain.get_height_at(x, z) if terrain else impact.y
 
 		var piece := DEBRIS_PIECE.instantiate()
 		scene_root.add_child(piece)
-		piece.global_position = Vector3(x, y, z)
+		piece.global_position = Vector3(x, impact.y, z)
 		piece.rotation.y = randf() * TAU
+		piece.terrain = terrain
+		piece.tumble_speed = Vector3(randf_range(-3.0, 3.0), randf_range(-3.0, 3.0), randf_range(-3.0, 3.0))
 
 		var chunk := piece.get_node_or_null("Chunk")
 		if chunk:

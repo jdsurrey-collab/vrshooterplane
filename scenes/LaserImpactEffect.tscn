@@ -1,6 +1,7 @@
-[gd_scene load_steps=11 format=3]
+[gd_scene load_steps=12 format=3]
 
 [ext_resource type="Script" path="res://scripts/laser_impact_effect.gd" id="1_impact"]
+[ext_resource type="Texture2D" path="res://Assets/Textures/soft_particle.png" id="2_softparticle"]
 
 [sub_resource type="CylinderMesh" id="CylinderMesh_scorch"]
 top_radius = 1.0
@@ -20,6 +21,7 @@ transparency = 1
 shading_mode = 0
 vertex_color_use_as_albedo = true
 albedo_color = Color(1, 0.6, 0.1, 1)
+albedo_texture = ExtResource("2_softparticle")
 billboard_mode = 1
 
 [sub_resource type="Gradient" id="Gradient_flash"]
@@ -46,6 +48,7 @@ transparency = 1
 shading_mode = 0
 vertex_color_use_as_albedo = true
 albedo_color = Color(0.05, 0.05, 0.05, 1)
+albedo_texture = ExtResource("2_softparticle")
 billboard_mode = 1
 
 [sub_resource type="Gradient" id="Gradient_smoke"]

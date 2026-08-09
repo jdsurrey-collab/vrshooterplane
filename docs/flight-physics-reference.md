@@ -91,7 +91,29 @@ intentional — a physically "correct" 1.5g throttle response would feel
 unresponsive in VR — but it's called out here so it reads as a deliberate,
 informed departure from realism rather than an unexamined number.
 
-## 5. Newtonian flip-and-thrust behavior
+## 5. Rotation rates (pitch/yaw vs. roll)
+
+**F-16** (real aircraft): maximum observed pitch rate ≈ 34°/s; sustained
+turn rate falls to ≈17.5°/s at altitude (10,000 ft, Mach 0.88, clean
+configuration) once energy bleeds off. Maximum roll rate ≈ 240°/s — roll is
+aerodynamically cheap (ailerons act fast, low inertia about the roll axis)
+compared to pitch and yaw, which are limited by G-tolerance (pitch) and
+rudder authority/adverse yaw (yaw).
+
+`flight_controller.gd` originally used one shared rate (1.5 rad/s, ≈86°/s)
+for pitch, yaw, *and* roll — 3-4x faster than a real fighter jet's
+*sustained* pitch rate, which is what made pitch/yaw feel "touchy" rather
+than responsive. Split into:
+
+- `max_pitch_yaw_speed = 0.44 rad/s` (≈25°/s) — between the F-16's
+  sustained (17.5°/s) and peak (34°/s) pitch rate.
+- `max_roll_speed = 1.5 rad/s` (≈86°/s) — kept at the original value rather
+  than pushed toward a real fighter's ≈240°/s max. That's a deliberate
+  departure from realism, not an oversight: rapid rotation is a well-known
+  VR-comfort issue independent of how "realistic" it is, and roll wasn't
+  reported as feeling wrong at the original rate.
+
+## 6. Newtonian flip-and-thrust behavior
 
 This one isn't a tunable constant, it's a design property worth documenting
 explicitly: `flight_controller.gd` stores `_linear_velocity` in **world
@@ -115,3 +137,4 @@ integrated in world space rather than in the ship's local frame.
 - [NASA Glenn Research Center — Earth Atmosphere Model](https://www.grc.nasa.gov/www/k-12/airplane/atmosmet.html)
 - [NASA Glenn Research Center — Earth Atmosphere Model (metric)](https://www1.grc.nasa.gov/beginners-guide-to-aeronautics/earth-atmosphere-equation-metric/)
 - Standard gravity g₀ = 9.80665 m/s²: internationally defined constant (CGPM, 1901), used throughout NASA technical references.
+- F-16 pitch/roll rate figures: [F-16 maneuverability data — F-16.net forum, citing published performance figures](https://www.f-16.net/forum/viewtopic.php?f=23&t=59982)

@@ -6,7 +6,7 @@ extends StaticBody3D
 @export var height_scale: float = 80.0
 @export var mesh_stride: int = 2
 @export var reposition_player: bool = true
-@export var player_spawn_height_offset: float = 2.0
+@export var player_spawn_height_offset: float = 102.0  # +100m above the old 2.0
 
 var _height_grid: PackedFloat32Array
 var _sampled_w: int = 0
