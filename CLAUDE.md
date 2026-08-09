@@ -370,6 +370,18 @@ orders, modelled on how modern combat-flight AI reads:
   neighbourhood and capped at `MAX_SEPARATION_NEIGHBORS` so the cost stays
   bounded however dense traffic gets. This is what actually stops squads
   collapsing into one mass.
+- **Per-squad rally points** (`_make_rally_point`, assigned once at build
+  and never recomputed) — each squad retreats to its own point, spread
+  along a broad line on its own side of the map (measured: 35/35 squads
+  distinct, ~3200m spread). This is a **regression fix**: rally points used
+  to be derived from `Squad.spawn_center`, which was fine while squads
+  spawned scattered across a 7000m front, but became a bug the moment
+  motherships took over spawning and every squad's `spawn_center` became
+  the same single point. Every retreating squad then flew to the
+  *identical* location, and with a dozen squads typically in RETREAT at
+  once that formed a large permanent pack — reported as the AI "grouping
+  again after the mothership add". Nearest-neighbour distance recovered to
+  ~714m after the fix.
 - **Reaction delay and per-pilot accuracy** — a ship doesn't fire the
   instant it acquires (`reaction_timer`, 0.35-1.1s), and its aim is
   displaced from the true firing solution by `(1 - accuracy) * range *
@@ -651,35 +663,42 @@ at `Blender Foundation/Blender 5.2/5.2/blender.exe`):
   Godot imports natively — unlike the `.stl` the conversation started
   around, which Godot cannot read at all.
 
-Default `mothership_length` is **2000m** (so ~1330m wide, ~411m of deck
-height), chosen to read as a capital ship against a city whose tallest
-towers are ~625m. Exported and, like every asset scale in this project,
-unverified in the headset.
-
 ### Placement
 
-Three exported knobs on `FactionBattle`, all live-tunable:
+Three exported knobs on `FactionBattle`, all live-tunable. Current values
+are the result of two rounds of user-requested scaling-up (2000m/11000m/
+1500m, then doubled):
 
-- `spawn_distance_from_city` — **11000m** out from `dome_center` on each
-  side (moved out from 10000m on request). This value used to be hardcoded
-  in two places; it's now the single thing that positions a faction's
-  mothership, its fleet, and its rally point.
-- `mothership_altitude` — **1500m** above the terrain below it (raised from
-  1000m on request), putting the flight deck ~1911m above ground.
-- `mothership_length` — see above.
+- `mothership_length` — **4000m** long, giving a ~2660m-wide deck and ~822m
+  of deck height. Chosen to read as a capital ship against a city whose
+  tallest towers are ~625m. Unverified in the headset, like every asset
+  scale in this project.
+- `spawn_distance_from_city` — **22000m** out from `dome_center` on each
+  side. This used to be hardcoded in two places; it's now the single value
+  that positions a faction's mothership, its fleet and its rally points.
+- `mothership_altitude` — **3000m** above the terrain below it, putting the
+  flight deck ~3820m above ground.
 
-Because everything launches from the deck, `spawn_distance_from_city`
-directly sets the opening transit: roughly 6 seconds of extra flight per
-1000m. Measured across the change, first contact moved from t=54.5s to
-**t=60.5s**, and the fleet is fully airborne at t=34.8s. Worth remembering
-before re-diagnosing "nothing is happening" — for the first minute, that's
-correct behaviour.
+**Pacing consequence, measured — worth knowing before changing it again.**
+Everything launches from the deck, so `spawn_distance_from_city` directly
+sets the opening transit. The two fleets now start **44km apart**, and the
+first shot is fired at **t=116.6s — 19% of the 600s match elapsed with no
+combat at all**. The fleet is fully airborne at t=29.1s; the rest is pure
+approach. The battle itself is healthy once joined (94-99 alive per side
+through t=300s with a full pursue/break-off/retreat mix), so this is a
+deliberate pacing choice rather than a bug — but if that opening lull reads
+as dead air in the headset, `spawn_distance_from_city` is the dial, and
+`match_duration` is the other one. For reference: ~6 seconds of extra
+approach per 1000m of spawn distance, per side.
+
+This is also the standing answer to "nothing is happening" reports — for
+the first two minutes, that is now correct behaviour.
 
 The exported `player_spawn_xz` / `respawn_position_xz` /
 `spawn_position_xz` fallbacks in `game_flow.gd`, `crash_handler.gd` and
-`Town.tscn` were updated to `(-5000, 0)` to match. They are **fallbacks
-only** now (see Player spawn below), but a fallback that's 1km wrong is
-worse than no fallback.
+`Town.tscn` track this at `(-16000, 0)`. They are **fallbacks only** (see
+Player spawn below), but a fallback that's kilometres wrong is worse than
+no fallback.
 
 The asset arrived with no materials, so `mothership.gd` applies a
 `material_override` per faction — a metallic hull tinted toward the faction
@@ -893,6 +912,20 @@ compensating flip.
   instant U-turn either, and endlessly circling back would look wrong. It
   can still score a hit via the ordinary swept-segment check if something
   crosses its path.
+- **Smoke trail** (`scenes/MissileTrail.tscn` / `scripts/missile_trail.gd`)
+  — at 400 m/s the missile body is out of view almost immediately, so the
+  trail is what actually lets you see and track your own shot. Thick smoke
+  (140 particles, 4.5s lifetime, `smoke_flipbook.png` like the rest of this
+  project's smoke), which at 400 m/s lays down a trail well over a
+  kilometre long.
+  It is deliberately **not a child of the missile**, for two reasons that
+  both matter: the particles emit in world space (`local_coords = false`)
+  so they stay where they were laid down instead of being dragged along
+  with the emitter, and a missile `queue_free()`s the instant it hits
+  something — freeing the emitter would take the entire existing trail with
+  it, popping a kilometre of smoke out of the sky in one frame. Instead the
+  trail lives at scene level and merely *follows* the missile; when the
+  missile dies it stops emitting and dissipates naturally.
 - **Terrain and buildings now stop a missile** like they stop everything
   else in this project. Previously a missile chasing a low target, or one
   that had gone ballistic after an overshoot, simply flew on through a

@@ -247,14 +247,15 @@ const KILL_FEED_ENTRY_LIFETIME := 8.0
 ## and deck height are fixed ratios of it (see mothership.gd). 2000m makes
 ## it read as a capital ship against a city whose tallest towers are ~625m.
 ## Unverified in VR, like every other asset scale in this project.
-@export var mothership_length: float = 2000.0
+@export var mothership_length: float = 4000.0
 ## Height of the mothership's underside above the terrain below it.
-@export var mothership_altitude: float = 1500.0
+@export var mothership_altitude: float = 3000.0
 ## How far out from dome_center each faction's mothership (and therefore its
 ## whole fleet, since everything launches from the deck) sits. Raising this
 ## lengthens the opening transit — roughly 6 seconds per extra 1000m at
-## cruise — before the fleets meet.
-@export var spawn_distance_from_city: float = 11000.0
+## cruise — before the fleets meet. At 22000m that opening approach is
+## multiple minutes long; see the measured figures in CLAUDE.md.
+@export var spawn_distance_from_city: float = 22000.0
 @export var laser_sound_chance: float = 0.07  # only this fraction of nearby shots get a sound — the rest would be a wall of noise
 
 ## Live status, readable by battle_hud.gd / target_lock.gd / enemy_locator.gd.
@@ -497,7 +498,7 @@ func _build_squads(units: Array, squads: Array[Squad], faction: int, base_center
 		sq.faction = faction
 		sq.spawn_center = base_center
 		sq.objective = _random_point_in_dome()
-		sq.rally_point = base_center
+		sq.rally_point = _make_rally_point(base_center)
 		for k in size:
 			var idx: int = i + k
 			var c: Combatant = units[idx]
@@ -539,6 +540,7 @@ func _reset_squad(sq: Squad) -> void:
 	sq.focus_target = -1
 	sq.focus_is_player = false
 	sq.objective = _random_point_in_dome()
+	sq.rally_point = _make_rally_point(sq.spawn_center)
 	sq.leader = sq.members[0] if not sq.members.is_empty() else -1
 
 
@@ -577,7 +579,6 @@ func _update_squad(sq: Squad, units: Array, delta: float) -> void:
 			if sq.losses >= _squad_break_threshold(sq):
 				sq.state = Squad.State.RETREAT
 				sq.state_timer = SQUAD_RETREAT_TIME
-				sq.rally_point = _squad_rally_point(sq)
 			elif sq.focus_target < 0 and not sq.focus_is_player:
 				sq.state = Squad.State.ADVANCE
 		Squad.State.RETREAT:
@@ -599,13 +600,31 @@ func _squad_break_threshold(sq: Squad) -> int:
 
 
 ## Somewhere back toward the squad's own side of the map, well away from the
-## dome — where a broken squad runs to before re-forming.
-func _squad_rally_point(sq: Squad) -> Vector3:
-	var away := (sq.spawn_center - dome_center)
+## dome — where a broken squad runs to before re-forming. Assigned ONCE per
+## squad at build time and never recomputed.
+##
+## Each squad gets its own point, spread widely across its side of the map.
+## This matters more than it looks: every squad in a faction used to derive
+## its rally point from `spawn_center`, which was fine while squads spawned
+## scattered across a 7000m front, but became a real bug when the
+## motherships took over spawning and every squad's `spawn_center` became
+## the same single point. Every retreating squad then ran to the *identical*
+## location — and with a dozen squads typically in RETREAT at once, that is
+## a large, permanent pack forming off to one side. It was the AI "grouping
+## again" after the mothership change.
+func _make_rally_point(base_center: Vector3) -> Vector3:
+	var away := base_center - dome_center
 	away.y = 0.0
 	if away.length() < 1.0:
 		away = Vector3.RIGHT * 1000.0
-	return dome_center + away.normalized() * (dome_radius + 3000.0) + Vector3(0.0, 1200.0, 0.0)
+	away = away.normalized()
+	# Lateral spread perpendicular to the away-from-city axis, so squads
+	# rally along a broad line rather than at a single dot.
+	var lateral := away.cross(Vector3.UP).normalized()
+	var base := dome_center + away * (dome_radius + randf_range(2000.0, 5000.0))
+	return base \
+			+ lateral * randf_range(-6000.0, 6000.0) \
+			+ Vector3(0.0, randf_range(900.0, 2400.0), 0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -755,8 +774,7 @@ func _steering_direction(c: Combatant, sq: Squad, own_units: Array, has_target: 
 			return Vector3.UP * LAUNCH_CLIMB_BIAS + outbound
 
 		Combatant.State.RETREAT:
-			var run_to := sq.rally_point if sq.state != Squad.State.ENGAGE else _squad_rally_point(sq)
-			return run_to - c.position
+			return sq.rally_point - c.position
 
 		Combatant.State.BREAK_OFF:
 			# Keep flying the heading it already had, pulled slightly off-axis

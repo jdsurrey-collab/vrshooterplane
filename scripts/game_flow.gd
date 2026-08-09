@@ -34,7 +34,7 @@ enum State { MENU, PLAYING, GAME_OVER }
 ## _reposition_player). This is used only if there's no FactionBattle in the
 ## scene, and is kept roughly in step with faction_battle.gd's
 ## `spawn_distance_from_city` so the fallback isn't wildly wrong.
-@export var player_spawn_xz: Vector2 = Vector2(-5000.0, 0.0)
+@export var player_spawn_xz: Vector2 = Vector2(-16000.0, 0.0)
 @export var player_spawn_altitude: float = 102.0
 
 var state: int = State.MENU

@@ -41,6 +41,7 @@ const DAMAGE := 30.0  # >= a mass-battle alien's max health — every alien hit 
 const PLAYER_DAMAGE := 30.0
 const HIT_RADIUS := 8.0
 const HIT_SOUND := preload("res://Assets/Audio/missile_hit.mp3")
+const TRAIL := preload("res://scenes/MissileTrail.tscn")
 
 const FLARE_MIN_RANGE := 100.0
 const FLARE_MAX_RANGE := 400.0
@@ -69,6 +70,7 @@ func _ready() -> void:
 	get_tree().create_timer(lifetime).timeout.connect(queue_free)
 	_velocity = -global_transform.basis.z * speed
 	_terrain = get_tree().current_scene.get_node_or_null("Terrain")
+	_spawn_trail()
 	if target_is_player:
 		add_to_group("player_seeking_missiles")
 		if player:
@@ -139,6 +141,17 @@ func _physics_process(delta: float) -> void:
 		battle.apply_damage(target_index, DAMAGE, "destroyed by PLAYER missile")
 		_play_hit_sound(closest)
 		queue_free()
+
+
+## The trail lives at scene level and merely follows this missile, rather
+## than being a child of it — see missile_trail.gd for why (world-space
+## particles, and so a kilometre of smoke doesn't vanish the instant the
+## missile detonates).
+func _spawn_trail() -> void:
+	var trail := TRAIL.instantiate()
+	trail.follow = self
+	get_tree().current_scene.add_child(trail)
+	trail.global_position = global_position
 
 
 func _hit_environment() -> bool:
