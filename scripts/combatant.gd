@@ -17,6 +17,10 @@ extends RefCounted
 
 enum Faction { FRIENDLY, ENEMY }
 
+## PARKED — sitting on the mothership's flight deck, waiting for its
+##   launch slot. Doesn't move, steer, or shoot.
+## LAUNCHING — climbing off the deck. Ignores combat and formation until it
+##   has cleared the ship, so takeoffs read as takeoffs.
 ## FORMATION — holding station on the squad leader (or, if leader, flying
 ##   the squad's objective).
 ## PURSUE — actively running in on a target.
@@ -24,7 +28,7 @@ enum Faction { FRIENDLY, ENEMY }
 ##   target before turning back, rather than gluing itself to its tail.
 ##   This is what makes fights read as real dogfight passes.
 ## RETREAT — disengaging entirely (own damage, or squad losses).
-enum State { FORMATION, PURSUE, BREAK_OFF, RETREAT }
+enum State { PARKED, LAUNCHING, FORMATION, PURSUE, BREAK_OFF, RETREAT }
 
 var position: Vector3 = Vector3.ZERO
 var heading: Vector3 = Vector3.FORWARD  # normalized, local -Z equivalent
@@ -43,8 +47,18 @@ var wander_point: Vector3 = Vector3.ZERO
 var squad_id: int = -1
 var squad_slot: int = 0
 
-var state: int = State.FORMATION
+var state: int = State.PARKED
 var state_timer: float = 0.0
+
+## Seconds still to wait on the deck before this ship launches. Squads leave
+## in waves rather than all at once — see faction_battle.gd's LAUNCH_*
+## constants.
+var launch_delay: float = 0.0
+
+## Deck altitude this ship launched from, so "have I cleared the ship yet"
+## is measured against the deck rather than the terrain thousands of meters
+## below it.
+var launch_deck_y: float = 0.0
 
 ## Set when a NEW target is acquired — the pilot won't open fire until it
 ## expires. Without it, ships snap onto a target and fire in the same frame

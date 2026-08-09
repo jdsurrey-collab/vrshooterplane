@@ -620,6 +620,130 @@ The player spawns **with the friendly fleet**, not at the world origin:
 that formula changes — a documented, intentional coupling, same pattern
 already accepted for the dome/`block_pitch`/`city_center` reuse.
 
+## Motherships — the two spawn platforms
+
+One stationary capital ship per faction, hovering at that faction's spawn
+point 10km out from the city. Every ship in the fleet — and the player, on
+the friendly side — starts the match parked on its flight deck and launches
+off the top of it, and every death respawns back onto it.
+
+### The asset
+
+`mothership/3d-model.obj` at the project root: a **932,000-triangle** 3ds
+Max export, 58MB, with no usable `.mtl` (its materials are placeholder
+`wire_*` names) and no textures. Shipping that unmodified was never an
+option — two of them are on screen in VR stereo on top of a 1200-building
+city and 200 ships, with an unresolved frame-rate problem already open.
+
+Processed once through a one-off headless **Blender** script (Blender 5.2 is
+installed locally; `blender.exe` lives one directory deeper than expected,
+at `Blender Foundation/Blender 5.2/5.2/blender.exe`):
+
+- **Decimated** to ~124k triangles (`DECIMATE` modifier, `COLLAPSE`, ratio
+  0.08), joined into a single mesh so each instance is one draw call.
+- **Normalised** so the Godot side is readable rather than magic: origin at
+  the centre of the footprint, `Y = 0` at the underside, longest axis
+  scaled to exactly 1.0. `mothership.gd`'s `length` is therefore literally
+  the ship's length in meters, and everything else is a fixed ratio of it —
+  `WIDTH_RATIO` 0.6653 and `DECK_TOP_RATIO` 0.2054, both verified against
+  the imported mesh's own AABB *in Godot*, not assumed from the exporter.
+- **Exported as glTF** (`Assets/MotherShip/mothership.glb`, 5.2MB), which
+  Godot imports natively — unlike the `.stl` the conversation started
+  around, which Godot cannot read at all.
+
+Default `mothership_length` is **2000m** (so ~1330m wide, ~411m of deck
+height), chosen to read as a capital ship against a city whose tallest
+towers are ~625m. Exported and, like every asset scale in this project,
+unverified in the headset.
+
+The asset arrived with no materials, so `mothership.gd` applies a
+`material_override` per faction — a metallic hull tinted toward the faction
+colour with a very low emission (0.25), enough that the silhouette still
+reads as friendly or hostile from kilometres out where diffuse shading has
+fallen off to nothing.
+
+### Engine drone
+
+Three user-supplied turbine recordings (`mothership/freesound_community-*`)
+blended into a low drone, kept as **three simultaneous looping layers**
+rather than pre-mixed into one file. Their processed lengths are 49.9s,
+87.6s and 180s — mutually indivisible, so the combination doesn't audibly
+repeat for hours. A single pre-mixed loop would cycle on a fixed period,
+which is very noticeable on a constant ambient bed the player parks on top
+of at the start of every match.
+
+Each layer was `ffmpeg`-processed into its own frequency band so they stack
+instead of competing, all pitched down via `asetrate`:
+
+- `mothership_drone_low.ogg` — the sub bed, lowpass 210Hz, heavy bass boost.
+- `mothership_drone_mid.ogg` — the body of the drone, 45-620Hz.
+- `mothership_drone_air.ogg` — quiet machinery texture on top, 130-1500Hz.
+
+All three are **mono on purpose**: Godot's `AudioStreamPlayer3D` can only
+position a mono source correctly, and a stereo source smears across the
+whole soundstage instead of coming from the ship. OGG rather than MP3
+because MP3's encoder padding puts a gap at the loop point. Looping is set
+in code (`mothership.gd._start_drone()`) rather than in import settings so
+it's visible where it matters, and each layer starts at a random offset so
+the two motherships don't phase-lock into an artificial beat. Per-layer
+`unit_size`/`max_distance`/attenuation filtering are tuned so the drone
+carries several km but muffles with distance — first-pass values, needs the
+headset.
+
+### Launching
+
+- `Combatant.State` gained **PARKED** and **LAUNCHING**. A parked ship
+  doesn't move, steer, retarget or shoot — it's sitting on a flight deck.
+- Squads leave in **waves** (`LAUNCH_WAVE_INTERVAL`, 0.85s apart), ordered
+  down the length of the deck via `MotherShip.squad_deck_point()`, which
+  parks squads in alternating rows either side of the centreline. The whole
+  fleet lifting at once looks like a swarm rather than a carrier launch, and
+  dumps the entire population into one volume of air for the separation
+  steering to fight. Measured: the last ship clears the deck at **t=28.4s**.
+- A **LAUNCHING** ship climbs (`LAUNCH_CLIMB_BIAS` 2.6 toward `UP`, leaned
+  toward its squad's objective so the fleet fans out as it climbs rather
+  than forming one vertical column) and ignores combat entirely until it is
+  `LAUNCH_CLEAR_HEIGHT` (420m) above the deck it left. Clearance is measured
+  against `Combatant.launch_deck_y`, not the terrain — the deck sits ~1400m
+  above ground.
+- **Mid-match respawns don't queue behind the opening launch** — they get a
+  short random delay (`LAUNCH_RESPAWN_DELAY_MAX`, 2.5s) instead of the
+  fleet-wide wave ordering.
+
+This replaced the previous spawn arrangement, where squads scattered over a
+7000m front — that spread was the original fix for "the AI clusters in huge
+packs", and it is no longer needed because the launch waves, each squad's
+own dome objective, and the separation steering all provide spread
+independently of where ships start. Verified: combat still develops
+normally, first shot at t=54.5s, both fleets holding ~96-97 alive at 150s
+with a full mix of pursue/break-off/retreat.
+
+### Player spawn — the coupling is finally gone
+
+`FactionBattle.get_player_spawn_position()` is now the single source of
+truth for where the player starts and respawns (a random spot on the
+friendly deck). `game_flow.gd` and `crash_handler.gd` both ask for it,
+falling back to their exported coordinates only if no battle exists in the
+scene. This retires the documented three-to-four-place hand-synced
+`(-4000, 0)` coupling between `heightmap_terrain.gd`, `crash_handler.gd`
+and `game_flow.gd` — those exports remain as fallbacks but are no longer
+the thing that has to be kept in step.
+
+`game_flow.gd` also repositions the player when *entering* the menu, so the
+black-screen reveal opens onto the flight deck rather than wherever the
+player happened to be left.
+
+### Known limitations
+
+- The motherships have **no collision** — they're `MeshInstance3D`s, not on
+  `CityGenerator.BUILDING_COLLISION_LAYER`. Ships, bolts and the player all
+  pass straight through the hull. Fine while they're spawn platforms parked
+  far from the fighting; it would need a real collision shape (or a simple
+  bounding-volume test, matching this project's approximate-collision
+  philosophy) before they become something you fly around in combat.
+- They are indestructible and take no part in the battle — no guns, no
+  health, no effect on Air Superiority.
+
 ## Homing missiles
 
 Second weapon, **left trigger** (guns stay on the right trigger) — a
@@ -1082,6 +1206,17 @@ mechanics, all of which cost real time to rediscover:
 - `Performance.get_monitor(TIME_PHYSICS_PROCESS)` is **not trustworthy** in
   this mode — two identical runs disagreed with their own intermediate
   readings. Use wall-clock timing of a fixed workload instead.
+
+**Blender is available locally** (4.2 and 5.2) and is the tool for anything
+the Godot importer can't do — decimating, joining, renormalising, or
+converting a format Godot doesn't read (it has no STL importer; glTF/`.glb`
+is the target). Run headless as
+`blender.exe -b --factory-startup -P script.py`. Two gotchas: the
+executable sits one directory deeper than expected
+(`Blender Foundation/Blender 5.2/5.2/blender.exe`), and Blender 4.2+ uses
+`bpy.ops.wm.obj_import`, not the old `import_scene.obj`. See the Motherships
+section for a worked example (932k triangles -> 124k, renormalised so the
+Godot-side scale value is meaningful).
 
 For measuring imported-but-unauthored mesh dimensions (building heights,
 ship footprints) before choosing scale/placement values: a one-off

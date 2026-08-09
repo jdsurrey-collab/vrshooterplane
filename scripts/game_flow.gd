@@ -99,12 +99,23 @@ func _set_player_paused(value: bool) -> void:
 		_flare_system.paused = value
 
 
+## The player starts on the friendly mothership's flight deck alongside the
+## fleet, so asking FactionBattle for the spot is authoritative — it owns the
+## mothership's position, altitude and deck height. The exported
+## player_spawn_xz below is only the fallback for a scene with no battle in
+## it; it used to be one of three hand-synced copies of the same coordinate.
 func _reposition_player() -> void:
-	if not _player or not _terrain:
+	if not _player:
 		return
-	var ground: float = _terrain.get_height_at(player_spawn_xz.x, player_spawn_xz.y)
-	_player.global_transform = Transform3D(
-			Basis(), Vector3(player_spawn_xz.x, ground + player_spawn_altitude, player_spawn_xz.y))
+	var spawn_point: Vector3
+	if _battle and _battle.has_method("get_player_spawn_position"):
+		spawn_point = _battle.get_player_spawn_position()
+	elif _terrain:
+		var ground: float = _terrain.get_height_at(player_spawn_xz.x, player_spawn_xz.y)
+		spawn_point = Vector3(player_spawn_xz.x, ground + player_spawn_altitude, player_spawn_xz.y)
+	else:
+		return
+	_player.global_transform = Transform3D(Basis(), spawn_point)
 	if _flight_controller and _flight_controller.has_method("reset_velocity"):
 		_flight_controller.reset_velocity()
 
@@ -112,6 +123,9 @@ func _reposition_player() -> void:
 func _enter_menu() -> void:
 	state = State.MENU
 	_set_player_paused(true)
+	# Put the player on the mothership deck for the menu too, so the reveal
+	# fade opens onto the flight deck rather than wherever they were left.
+	_reposition_player()
 
 
 func _start_match() -> void:

@@ -1,0 +1,42 @@
+[gd_scene load_steps=6 format=3]
+
+[ext_resource type="Script" path="res://scripts/mothership.gd" id="1_mothership"]
+[ext_resource type="PackedScene" uid="uid://chush8lcoiyc8" path="res://Assets/MotherShip/mothership.glb" id="2_hull"]
+[ext_resource type="AudioStream" path="res://Assets/Audio/mothership_drone_low.ogg" id="3_dronelow"]
+[ext_resource type="AudioStream" path="res://Assets/Audio/mothership_drone_mid.ogg" id="4_dronemid"]
+[ext_resource type="AudioStream" path="res://Assets/Audio/mothership_drone_air.ogg" id="5_droneair"]
+
+[node name="MotherShip" type="Node3D"]
+script = ExtResource("1_mothership")
+
+[node name="Hull" parent="." instance=ExtResource("2_hull")]
+
+[node name="DroneLow" type="AudioStreamPlayer3D" parent="."]
+stream = ExtResource("3_dronelow")
+volume_db = 4.0
+unit_size = 900.0
+max_db = 0.0
+max_distance = 7000.0
+attenuation_model = 1
+attenuation_filter_cutoff_hz = 900.0
+attenuation_filter_db = -18.0
+
+[node name="DroneMid" type="AudioStreamPlayer3D" parent="."]
+stream = ExtResource("4_dronemid")
+volume_db = -2.0
+unit_size = 700.0
+max_db = 0.0
+max_distance = 5500.0
+attenuation_model = 1
+attenuation_filter_cutoff_hz = 1400.0
+attenuation_filter_db = -24.0
+
+[node name="DroneAir" type="AudioStreamPlayer3D" parent="."]
+stream = ExtResource("5_droneair")
+volume_db = -8.0
+unit_size = 450.0
+max_db = 0.0
+max_distance = 3500.0
+attenuation_model = 1
+attenuation_filter_cutoff_hz = 2200.0
+attenuation_filter_db = -30.0

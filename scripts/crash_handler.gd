@@ -108,11 +108,21 @@ func _crash(impact: Vector3) -> void:
 
 func _respawn() -> void:
 	crashed = false
-	var ground_height: float = _terrain.get_height_at(respawn_position_xz.x, respawn_position_xz.y)
+	# Respawn on the friendly mothership's flight deck with the fleet, the
+	# same place the match starts from. FactionBattle owns the mothership's
+	# position and deck height, so it's asked rather than re-derived here;
+	# respawn_position_xz is only the fallback for a scene without a battle.
+	var spawn_point: Vector3
+	var battle := get_tree().current_scene.get_node_or_null("FactionBattle")
+	if battle and battle.has_method("get_player_spawn_position"):
+		spawn_point = battle.get_player_spawn_position()
+	else:
+		var ground_height: float = _terrain.get_height_at(respawn_position_xz.x, respawn_position_xz.y)
+		spawn_point = Vector3(
+				respawn_position_xz.x, ground_height + respawn_height_offset, respawn_position_xz.y)
 	# Reset orientation too, not just position — otherwise you respawn still
 	# tumbling/upside-down from however you hit the ground.
-	_player.global_transform = Transform3D(
-			Basis(), Vector3(respawn_position_xz.x, ground_height + respawn_height_offset, respawn_position_xz.y))
+	_player.global_transform = Transform3D(Basis(), spawn_point)
 	_set_systems_paused(false)
 	if _player_damage:
 		_player_damage.reset_health()

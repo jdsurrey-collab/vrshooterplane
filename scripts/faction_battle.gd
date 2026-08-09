@@ -186,10 +186,21 @@ const SEPARATION_RADIUS := 130.0
 const SEPARATION_WEIGHT := 2.2
 const MAX_SEPARATION_NEIGHBORS := 6
 
-const SPAWN_FRONT_HALF_WIDTH := 7000.0  # squads spread along this much of the front line, perpendicular to the approach
-const SPAWN_DEPTH := 2500.0
 const SPAWN_ALT_MIN := 300.0
 const SPAWN_ALT_MAX := 1400.0
+
+## Motherships — one stationary capital ship per faction, hovering at that
+## faction's spawn point. Every ship starts the match parked on its deck and
+## launches off the top of it, and dead ships respawn back onto it.
+const MOTHERSHIP := preload("res://scenes/MotherShip.tscn")
+const LAUNCH_CLEAR_HEIGHT := 420.0  # meters above the deck before a launching ship resumes normal flight
+const LAUNCH_CLIMB_BIAS := 2.6  # how hard a launching ship prioritises "up" over "toward the objective"
+## Squads leave the deck in waves. The whole fleet lifting simultaneously
+## looks like a swarm rather than a carrier launch, and dumps the entire
+## population into one volume of air at once — which the separation steering
+## then has to fight. Staggering also spreads the spawn cost over ~30s.
+const LAUNCH_WAVE_INTERVAL := 0.85  # seconds between squads at match start
+const LAUNCH_RESPAWN_DELAY_MAX := 2.5  # mid-match respawns don't queue behind the whole fleet
 
 const FRIENDLY_COLOR := Color(0.25, 0.65, 1.0)
 const ENEMY_COLOR := Color(0.85, 0.1, 0.85)
@@ -231,6 +242,14 @@ const KILL_FEED_ENTRY_LIFETIME := 8.0
 @export var max_battle_sounds: int = 12
 @export var explosion_sound_range: float = 7000.0
 @export var laser_sound_range: float = 1500.0
+@export_group("Motherships")
+## Length in meters. The mesh is normalised so this IS the length — width
+## and deck height are fixed ratios of it (see mothership.gd). 2000m makes
+## it read as a capital ship against a city whose tallest towers are ~625m.
+## Unverified in VR, like every other asset scale in this project.
+@export var mothership_length: float = 2000.0
+## Height of the mothership's underside above the terrain below it.
+@export var mothership_altitude: float = 1000.0
 @export var laser_sound_chance: float = 0.07  # only this fraction of nearby shots get a sound — the rest would be a wall of noise
 
 ## Live status, readable by battle_hud.gd / target_lock.gd / enemy_locator.gd.
@@ -272,6 +291,9 @@ var _friendly_mmi: MultiMeshInstance3D
 var _enemy_mmi: MultiMeshInstance3D
 var _bolt_mmi: MultiMeshInstance3D
 
+var _friendly_mothership: Node3D
+var _enemy_mothership: Node3D
+
 var _live_explosions: Array = []
 var _live_sounds: Array = []
 var _live_sparks: Array = []
@@ -291,6 +313,7 @@ func _ready() -> void:
 	match_time_remaining = match_duration
 
 	_build_multimesh_nodes()
+	_build_motherships()
 	_spawn_faction(_friendlies, friendly_count, Combatant.Faction.FRIENDLY)
 	_spawn_faction(_enemies, enemy_count, Combatant.Faction.ENEMY)
 	_build_squads(_friendlies, _friendly_squads, Combatant.Faction.FRIENDLY, _friendly_spawn_center)
@@ -397,6 +420,32 @@ func _build_multimesh_nodes() -> void:
 	_bolt_mmi.material_override = bolt_mat
 
 
+## One stationary capital ship per faction, hovering at that faction's spawn
+## point. Built here rather than placed in Town.tscn so the visual and the
+## spawn logic can never drift apart — this project already carries a
+## documented multi-place coupling for the player's own spawn coordinate and
+## does not need another one.
+func _build_motherships() -> void:
+	_friendly_mothership = _make_mothership(_friendly_spawn_center, FRIENDLY_COLOR)
+	_enemy_mothership = _make_mothership(_enemy_spawn_center, ENEMY_COLOR)
+
+
+func _make_mothership(at_xz: Vector3, tint: Color) -> Node3D:
+	var ship := MOTHERSHIP.instantiate()
+	# Assigned before add_child(), since mothership.gd's _ready() applies
+	# both of these — the same ordering rule documented in this file's header.
+	ship.length = mothership_length
+	ship.tint = tint
+	add_child(ship)
+	var ground: float = _terrain.get_height_at(at_xz.x, at_xz.z) if _terrain else 0.0
+	ship.global_position = Vector3(at_xz.x, ground + mothership_altitude, at_xz.z)
+	return ship
+
+
+func _mothership_for(faction: int) -> Node3D:
+	return _friendly_mothership if faction == Combatant.Faction.FRIENDLY else _enemy_mothership
+
+
 func _make_ship_multimesh(mesh: Mesh, tint: Color) -> MultiMeshInstance3D:
 	var mmi := MultiMeshInstance3D.new()
 	add_child(mmi)
@@ -441,9 +490,9 @@ func _build_squads(units: Array, squads: Array[Squad], faction: int, base_center
 		var size: int = mini(randi_range(SQUAD_SIZE_MIN, SQUAD_SIZE_MAX), units.size() - i)
 		var sq := Squad.new()
 		sq.faction = faction
-		sq.spawn_center = _random_squad_spawn(base_center)
+		sq.spawn_center = base_center
 		sq.objective = _random_point_in_dome()
-		sq.rally_point = sq.spawn_center
+		sq.rally_point = base_center
 		for k in size:
 			var idx: int = i + k
 			var c: Combatant = units[idx]
@@ -455,27 +504,27 @@ func _build_squads(units: Array, squads: Array[Squad], faction: int, base_center
 		i += size
 
 
-## Squad spawn points are spread along a wide front perpendicular to the
-## approach axis (the fleets close along X, so the front runs along Z), with
-## some depth stagger. This is half of the anti-clustering fix — the other
-## half is separation steering. One shared spawn cluster is what produced
-## the original single converging blob.
-func _random_squad_spawn(base_center: Vector3) -> Vector3:
-	return base_center + Vector3(
-			randf_range(-SPAWN_DEPTH, SPAWN_DEPTH),
-			0.0,
-			randf_range(-SPAWN_FRONT_HALF_WIDTH, SPAWN_FRONT_HALF_WIDTH))
-
-
+## Parks the whole fleet on its mothership's deck, in launch order. Squads
+## previously spawned scattered over a 7km front, which was the original fix
+## for "the AI clusters in huge packs" — that spread is now provided instead
+## by the launch waves (squads leave one at a time), each squad's own
+## objective inside the dome, and the separation steering, none of which
+## depend on where they started.
 func _place_all_at_spawn() -> void:
-	for sq in _friendly_squads:
+	_park_faction(_friendlies, _friendly_squads)
+	_park_faction(_enemies, _enemy_squads)
+
+
+func _park_faction(units: Array, squads: Array[Squad]) -> void:
+	for s in squads.size():
+		var sq: Squad = squads[s]
 		for idx in sq.members:
-			_respawn_combatant(_friendlies[idx], sq)
-			_friendlies[idx].respawn_time_remaining = 0.0
-	for sq in _enemy_squads:
-		for idx in sq.members:
-			_respawn_combatant(_enemies[idx], sq)
-			_enemies[idx].respawn_time_remaining = 0.0
+			var c: Combatant = units[idx]
+			_respawn_combatant(c, sq)
+			c.respawn_time_remaining = 0.0
+			# Launch order runs down the deck, so the fleet leaves in a
+			# readable procession instead of a scramble.
+			c.launch_delay = float(s) * LAUNCH_WAVE_INTERVAL + randf_range(0.0, 0.4)
 
 
 func _reset_squad(sq: Squad) -> void:
@@ -569,11 +618,20 @@ func _update_combatant(c: Combatant, my_index: int, opposing: Array, own_units: 
 	c.state_timer -= delta
 	c.reaction_timer -= delta
 
+	var sq: Squad = squads[c.squad_id]
+
+	# Parked on the mothership deck, waiting for its launch slot. Doesn't
+	# move, steer, retarget or shoot — it's sitting on a flight deck.
+	if c.state == Combatant.State.PARKED:
+		c.launch_delay -= delta
+		if c.launch_delay <= 0.0:
+			c.state = Combatant.State.LAUNCHING
+			c.speed = c.base_speed * 0.5  # rolls off the deck rather than leaving at cruise
+		return
+
 	# Sampled once and reused by both the ground-avoidance test and the
 	# terrain/building crash test below — they used to sample independently.
 	var ground_here: float = _terrain.get_height_at(c.position.x, c.position.z) if _terrain else 0.0
-
-	var sq: Squad = squads[c.squad_id]
 	_retarget_if_needed(c, my_index, opposing, sq, can_target_player)
 
 	var has_target := false
@@ -615,7 +673,8 @@ func _update_combatant(c: Combatant, my_index: int, opposing: Array, own_units: 
 		return
 
 	c.fire_cooldown -= delta
-	if has_target and c.state != Combatant.State.RETREAT and c.reaction_timer <= 0.0 and c.fire_cooldown <= 0.0:
+	if has_target and c.state != Combatant.State.RETREAT and c.state != Combatant.State.LAUNCHING \
+			and c.reaction_timer <= 0.0 and c.fire_cooldown <= 0.0:
 		_try_fire(c, my_index, target_pos, target_vel)
 
 	# Rare, longer-range, longer-cooldown missile shot at the player
@@ -634,6 +693,14 @@ func _update_combatant(c: Combatant, my_index: int, opposing: Array, own_units: 
 ## has broken drags all its members into RETREAT; individually, a hurt pilot
 ## may break off on its own while the rest of its squad keeps fighting.
 func _update_pilot_state(c: Combatant, sq: Squad, has_target: bool, target_pos: Vector3) -> void:
+	# Climbing off the deck. Nothing else applies until it's clear of the
+	# ship — no combat, no formation, no squad orders. Throttles up to cruise
+	# as it goes, so a takeoff looks like a takeoff.
+	if c.state == Combatant.State.LAUNCHING:
+		if c.position.y - c.launch_deck_y >= LAUNCH_CLEAR_HEIGHT:
+			c.state = Combatant.State.FORMATION
+		return
+
 	if sq.state == Squad.State.RETREAT or sq.state == Squad.State.REGROUP:
 		c.state = Combatant.State.RETREAT
 		return
@@ -673,6 +740,15 @@ func _update_pilot_state(c: Combatant, sq: Squad, has_target: bool, target_pos: 
 func _steering_direction(c: Combatant, sq: Squad, own_units: Array, has_target: bool,
 		target_pos: Vector3, target_vel: Vector3) -> Vector3:
 	match c.state:
+		Combatant.State.LAUNCHING:
+			# Mostly straight up, leaned toward the squad's objective so the
+			# fleet fans out in the right direction as it climbs instead of
+			# forming one vertical column above the deck.
+			var outbound := Vector3(sq.objective.x - c.position.x, 0.0, sq.objective.z - c.position.z)
+			if outbound.length() > 0.01:
+				outbound = outbound.normalized()
+			return Vector3.UP * LAUNCH_CLIMB_BIAS + outbound
+
 		Combatant.State.RETREAT:
 			var run_to := sq.rally_point if sq.state != Squad.State.ENGAGE else _squad_rally_point(sq)
 			return run_to - c.position
@@ -731,7 +807,10 @@ func _formation_station(leader: Combatant, slot: int) -> Vector3:
 ## behind its leader or piles it into them.
 func _update_throttle(c: Combatant, sq: Squad, own_units: Array, has_target: bool, target_pos: Vector3, delta: float) -> void:
 	var wanted := c.base_speed
-	if c.state == Combatant.State.RETREAT:
+	if c.state == Combatant.State.LAUNCHING:
+		# Accelerating off the deck to cruise, not leaving at full speed.
+		wanted = c.base_speed
+	elif c.state == Combatant.State.RETREAT:
 		wanted = c.base_speed * 1.15
 	elif has_target and c.state == Combatant.State.PURSUE:
 		wanted = c.base_speed * 1.1
@@ -875,37 +954,48 @@ func _check_ground_or_building(c: Combatant, ground_here: float) -> bool:
 	return false
 
 
+## Puts a ship back on its faction's mothership deck, parked and waiting for
+## a launch slot.
 func _respawn_combatant(c: Combatant, sq: Squad) -> void:
-	var spawn_center: Vector3 = sq.spawn_center
-	var angle := randf() * TAU
-	var dist := randf_range(0.0, 400.0)  # tight — squads spawn as a flight, spread comes from the per-squad centers
-	var x := spawn_center.x + cos(angle) * dist
-	var z := spawn_center.z + sin(angle) * dist
-	var ground: float = _terrain.get_height_at(x, z) if _terrain else 0.0
-	var altitude := randf_range(SPAWN_ALT_MIN, SPAWN_ALT_MAX)
+	var mothership := _mothership_for(c.faction)
+	var deck_point: Vector3
+	if mothership:
+		deck_point = mothership.squad_deck_point(maxi(c.squad_id, 0), _squad_count_for(c.faction))
+		# Spread a squad's own members across their slot rather than stacking
+		# them on one point.
+		deck_point += Vector3(randf_range(-60.0, 60.0), 0.0, randf_range(-60.0, 60.0))
+	else:
+		# No mothership (shouldn't happen, but the sim must not depend on it)
+		# — fall back to the old airborne spawn.
+		var ground: float = _terrain.get_height_at(sq.spawn_center.x, sq.spawn_center.z) if _terrain else 0.0
+		deck_point = Vector3(sq.spawn_center.x, ground + randf_range(SPAWN_ALT_MIN, SPAWN_ALT_MAX), sq.spawn_center.z)
 
-	c.position = Vector3(x, ground + altitude, z)
-	# Horizontal-only heading toward the objective, at spawn altitude — NOT
-	# `(dome_center - c.position)` directly. dome_center.y is 0 (sea level),
-	# but the terrain here is genuinely mountainous (the friendly spawn point
-	# alone sits at ~2713m per a live-tested run), so aiming at dome_center's
-	# raw position would point every freshly-spawned ship thousands of meters
-	# downward and send it straight into the ground before it ever gets a
-	# chance to level out.
+	c.position = deck_point
+	c.launch_deck_y = deck_point.y
+	# Horizontal-only heading toward the objective — NOT `(objective -
+	# position)` directly, since a ship sitting on a deck 1400m up aiming at
+	# a point near sea level would nose straight down off the bow.
 	var level_target := Vector3(sq.objective.x, c.position.y, sq.objective.z)
 	c.heading = (level_target - c.position).normalized()
 	c.wander_point = c.position + c.heading * 500.0
 	c.health = MAX_HEALTH
 	c.alive = true
 	c.speed = c.base_speed
-	c.state = Combatant.State.FORMATION
+	c.state = Combatant.State.PARKED
 	c.state_timer = 0.0
+	# Mid-match respawns don't queue behind the whole fleet the way the
+	# opening launch does — see _park_faction for the match-start ordering.
+	c.launch_delay = randf_range(0.0, LAUNCH_RESPAWN_DELAY_MAX)
 	c.target_index = -1
 	c.targeting_player = false
 	c.reaction_timer = randf_range(REACTION_TIME_MIN, REACTION_TIME_MAX)
 	c.fire_cooldown = randf_range(0.4, 1.0)
 	c.missile_cooldown = randf_range(MISSILE_COOLDOWN_MIN, MISSILE_COOLDOWN_MAX)
 	c.respawn_time_remaining = RESPAWN_DELAY
+
+
+func _squad_count_for(faction: int) -> int:
+	return _friendly_squads.size() if faction == Combatant.Faction.FRIENDLY else _enemy_squads.size()
 
 
 func _kill_combatant(c: Combatant, index: int, sq: Squad, cause: String) -> void:
@@ -1381,6 +1471,20 @@ func _bolt_transform(b: Dictionary) -> Transform3D:
 # Public API — laser_bolt.gd (player shooting aliens) / target_lock.gd /
 # missile_system.gd / missile.gd
 # ---------------------------------------------------------------------------
+
+## Where the player starts the match and respawns: parked on the friendly
+## mothership's deck with the rest of the fleet. Returned as a world
+## position so game_flow.gd / crash_handler.gd don't have to re-derive the
+## mothership's altitude or deck height themselves — this is the single
+## source of truth, replacing the hand-synced (-4000, 0) coordinate that
+## previously lived in three separate exported values.
+func get_player_spawn_position() -> Vector3:
+	if _friendly_mothership:
+		var deck: Vector3 = _friendly_mothership.random_deck_point()
+		return deck + Vector3(0.0, 12.0, 0.0)  # sat on the deck, not embedded in it
+	var ground: float = _terrain.get_height_at(_friendly_spawn_center.x, _friendly_spawn_center.z) if _terrain else 0.0
+	return Vector3(_friendly_spawn_center.x, ground + 102.0, _friendly_spawn_center.z)
+
 
 func get_nearest_alive_alien(from_position: Vector3) -> int:
 	var best_index := -1
