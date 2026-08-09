@@ -166,10 +166,10 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.13, -0.55)
 pixel_size = 0.0012
 billboard = 1
 no_depth_test = true
+modulate = Color(0.6, 0.6, 0.65, 1)
 text = "STICK LEFT / RIGHT TO SELECT
 RIGHT TRIGGER TO CONFIRM"
 font_size = 26
-modulate = Color(0.6, 0.6, 0.65, 1)
 
 [node name="Music" type="AudioStreamPlayer" parent="XRCamera3D/MainMenu"]
 stream = ExtResource("39_menumusic")
@@ -240,13 +240,12 @@ script = ExtResource("14_weapons")
 [node name="MissileSystem" type="Node" parent="."]
 script = ExtResource("35_missiles")
 
-[node name="LaunchAudio" type="AudioStreamPlayer3D" parent="MissileSystem"]
+[node name="LaunchAudio" type="AudioStreamPlayer" parent="MissileSystem"]
 stream = ExtResource("36_missilelaunch")
-max_distance = 800.0
 
-[node name="LockAudio" type="AudioStreamPlayer3D" parent="MissileSystem"]
+[node name="LockAudio" type="AudioStreamPlayer" parent="MissileSystem"]
 stream = ExtResource("37_missilelock")
-max_distance = 800.0
+volume_db = 2.0
 
 [node name="FlareSystem" type="Node" parent="."]
 script = ExtResource("41_flares")

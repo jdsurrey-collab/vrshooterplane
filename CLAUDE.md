@@ -671,6 +671,43 @@ lock *acquisition* implicit.
   cockpit it simply looked like the weapon did nothing — reported as "the
   rocket targeting system is not working."
 
+### The silent-feedback bug — why it still "didn't work" after the rewrite
+
+Even with the lock logic correct and the launch direction fixed, the weapon
+still read as completely dead in the headset, because **every piece of its
+feedback was inaudible**. `LaunchAudio` and `LockAudio` were
+`AudioStreamPlayer3D` nodes parented to `MissileSystem` — which is a plain
+`Node`, not a `Node3D`. With no `Node3D` ancestor their global transform
+falls back to identity, so both sounds played at the **world origin**,
+roughly 4.9km from the player's spawn, against a `max_distance` of 800. No
+search tone, no lock tone, no launch sound, ever.
+
+The gun sounds were never affected because they live under
+`Ship/GunMountLeft` / `GunMountRight`, a real `Node3D` chain — which is
+exactly why this looked like "missiles are broken, guns are fine."
+
+Both are now plain `AudioStreamPlayer`s, which is what they should always
+have been: your own lock tone and your own launch happen inside your own
+cockpit, so proximity is meaningless — the same reasoning `main_menu.gd`'s
+music and `missile_alert.gd`'s warnings already use. **The general rule for
+this project: an `AudioStreamPlayer3D` is only correct under a `Node3D`
+parent that is actually positioned where the sound happens.**
+
+Feedback no longer depends on audio alone. The left controller now pulses
+on every search beep and harder on lock and on launch — a buzz in the hand
+that is pressing the trigger cannot be missed, drowned out by the battle,
+or routed to the wrong place. The lock cone was also widened from 9° to
+22°, since aliens are sparse across an 8km dome and holding a 9° bead on
+one was most of the difficulty; the Y-lock still takes priority, so the
+generous fallback cone can't steal a deliberately chosen target. The
+missile mesh went from 1.8m to 5m with a larger exhaust, because at 400 m/s
+a 1.8m body was gone before you could register that anything had launched.
+
+Verified end to end by a scripted test (`designate -> lock -> fire -> fly ->
+kill`): lock completes, the missile spawns **0.0° off the bearing to
+target**, closes 898m and kills in 2.25s, and the kill feed records
+"destroyed by PLAYER missile".
+
 ### The backwards-launch bug
 
 Independent of the lock design, and enough on its own to make the weapon

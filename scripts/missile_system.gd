@@ -57,7 +57,12 @@ const MISSILE := preload("res://scenes/Missile.tscn")
 ## missile a committed shot rather than a spammable one without being
 ## tedious. Exported so it's tunable in the headset without a code change.
 @export var lock_time: float = 3.0
-@export var lock_cone_degrees: float = 9.0
+## Widened from 9°, which was unforgivingly narrow — aliens are sparse
+## across an 8km dome, so holding a 9° bead on one long enough to notice the
+## weapon existed was most of the difficulty. The Y-lock takes priority
+## anyway (see _designate_target), so a generous fallback cone can't steal a
+## target the player deliberately picked.
+@export var lock_cone_degrees: float = 22.0
 @export var lock_range: float = 6000.0
 @export var target_lock_path: NodePath = ^"../TargetLock"
 @export var launch_mount_path: NodePath = ^"../Ship/GunMountRight"
@@ -83,8 +88,20 @@ var _ship: Node3D
 var _launch_mount: Node3D
 var _battle: Node
 var _target_lock: Node
-var _lock_audio: AudioStreamPlayer3D
-var _launch_audio: AudioStreamPlayer3D
+## Plain (non-positional) AudioStreamPlayers, NOT AudioStreamPlayer3D.
+## These are cockpit sounds — your own lock tone and your own launch, both
+## happening inside your own ship — so proximity is meaningless, the same
+## reasoning main_menu.gd's music and missile_alert.gd's warnings already
+## use. They were originally AudioStreamPlayer3D, which was a real bug and
+## a subtle one: MissileSystem is a plain `Node`, so those children had no
+## Node3D ancestor and their global transform fell back to identity —
+## meaning both sounds played at the WORLD ORIGIN, ~4.9km from the player's
+## spawn, with max_distance 800. Totally silent. The weapon appeared to do
+## nothing at all because every piece of its feedback was inaudible. The
+## gun sounds were never affected because they live under Ship/GunMount*,
+## which is a real Node3D chain.
+var _lock_audio: AudioStreamPlayer
+var _launch_audio: AudioStreamPlayer
 
 var _trigger_was_down: bool = false
 var _beep_timer: float = 0.0
@@ -150,6 +167,7 @@ func _update_lock(delta: float) -> void:
 		locked = true
 		if _lock_audio:
 			_lock_audio.play()  # the solid "tone" — lock acquired
+		_pulse(0.9, 0.22)
 		return
 
 	_update_search_tone(delta)
@@ -165,6 +183,15 @@ func _update_search_tone(delta: float) -> void:
 	_beep_timer = lerpf(beep_interval_start, beep_interval_end, t)
 	if _lock_audio:
 		_lock_audio.play()
+	# Buzz the hand holding the trigger on every beep. Audio can be missed,
+	# drowned out by the battle, or (as it was) routed wrong; a pulse in the
+	# hand that's pressing the button cannot be.
+	_pulse(0.35, 0.05)
+
+
+func _pulse(amplitude: float, duration: float) -> void:
+	if _left_controller and _left_controller.get_is_active():
+		_left_controller.trigger_haptic_pulse("haptic", 0.0, amplitude, duration, 0.0)
 
 
 ## Y-locked target first (it's the deliberate pick, and it's what the
@@ -205,3 +232,4 @@ func _fire_missile() -> void:
 
 	if _launch_audio:
 		_launch_audio.play()
+	_pulse(1.0, 0.3)

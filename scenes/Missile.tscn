@@ -4,9 +4,9 @@
 [ext_resource type="Texture2D" path="res://Assets/Textures/soft_particle.png" id="2_softparticle"]
 
 [sub_resource type="CylinderMesh" id="CylinderMesh_body"]
-top_radius = 0.08
-bottom_radius = 0.12
-height = 1.8
+top_radius = 0.18
+bottom_radius = 0.3
+height = 5.0
 radial_segments = 8
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_body"]
@@ -15,7 +15,7 @@ metallic = 0.4
 roughness = 0.5
 
 [sub_resource type="QuadMesh" id="QuadMesh_exhaust"]
-size = Vector2(0.5, 0.5)
+size = Vector2(1.8, 1.8)
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_exhaust"]
 transparency = 1
@@ -47,10 +47,11 @@ mesh = SubResource("CylinderMesh_body")
 surface_material_override/0 = SubResource("StandardMaterial3D_body")
 
 [node name="Exhaust" type="GPUParticles3D" parent="."]
-position = Vector3(0, 0, 0.9)
+position = Vector3(0, 0, 2.5)
 material_override = SubResource("StandardMaterial3D_exhaust")
 emitting = true
-amount = 20
-lifetime = 0.4
+amount = 32
+lifetime = 0.7
+visibility_aabb = AABB(-30, -30, -30, 60, 60, 60)
 process_material = SubResource("ParticleProcessMaterial_exhaust")
 draw_pass_1 = SubResource("QuadMesh_exhaust")
