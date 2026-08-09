@@ -1,0 +1,11 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Mesh" uid="uid://cff6842lbgyob" path="res://Assets/EnemyShip/ship1.obj" id="1_mesh"]
+[ext_resource type="Script" path="res://scripts/enemy_ai.gd" id="2_ai"]
+
+[node name="EnemyShip" type="Node3D"]
+script = ExtResource("2_ai")
+
+[node name="Mesh" type="MeshInstance3D" parent="."]
+scale = Vector3(2, 2, 2)
+mesh = ExtResource("1_mesh")

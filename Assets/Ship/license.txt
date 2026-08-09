@@ -1,0 +1,11 @@
+Model Information:
+* title:	Spacefighter Cockpit (Wasp Interdictor)
+* source:	https://sketchfab.com/3d-models/spacefighter-cockpit-wasp-interdictor-db4aa67fe1164ec088083d7dac2d273f
+* author:	Comrade1280 (https://sketchfab.com/comrade1280)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Spacefighter Cockpit (Wasp Interdictor)" (https://sketchfab.com/3d-models/spacefighter-cockpit-wasp-interdictor-db4aa67fe1164ec088083d7dac2d273f) by Comrade1280 (https://sketchfab.com/comrade1280) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)

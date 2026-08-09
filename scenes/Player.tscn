@@ -1,0 +1,131 @@
+[gd_scene load_steps=21 format=3 uid="uid://c2dyoeywkgf30"]
+
+[ext_resource type="PackedScene" uid="uid://diyu06cw06syv" path="res://addons/godot-xr-tools/player/player_body.tscn" id="1_body"]
+[ext_resource type="PackedScene" uid="uid://clc5dre31iskm" path="res://addons/godot-xr-tools/xr/start_xr.tscn" id="4_startxr"]
+[ext_resource type="PackedScene" uid="uid://btknduttnmoxf" path="res://addons/godot-xr-tools/misc/vr_common_shader_cache.tscn" id="5_shadercache"]
+[ext_resource type="PackedScene" uid="uid://b4ysuy43poobf" path="res://addons/godot-xr-tools/functions/function_pickup.tscn" id="6_pickup"]
+[ext_resource type="Script" uid="uid://0l8dm2te5aqx" path="res://scripts/player_scale.gd" id="11_playerscale"]
+[ext_resource type="Script" uid="uid://gtd4spq3j2i3" path="res://scripts/flight_controller.gd" id="12_flight"]
+[ext_resource type="PackedScene" uid="uid://din7fo3qw22sc" path="res://Assets/Ship/scene.gltf" id="13_ship"]
+[ext_resource type="Script" uid="uid://djh11gw688tg0" path="res://scripts/weapon_system.gd" id="14_weapons"]
+[ext_resource type="Script" uid="uid://cqqkquod5gv0y" path="res://scripts/hud.gd" id="15_hud"]
+[ext_resource type="Script" uid="uid://ctd16xq21m4ul" path="res://scripts/options_menu.gd" id="16_options"]
+[ext_resource type="Script" uid="uid://bcvmubldgpvsc" path="res://scripts/engine_audio.gd" id="17_engineaudio"]
+[ext_resource type="AudioStream" uid="uid://bga2ymn580d5f" path="res://Assets/Audio/accelerate.mp3" id="18_accelsound"]
+[ext_resource type="AudioStream" uid="uid://djtnl3njh1mrh" path="res://Assets/Audio/thrust.mp3" id="19_thrustsound"]
+[ext_resource type="Script" uid="uid://dkol66j00vro4" path="res://scripts/crash_handler.gd" id="20_crash"]
+[ext_resource type="Script" uid="uid://d1dwdpcemclto" path="res://scripts/enemy_locator.gd" id="21_locator"]
+[ext_resource type="AudioStream" uid="uid://b4qd34rq26q74" path="res://Assets/Audio/laser.mp3" id="22_lasersound"]
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_arrow"]
+top_radius = 0.0
+bottom_radius = 0.02
+height = 0.08
+radial_segments = 8
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_arrow"]
+shading_mode = 0
+albedo_color = Color(1, 0.85, 0.1, 1)
+
+[sub_resource type="SphereMesh" id="SphereMesh_crosshair"]
+radius = 0.3
+height = 0.6
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_crosshair"]
+shading_mode = 0
+albedo_color = Color(0.1, 1, 0.3, 1)
+
+[node name="Player" type="XROrigin3D"]
+script = ExtResource("11_playerscale")
+
+[node name="XRCamera3D" type="XRCamera3D" parent="."]
+current = true
+far = 150000.0
+
+[node name="VRCommonShaderCache" parent="XRCamera3D" instance=ExtResource("5_shadercache")]
+
+[node name="HUD" type="Label3D" parent="XRCamera3D"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.12, -0.09, -0.4)
+pixel_size = 0.0012
+billboard = 1
+no_depth_test = true
+text = "SPEED: -- m/s
+GUN: --"
+font_size = 30
+horizontal_alignment = 0
+script = ExtResource("15_hud")
+
+[node name="EnemyLocator" type="Node3D" parent="XRCamera3D"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.15, 0.05, -0.4)
+script = ExtResource("21_locator")
+
+[node name="Arrow" type="MeshInstance3D" parent="XRCamera3D/EnemyLocator"]
+transform = Transform3D(1, 0, 0, 0, -4.37114e-08, 1, 0, -1, -4.37114e-08, 0, 0, 0)
+mesh = SubResource("CylinderMesh_arrow")
+surface_material_override/0 = SubResource("StandardMaterial3D_arrow")
+
+[node name="OptionsMenu" type="Label3D" parent="XRCamera3D"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -0.5)
+visible = false
+pixel_size = 0.0015
+billboard = 1
+no_depth_test = true
+text = "OPTIONS"
+font_size = 28
+script = ExtResource("16_options")
+
+[node name="LeftHand" type="XRController3D" parent="."]
+tracker = &"left_hand"
+pose = &"aim"
+
+[node name="FunctionPickup" parent="LeftHand" instance=ExtResource("6_pickup")]
+
+[node name="RightHand" type="XRController3D" parent="."]
+tracker = &"right_hand"
+pose = &"aim"
+
+[node name="FunctionPickup" parent="RightHand" instance=ExtResource("6_pickup")]
+
+[node name="PlayerBody" parent="." instance=ExtResource("1_body")]
+enabled = false
+
+[node name="StartXR" parent="." instance=ExtResource("4_startxr")]
+
+[node name="FlightController" type="Node" parent="."]
+script = ExtResource("12_flight")
+
+[node name="Ship" parent="." instance=ExtResource("13_ship")]
+transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 0, -1.422, -1.18)
+
+[node name="GunMountLeft" type="Marker3D" parent="Ship"]
+transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, -0.4, 1.9, 0.6)
+
+[node name="Audio" type="AudioStreamPlayer3D" parent="Ship/GunMountLeft"]
+stream = ExtResource("22_lasersound")
+max_distance = 500.0
+
+[node name="GunMountRight" type="Marker3D" parent="Ship"]
+transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 0.4, 1.9, 0.6)
+
+[node name="Audio" type="AudioStreamPlayer3D" parent="Ship/GunMountRight"]
+stream = ExtResource("22_lasersound")
+max_distance = 500.0
+
+[node name="Crosshair" type="MeshInstance3D" parent="Ship"]
+mesh = SubResource("SphereMesh_crosshair")
+surface_material_override/0 = SubResource("StandardMaterial3D_crosshair")
+
+[node name="WeaponSystem" type="Node" parent="."]
+script = ExtResource("14_weapons")
+
+[node name="EngineAudio" type="Node" parent="."]
+script = ExtResource("17_engineaudio")
+
+[node name="AcceleratePlayer" type="AudioStreamPlayer" parent="EngineAudio"]
+stream = ExtResource("18_accelsound")
+
+[node name="ThrustPlayer" type="AudioStreamPlayer" parent="EngineAudio"]
+stream = ExtResource("19_thrustsound")
+
+[node name="CrashHandler" type="Node" parent="."]
+script = ExtResource("20_crash")

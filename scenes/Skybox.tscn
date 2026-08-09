@@ -1,0 +1,73 @@
+[gd_scene load_steps=13 format=3]
+
+[ext_resource type="Texture2D" uid="uid://cd03p2og6xjkd" path="res://Assets/Skybox/source_tga_files/marslike01ft.tga" id="1_ft"]
+[ext_resource type="Texture2D" uid="uid://slujtuxh3ql8" path="res://Assets/Skybox/source_tga_files/marslike01bk.tga" id="2_bk"]
+[ext_resource type="Texture2D" uid="uid://c7d5v2kuxb6cr" path="res://Assets/Skybox/source_tga_files/marslike01lf.tga" id="3_lf"]
+[ext_resource type="Texture2D" uid="uid://bb030yg05hl5i" path="res://Assets/Skybox/source_tga_files/marslike01rt.tga" id="4_rt"]
+[ext_resource type="Texture2D" uid="uid://cwjg4caadcbpo" path="res://Assets/Skybox/source_tga_files/marslike01up.tga" id="5_up"]
+[ext_resource type="Texture2D" uid="uid://cqsnc4rdy36cf" path="res://Assets/Skybox/source_tga_files/marslike01dn.tga" id="6_dn"]
+
+[sub_resource type="QuadMesh" id="Quad_1"]
+size = Vector2(500, 500)
+
+[sub_resource type="StandardMaterial3D" id="Mat_ft"]
+shading_mode = 0
+albedo_texture = ExtResource("1_ft")
+cull_mode = 2
+
+[sub_resource type="StandardMaterial3D" id="Mat_bk"]
+shading_mode = 0
+albedo_texture = ExtResource("2_bk")
+cull_mode = 2
+
+[sub_resource type="StandardMaterial3D" id="Mat_lf"]
+shading_mode = 0
+albedo_texture = ExtResource("3_lf")
+cull_mode = 2
+
+[sub_resource type="StandardMaterial3D" id="Mat_rt"]
+shading_mode = 0
+albedo_texture = ExtResource("4_rt")
+cull_mode = 2
+
+[sub_resource type="StandardMaterial3D" id="Mat_up"]
+shading_mode = 0
+albedo_texture = ExtResource("5_up")
+cull_mode = 2
+
+[sub_resource type="StandardMaterial3D" id="Mat_dn"]
+shading_mode = 0
+albedo_texture = ExtResource("6_dn")
+cull_mode = 2
+
+[node name="Skybox" type="Node3D"]
+
+[node name="Front" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -250)
+mesh = SubResource("Quad_1")
+surface_material_override/0 = SubResource("Mat_ft")
+
+[node name="Back" type="MeshInstance3D" parent="."]
+transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 0, 0, 250)
+mesh = SubResource("Quad_1")
+surface_material_override/0 = SubResource("Mat_bk")
+
+[node name="Left" type="MeshInstance3D" parent="."]
+transform = Transform3D(0, 0, -1, 0, 1, 0, 1, 0, 0, -250, 0, 0)
+mesh = SubResource("Quad_1")
+surface_material_override/0 = SubResource("Mat_lf")
+
+[node name="Right" type="MeshInstance3D" parent="."]
+transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 250, 0, 0)
+mesh = SubResource("Quad_1")
+surface_material_override/0 = SubResource("Mat_rt")
+
+[node name="Up" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0, 1, 0, -1, 0, 0, 250, 0)
+mesh = SubResource("Quad_1")
+surface_material_override/0 = SubResource("Mat_up")
+
+[node name="Down" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0, -1, 0, 1, 0, 0, -250, 0)
+mesh = SubResource("Quad_1")
+surface_material_override/0 = SubResource("Mat_dn")

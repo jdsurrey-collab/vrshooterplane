@@ -1,0 +1,25 @@
+[remap]
+
+importer="wavefront_obj"
+importer_version=1
+type="Mesh"
+uid="uid://oyxryntl6iuc"
+path="res://.godot/imported/wall-wood-detail-cross.obj-18b4fdd288d818e720c1fc064859876c.mesh"
+
+[deps]
+
+files=["res://.godot/imported/wall-wood-detail-cross.obj-18b4fdd288d818e720c1fc064859876c.mesh"]
+
+source_file="res://Assets/Kenney/Models/OBJ format/wall-wood-detail-cross.obj"
+dest_files=["res://.godot/imported/wall-wood-detail-cross.obj-18b4fdd288d818e720c1fc064859876c.mesh", "res://.godot/imported/wall-wood-detail-cross.obj-18b4fdd288d818e720c1fc064859876c.mesh"]
+
+[params]
+
+generate_tangents=true
+generate_lods=true
+generate_shadow_mesh=true
+generate_lightmap_uv2=false
+generate_lightmap_uv2_texel_size=0.2
+scale_mesh=Vector3(1, 1, 1)
+offset_mesh=Vector3(0, 0, 0)
+force_disable_mesh_compression=false

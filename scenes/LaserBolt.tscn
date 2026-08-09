@@ -1,0 +1,24 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://scripts/laser_bolt.gd" id="1_laserbolt"]
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_bolt"]
+top_radius = 0.0
+bottom_radius = 0.06
+height = 2.5
+radial_segments = 8
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_bolt"]
+shading_mode = 0
+albedo_color = Color(1, 0.15, 0.1, 1)
+emission_enabled = true
+emission = Color(1, 0.15, 0.1, 1)
+emission_energy_multiplier = 8.0
+
+[node name="LaserBolt" type="Node3D"]
+script = ExtResource("1_laserbolt")
+
+[node name="Mesh" type="MeshInstance3D" parent="."]
+rotation_degrees = Vector3(-90, 0, 0)
+mesh = SubResource("CylinderMesh_bolt")
+surface_material_override/0 = SubResource("StandardMaterial3D_bolt")

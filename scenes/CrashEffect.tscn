@@ -1,0 +1,57 @@
+[gd_scene load_steps=8 format=3]
+
+[ext_resource type="Script" path="res://scripts/crash_effect.gd" id="1_crasheffect"]
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_crater"]
+top_radius = 6.0
+bottom_radius = 6.5
+height = 0.2
+radial_segments = 16
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_crater"]
+albedo_color = Color(0.03, 0.03, 0.03, 1)
+roughness = 1.0
+
+[sub_resource type="QuadMesh" id="QuadMesh_smoke"]
+size = Vector2(4, 4)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_smoke"]
+transparency = 1
+shading_mode = 0
+vertex_color_use_as_albedo = true
+albedo_color = Color(0.04, 0.04, 0.04, 1)
+billboard_mode = 1
+
+[sub_resource type="Gradient" id="Gradient_smoke"]
+offsets = PackedFloat32Array(0, 0.75, 1)
+colors = PackedColorArray(0.04, 0.04, 0.04, 0.95, 0.04, 0.04, 0.04, 0.9, 0.04, 0.04, 0.04, 0)
+
+[sub_resource type="ParticleProcessMaterial" id="ParticleProcessMaterial_smoke"]
+direction = Vector3(0, 1, 0)
+spread = 20.0
+initial_velocity_min = 12.0
+initial_velocity_max = 18.0
+gravity = Vector3(0, -0.05, 0)
+damping_min = 0.25
+damping_max = 0.35
+scale_min = 3.5
+scale_max = 6.0
+color_ramp = SubResource("Gradient_smoke")
+emission_shape = 1
+emission_sphere_radius = 2.5
+
+[node name="CrashEffect" type="Node3D"]
+script = ExtResource("1_crasheffect")
+
+[node name="Crater" type="MeshInstance3D" parent="."]
+mesh = SubResource("CylinderMesh_crater")
+surface_material_override/0 = SubResource("StandardMaterial3D_crater")
+
+[node name="Smoke" type="GPUParticles3D" parent="."]
+position = Vector3(0, 1, 0)
+material_override = SubResource("StandardMaterial3D_smoke")
+amount = 1200
+lifetime = 60.0
+visibility_aabb = AABB(-300, -5, -300, 600, 700, 600)
+process_material = SubResource("ParticleProcessMaterial_smoke")
+draw_pass_1 = SubResource("QuadMesh_smoke")

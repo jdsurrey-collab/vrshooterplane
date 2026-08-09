@@ -1,0 +1,14 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="PackedScene" uid="uid://clujaf3u776a3" path="res://addons/godot-xr-tools/objects/viewport_2d_in_3d.tscn" id="1_vp"]
+[ext_resource type="PackedScene" path="res://ui/MapEditorMenu.tscn" id="2_menu"]
+
+[node name="WristMenu" type="Node3D"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.12, -0.08)
+
+[node name="Viewport2Din3D" parent="." instance=ExtResource("1_vp")]
+transform = Transform3D(1, 0, 0, 0, 0.9455186, 0.3255682, 0, -0.3255682, 0.9455186, 0, 0, 0)
+screen_size = Vector2(0.35, 0.28)
+viewport_size = Vector2(400, 320)
+scene = ExtResource("2_menu")
+transparent = 0

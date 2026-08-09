@@ -1,0 +1,25 @@
+[remap]
+
+importer="wavefront_obj"
+importer_version=1
+type="Mesh"
+uid="uid://dgy4a17gwkbk"
+path="res://.godot/imported/pillar-stone.obj-1cd7e44f3266f3acc4ff200e350e7307.mesh"
+
+[deps]
+
+files=["res://.godot/imported/pillar-stone.obj-1cd7e44f3266f3acc4ff200e350e7307.mesh"]
+
+source_file="res://Assets/Kenney/Models/OBJ format/pillar-stone.obj"
+dest_files=["res://.godot/imported/pillar-stone.obj-1cd7e44f3266f3acc4ff200e350e7307.mesh", "res://.godot/imported/pillar-stone.obj-1cd7e44f3266f3acc4ff200e350e7307.mesh"]
+
+[params]
+
+generate_tangents=true
+generate_lods=true
+generate_shadow_mesh=true
+generate_lightmap_uv2=false
+generate_lightmap_uv2_texel_size=0.2
+scale_mesh=Vector3(1, 1, 1)
+offset_mesh=Vector3(0, 0, 0)
+force_disable_mesh_compression=false
