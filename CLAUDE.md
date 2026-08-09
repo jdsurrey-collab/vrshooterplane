@@ -1128,9 +1128,14 @@ highlights and oversaturated mids. All of this lives in `Town.tscn`'s
   cueing and `fog_sun_scatter` 0.22 for haze around the sun. Volumetric fog
   was deliberately NOT used — it is expensive in VR stereo and this project
   already has an open frame-rate question.
-- **Height fog** (`fog_height` 2600m, density 0.035) pools the smog low so
+- **Height fog** (`fog_height` 2600m, density 0.0175) pools the smog low so
   the city sits in it. Kept subtle since the right height depends on local
   terrain elevation, which varies by kilometres across this map.
+- Both densities were **halved after the first look in the headset** —
+  `fog_density` 0.85 -> 0.425 and `fog_height_density` 0.035 -> 0.0175. Only
+  the densities moved; the depth range (1200m -> 24000m) and curve were left
+  alone, so the fog reaches just as far, it's simply half as opaque. Those
+  two values are the thickness dial if it needs moving again.
 - **Glow** at low intensity (0.5, threshold 1.15, Screen blend). This is
   what makes the emissive lasers, engine trails and explosion fireballs
   read as hot rather than as flat coloured shapes. It's the one genuinely
