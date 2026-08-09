@@ -7,7 +7,7 @@
 [ext_resource type="Script" uid="uid://k20p8kbj87rh" path="res://scripts/city_generator.gd" id="7_citygen"]
 [ext_resource type="Script" uid="uid://valvihtvt6bi" path="res://scripts/game_flow.gd" id="8_gameflow"]
 [ext_resource type="Script" path="res://scripts/ship_engine_audio.gd" id="9_shipengineaudio"]
-[ext_resource type="Script" path="res://scripts/fog_banks.gd" id="10_fogbanks"]
+[ext_resource type="Script" uid="uid://qdl0i21x06c2" path="res://scripts/fog_banks.gd" id="10_fogbanks"]
 
 [sub_resource type="PanoramaSkyMaterial" id="SkyMat_1"]
 panorama = ExtResource("4_panorama")
@@ -42,7 +42,7 @@ fog_height_density = 0.1
 fog_depth_curve = 0.55
 fog_depth_begin = 2500.0
 fog_depth_end = 70000.0
-volumetric_fog_enabled = false
+volumetric_fog_enabled = true
 volumetric_fog_density = 0.0
 volumetric_fog_albedo = Color(0.72, 0.74, 0.73, 1)
 volumetric_fog_gi_inject = 0.0
@@ -82,7 +82,6 @@ spawn_position_xz = Vector2(-16000, 0)
 
 [node name="FogBanks" type="Node3D" parent="."]
 script = ExtResource("10_fogbanks")
-enabled = false
 
 [node name="City" type="Node3D" parent="."]
 script = ExtResource("7_citygen")

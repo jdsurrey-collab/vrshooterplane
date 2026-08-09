@@ -1172,59 +1172,61 @@ All of it is first-pass and unverified in the headset, like every other
 visual tuning in this project. The exported roughness knobs and the
 Environment's grade values are the dials.
 
-### Rolling fog banks — BUILT, THEN DISABLED
+### Shadowed ground fog sheet (`fog_banks.gd`)
 
-**Currently off** (`FogBanks.enabled = false` and
-`volumetric_fog_enabled = false`), left in place rather than deleted, same
-convention as the other retired systems. Turning both back on restores it.
+**The reason this system exists is shadowing.** Depth fog is a per-pixel
+distance blend between scene colour and a fog colour — it has no notion of
+occlusion, so **nothing can ever cast a shadow into it**, at any setting.
+Volumetric fog accumulates density into a 3D froxel grid and lights each
+froxel through the scene's shadow maps, so a froxel inside a building's
+shadow is genuinely darker. That is the only way to get building shadows
+riding over the fog, which was a direct request.
 
-Why it was switched off, from the live look: *"I can't see fog in the
-distance, but it's appearing next to me."* That's an accurate description
-of two real constraints stacking up, not a tuning miss:
-- Volumetric fog only exists inside the froxel grid, which reaches
-  `volumetric_fog_length` (12km) at most. Everything past that has no
-  volumetric fog at all, so there is nothing in the distance to see.
-- The banks were discrete drifting volumes recycled at 6.5km from the
-  player, so what you *did* see was individual blobs arriving nearby.
+`scripts/fog_banks.gd` (`FogBanks` in `Town.tscn`) is a **continuous
+terrain-following sheet** of `FogVolume` tiles fed by a shared 3D
+`NoiseTexture3D`. `volumetric_fog_enabled` must be on for FogVolumes to
+render at all, but `volumetric_fog_density` stays at **0** so the
+volumetric pass contributes nothing globally and exists purely to draw this
+sheet — no double-fogging the whole world on top of the depth fog.
 
-A continuous tiled sheet instead of drifting banks would fix the second
-point but not the first — the hard 12km boundary would remain. Getting
-ground fog that is both terrain-following AND visible at 20km+ is not
-something either of Godot's fog systems does.
+**v1 was drifting banks and was rejected in play** — *"I can't see fog in
+the distance, but it's appearing next to me."* That was accurate: it was a
+handful of independent volumes drifting on random headings and recycling at
+6.5km, so they arrived as discrete blobs with nothing between them. v2
+replaces that with a fixed grid (`grid_radius` 4 -> **9x9 = 81 tiles**,
+13.5km of coverage) with no drift and no recycling. Measured:
 
-`scripts/fog_banks.gd` (`FogBanks` in `Town.tscn`) — drifting banks of fog
-that hug the ground and climb terrain. Flat depth fog **cannot** do this:
-it's a per-pixel distance function, so it can only ever be a smooth
-gradient with distance, optionally biased by an absolute height. It has no
-shape, so it can't pool in a valley, break over a ridge, or roll up a
-mountainside. That needs real 3D volumes.
+- Tiles overlap **188m per edge** and `edge_fade` 0.5 blends the seams, so
+  the sheet is continuous rather than blobby.
+- **Terrain draping is exact** — each tile samples the ground at its own
+  centre, giving 0.00m deviation from `terrain + height_above_terrain` and
+  5706m of drape across the sheet. `FogMaterial.height_falloff` (3.0)
+  concentrates density hard at the bottom of each 320m box, making a ~30m
+  blanket rather than filling the volume.
+- **World-locked, not welded to the camera.** The grid snaps to world-space
+  cells: moving the player a quarter tile moves the tiles 0m, and moving a
+  full tile steps them exactly 1500m. If tiles tracked the player
+  continuously the fog would slide along with your head.
+- **Shadow range must cover the froxel range**, or the far half of the fog
+  renders unshadowed. Currently 14000m of shadow against 12000m of froxel
+  grid — verified.
 
-- Implemented as a pool of **`FogVolume`** nodes fed by a shared 3D
-  `NoiseTexture3D`, rendered through the Environment's **volumetric** fog
-  froxel grid. `volumetric_fog_enabled` must be on for FogVolumes to render
-  at all — but `volumetric_fog_density` is set to **0**, so the volumetric
-  pass contributes nothing globally and exists purely to draw these banks.
-  That avoids double-fogging the world on top of the depth fog and keeps
-  the froxel grid mostly empty.
-- **Terrain following is what sells it.** Each bank re-samples the terrain
-  height beneath itself every frame and sits `height_above_terrain` above
-  it, so a bank drifting onto rising ground rides up the slope. Combined
-  with `FogMaterial.height_falloff` (0.75, density concentrated at the
-  bottom of the volume) the fog clings to the surface instead of floating
-  as a detached slab. Measured: terrain-following is exact (0.00m
-  deviation) and banks changed altitude by up to **286m over 60s** of
-  drift.
-- Banks drift on random headings and are **recycled to the far edge** when
-  they pass `spread_radius` (6500m) from the player, so fog is always where
-  you are without paying for the whole 100km map. `edge_fade` blends
-  neighbouring banks so they don't show box seams.
-- **This is the most expensive visual feature in the project** — a 3D
-  froxel grid evaluated every frame, and in VR that happens per eye. It
-  ships deliberately conservative: 8 banks, a reduced 48x48x64 froxel grid
-  (`project.godot`'s `rendering/environment/volumetric_fog/volume_size`),
-  and an `enabled` export that switches the whole system off in one click.
-  **Check the HUD's PERF line with this on before turning it up** — the
-  frame-rate question in Known gaps is still open.
+**The 12km limit is inherent, not a bug.** Volumetric fog only exists
+inside the froxel grid, so this is ground fog you fly *into*, not something
+visible from the mothership 22km out; the depth fog covers distance haze
+past it.
+
+**This is the most expensive visual feature in the project** — a 3D froxel
+grid every frame with a shadow lookup per lit froxel, and in VR that
+happens per eye. `enabled` turns the sheet off in one click (also set
+`volumetric_fog_enabled = false` to stop paying for the empty grid). The
+froxel resolution is in `project.godot`
+(`rendering/environment/volumetric_fog/volume_size`, reduced to 48).
+**Check the HUD PERF line with this on before raising `grid_radius`.**
+
+Note the sheet and the height-fog blanket **overlap within 12km**, so
+near-field ground fog is the sum of both. If it reads too thick, drop
+`fog_height_density` — the sheet is the one carrying the shadowing.
 
 ### Shadows
 
