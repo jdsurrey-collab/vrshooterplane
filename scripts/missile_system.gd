@@ -50,6 +50,41 @@ extends Node
 ## never came back. The guns were never affected because weapon_system.gd
 ## spawns from the gun mounts, which carry their own compensating flip.
 
+## LOCK RETICLE — a visor-anchored HUD cursor that shoots in from off to the
+## side and spins around the designated target while the lock builds,
+## slowing to a steady solid ring and turning green the instant `locked`
+## goes true, matching the lock-on reticle modern flight/combat games use
+## (Ace Combat, Star Wars: Squadrons). Disappears the instant tracking stops
+## — trigger released, target lost, or target switched (in which case a new
+## one immediately flies in on the new target, since that's a fresh lock
+## attempt with no partial credit, same as the audio/haptic feedback above).
+##
+## Built and driven entirely inside this script, the same convention
+## target_lock.gd uses for its own targeting box/PIP ring/info label — no
+## extra HUD node in Player.tscn to keep in sync. Uses the identical
+## VISOR-ANCHORED technique: placed at a fixed `RETICLE_HUD_DISTANCE` from
+## the camera along the real direction to the target, so it tracks the right
+## screen position at any actual range without changing apparent size.
+##
+## The "flies in from outside the screen" entrance is a direction slerp, not
+## a screen-space animation: a start direction is picked by rotating the
+## true target direction off-axis by a random angle, then every frame the
+## reticle's direction eases from that start toward the true target
+## direction over RETICLE_FLY_IN_TIME. Composed with the fixed HUD distance,
+## that reads as the reticle swooping in from a wide angle and snapping onto
+## the target — no screen-space UI math needed, it's the same 3D placement
+## math the rest of the lock HUD already uses, just animated.
+const RETICLE_HUD_DISTANCE := 5.0  # meters from camera — matches target_lock.gd's hud_distance convention
+const RETICLE_RADIUS := 0.095
+const RETICLE_TICK_COUNT := 4
+const RETICLE_FLY_IN_TIME := 0.3
+const RETICLE_FLY_IN_ANGLE := deg_to_rad(38.0)
+const RETICLE_SPIN_SPEED_START := 7.5  # rad/s while acquisition just began
+const RETICLE_SPIN_SPEED_LOCKED := 0.0  # settles to a steady ring the instant it's locked — spin = "still working", steady = "ready"
+const RETICLE_COLOR_ACQUIRING := Color(1.0, 0.35, 0.15, 1.0)
+const RETICLE_COLOR_LOCKED := Color(0.25, 1.0, 0.3, 1.0)
+const RETICLE_PULSE_SPEED := 6.0  # locked-state "ready" pulse, purely cosmetic
+
 const MISSILE := preload("res://scenes/Missile.tscn")
 
 ## Down from the previous design's 5s. Five seconds of holding still on a
@@ -106,6 +141,15 @@ var _launch_audio: AudioStreamPlayer
 var _trigger_was_down: bool = false
 var _beep_timer: float = 0.0
 
+var _camera: Node3D
+var _reticle: Node3D
+var _reticle_material: StandardMaterial3D
+var _reticle_last_target: int = -1
+var _reticle_fly_in_t: float = 1.0  # 1.0 = settled on the true target direction, no animation in flight
+var _reticle_start_dir: Vector3 = Vector3.FORWARD
+var _reticle_spin_angle: float = 0.0
+var _reticle_pulse_time: float = 0.0
+
 
 func _ready() -> void:
 	var origin := get_parent()
@@ -117,6 +161,8 @@ func _ready() -> void:
 	_target_lock = get_node_or_null(target_lock_path)
 	_lock_audio = get_node_or_null("LockAudio")
 	_launch_audio = get_node_or_null("LaunchAudio")
+	_camera = origin.get_node_or_null("XRCamera3D")
+	_build_reticle()
 
 
 func _physics_process(delta: float) -> void:
@@ -233,3 +279,102 @@ func _fire_missile() -> void:
 	if _launch_audio:
 		_launch_audio.play()
 	_pulse(1.0, 0.3)
+
+
+# ---------------------------------------------------------------------------
+# Lock reticle — visor HUD, see the class comment above for the design
+# ---------------------------------------------------------------------------
+
+## Four short bracket ticks arranged in a ring, all children of one root
+## whose OWN local Z is what gets spun for the "orbiting" look and whose
+## transform is re-aimed at the camera every frame — the same
+## rotate-as-one-rigid-unit approach target_lock.gd uses for its targeting
+## box, and for the same reason: per-tick billboarding would rotate each
+## tick independently around its own origin instead of spinning the whole
+## ring as a unit.
+func _build_reticle() -> void:
+	_reticle = Node3D.new()
+	_reticle.name = "MissileLockReticle"
+	add_child(_reticle)
+
+	_reticle_material = StandardMaterial3D.new()
+	_reticle_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_reticle_material.no_depth_test = true
+	_reticle_material.albedo_color = RETICLE_COLOR_ACQUIRING
+	_reticle_material.emission_enabled = true
+	_reticle_material.emission = RETICLE_COLOR_ACQUIRING
+	_reticle_material.emission_energy_multiplier = 5.0
+
+	var tick_length := RETICLE_RADIUS * 0.85
+	var tick_thickness := RETICLE_RADIUS * 0.16
+	for i in RETICLE_TICK_COUNT:
+		var angle := TAU * float(i) / float(RETICLE_TICK_COUNT)
+		var tick := MeshInstance3D.new()
+		var box := BoxMesh.new()
+		box.size = Vector3(tick_thickness, tick_length, tick_thickness)
+		tick.mesh = box
+		tick.material_override = _reticle_material
+		tick.position = Vector3(cos(angle), sin(angle), 0.0) * RETICLE_RADIUS
+		tick.rotation.z = angle
+		_reticle.add_child(tick)
+
+	_reticle.visible = false
+
+
+func _process(delta: float) -> void:
+	if not _reticle or not _camera or not _battle:
+		return
+
+	var tracking: bool = tracked_target_index >= 0 and _battle.is_alive(tracked_target_index)
+	_reticle.visible = tracking
+	if not tracking:
+		_reticle_last_target = -1
+		return
+
+	# A newly designated target — first acquisition, or switching mid-hold —
+	# restarts the fly-in animation and the spin, so every fresh lock
+	# attempt gets the same "swoop in and start spinning" entrance.
+	if tracked_target_index != _reticle_last_target:
+		_reticle_last_target = tracked_target_index
+		_reticle_fly_in_t = 0.0
+		_reticle_spin_angle = 0.0
+		var true_dir: Vector3 = (_battle.get_alien_position(tracked_target_index) - _camera.global_position).normalized()
+		# Rotates the true direction off-axis by RETICLE_FLY_IN_ANGLE around a
+		# random perpendicular, so the entrance swoops in from a different
+		# side every time rather than always the same corner.
+		_reticle_start_dir = true_dir.rotated(_random_perpendicular(true_dir), RETICLE_FLY_IN_ANGLE)
+
+	var cam_pos: Vector3 = _camera.global_position
+	var cam_basis: Basis = _camera.global_transform.basis
+	var true_dir: Vector3 = (_battle.get_alien_position(tracked_target_index) - cam_pos).normalized()
+
+	var current_dir: Vector3 = true_dir
+	if _reticle_fly_in_t < 1.0:
+		_reticle_fly_in_t = clampf(_reticle_fly_in_t + delta / RETICLE_FLY_IN_TIME, 0.0, 1.0)
+		var eased := 1.0 - (1.0 - _reticle_fly_in_t) * (1.0 - _reticle_fly_in_t)  # ease-out — fast start, gentle settle onto the target
+		current_dir = _reticle_start_dir.slerp(true_dir, eased)
+
+	var t := clampf(lock_progress / maxf(lock_time, 0.001), 0.0, 1.0)
+	var spin_speed := lerpf(RETICLE_SPIN_SPEED_START, RETICLE_SPIN_SPEED_LOCKED, t)
+	_reticle_spin_angle += spin_speed * delta
+
+	_reticle.global_position = cam_pos + current_dir * RETICLE_HUD_DISTANCE
+	_reticle.global_transform.basis = cam_basis * Basis(Vector3.FORWARD, _reticle_spin_angle)
+
+	var color := RETICLE_COLOR_ACQUIRING.lerp(RETICLE_COLOR_LOCKED, t)
+	var energy := 5.0
+	if locked:
+		# A small breathing pulse once locked — "ready", not just "not red
+		# anymore" — purely cosmetic, doesn't affect any gameplay timing.
+		_reticle_pulse_time += delta
+		energy = 5.0 + sin(_reticle_pulse_time * RETICLE_PULSE_SPEED) * 1.5
+	_reticle_material.albedo_color = color
+	_reticle_material.emission = color
+	_reticle_material.emission_energy_multiplier = energy
+
+
+## A unit vector perpendicular to `dir`, picked pseudo-randomly per call so
+## the fly-in entrance doesn't always swoop in from the same side.
+func _random_perpendicular(dir: Vector3) -> Vector3:
+	var arbitrary := Vector3.UP if absf(dir.dot(Vector3.UP)) < 0.9 else Vector3.RIGHT
+	return dir.cross(arbitrary).rotated(dir, randf() * TAU).normalized()

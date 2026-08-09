@@ -103,7 +103,22 @@ writes and wires up scenes/scripts directly.
   longer solves the occlusion problem better than raw speed did, and lets
   the speed come back down to something you can actually watch travel.
   `target_lock.gd`'s `bolt_speed` (its PIP intercept solution) must be kept
-  equal to this. Each frame it does a **swept segment check** (previous position
+  equal to this.
+  **Width is now split by who fired it.** `LaserBolt.tscn`'s shared mesh
+  (top 0.05 / bottom 0.28) was sized for the ambient mass-battle bolts,
+  where hundreds need to read as visible tracers from across the city — up
+  close, in the player's own cockpit, that same radius looked like "big
+  tubes" rather than a laser beam. `_thin_player_mesh()` swaps in a slimmer
+  CylinderMesh (top 0.015 / bottom 0.055 — about a fifth of the original)
+  on `fired_by_player = true` bolts only, reading height/radial_segments
+  off the existing mesh so length can't drift out of sync between the two.
+  Crucially this creates a brand-new `CylinderMesh` and assigns it to just
+  that one `MeshInstance3D`, never editing the scene's shared SubResource
+  in place — alien-fired bolts (`_fire_at_player()` in `faction_battle.gd`)
+  keep the original thicker mesh completely untouched. Verified: player
+  bolts measure 0.055 vs. an unmodified 0.28 for alien fire, same length,
+  and the two mesh resources are confirmed distinct objects.
+  Each frame it does a **swept segment check** (previous position
   to current, not just a point test — at 900 m/s a bolt can cover 10-15m
   per physics frame, easily enough to tunnel through a ship between two
   sampled positions) against terrain, buildings, and — depending on
@@ -343,10 +358,40 @@ writes and wires up scenes/scripts directly.
   gameplay** — when something doesn't work in VR, there's no way to see an
   editor console mid-session, so status has to be visible in-headset to
   diagnose anything at all.
-- `scripts/engine_audio.gd` — two looping engine layers (`accelerate.mp3`
-  tied to forward-grip magnitude, `thrust.mp3` tied to roll/elevation/
+- `scripts/engine_audio.gd` — two looping engine layers (`accelerate.ogg`
+  tied to forward-grip magnitude, `thrust.ogg` tied to roll/elevation/
   reverse-grip), both always playing but faded by volume/pitch based on
   input, not started/stopped per event.
+  **Converted from `.mp3` to `.ogg`** — MP3 has an inherent encoder
+  delay/padding gap at the exact sample a loop restarts, and for an 11-27s
+  loop held for minutes at a time that gap was audible as a "pop" on every
+  cycle; on VBR-encoded files the loop-point math can also be imprecise
+  enough that playback occasionally reaches true end-of-stream and simply
+  doesn't restart, which read as "the acceleration audio stops even though
+  I'm still holding the trigger." Ogg Vorbis loops sample-accurately in
+  Godot — the same fix already used for `ship_engine.ogg` and the
+  mothership drone layers. `_process()` also defensively restarts either
+  player if it's ever found stopped while unpaused, as a second line of
+  defense against the same symptom recurring from any other cause.
+  Verified by directly reproducing the bug (force-stopping the player mid
+  simulated grip-hold) and confirming the watchdog brings it back within
+  two frames without the simulated trigger ever releasing.
+  `paused` (set by `game_flow.gd`, same convention as
+  `flight_controller.gd`/`weapon_system.gd`) pulls both layers' TARGET
+  volume to silent rather than leaving them at their last idle level —
+  without it the player's own engine hum was still clearly audible over the
+  MENU/DEAD/GAME_OVER black screens (0 grip is quiet, `-30dB`, not actually
+  silent), when those screens are meant to have only the main menu's own
+  music/chatter. `ship_engine_audio.gd`'s pooled proximity engines
+  (`FactionBattle/ShipEngineAudio`) get the identical `paused` treatment for
+  the same reason, but the effect there was worse: the player starts the
+  match parked on the mothership deck surrounded by up to 100 other parked
+  ships within `audible_radius`, so the whole pool ramped up almost
+  immediately and the menu screen was reported as "way too loud." Its
+  setter forces every voice silent and releases its target ship immediately
+  on `paused = true` rather than waiting for the normal gain ramp, and
+  `_process()` returns early while paused so the very next reassignment
+  pass can't immediately re-attach a nearby ship and ramp volume back up.
 
 ## Faction Battle — squadron Air Superiority mode
 
@@ -1010,6 +1055,54 @@ compensating flip.
   (the menu and `flare_system.gd` share that button), and you could keep
   firing missiles while sitting crashed waiting to respawn.
 
+### Lock reticle
+
+A visor-anchored HUD cursor that swoops in from an off-axis angle and spins
+around the designated target while the lock builds, settling to a steady
+ring and turning green the instant `locked` goes true — the lock-on reticle
+modern combat-flight games use (Ace Combat, Star Wars: Squadrons). Built
+and driven entirely inside `missile_system.gd`, the same convention
+`target_lock.gd` uses for its own targeting box/PIP ring/info label — no
+extra HUD node in `Player.tscn` to keep in sync.
+
+- **Positioning is visor-anchored**, the identical technique `target_lock.gd`
+  already uses: placed at a fixed `RETICLE_HUD_DISTANCE` (5m) from the
+  camera along the real direction to the target, so it tracks the right
+  screen position at any actual range without its apparent size changing.
+- **The "flies in from outside the screen" entrance is a direction slerp,
+  not screen-space UI math.** A start direction is picked by rotating the
+  true target direction off-axis by `RETICLE_FLY_IN_ANGLE` (38°) around a
+  random perpendicular, then every frame the reticle's direction eases
+  (quadratic ease-out) from that start toward the true target direction
+  over `RETICLE_FLY_IN_TIME` (0.3s). Composed with the fixed HUD distance,
+  that reads as the reticle swooping in from a wide angle and snapping onto
+  the target, reusing the same 3D placement math as the rest of the lock
+  HUD rather than adding a second system.
+- **Spin is a rigid-unit rotation about the reticle's own local Z**, same
+  reasoning as `target_lock.gd`'s targeting box: four bracket ticks
+  arranged in a ring are children of one root, and the whole root's
+  transform is set to `camera_basis * Basis(FORWARD, spin_angle)` each
+  frame — never per-tick billboarding, which would rotate each tick
+  independently around its own origin and break the ring shape.
+- **Spin speed decays to zero as the lock completes**
+  (`RETICLE_SPIN_SPEED_START` 7.5 rad/s -> `RETICLE_SPIN_SPEED_LOCKED` 0),
+  so spinning reads as "still working" and a steady ring reads as "ready" —
+  a second signal alongside the colour shift (red/orange while acquiring,
+  lerping to green as `lock_progress` approaches `lock_time`, with a small
+  cosmetic breathing pulse on the emission energy once locked).
+- **A fresh designation restarts the whole animation**, including switching
+  targets mid-hold — `tracked_target_index` changing is what triggers a new
+  fly-in and resets the spin, matching that a target switch is a fresh lock
+  attempt with no partial credit (same rule the audio/haptic feedback
+  already follows).
+- **Disappears the instant tracking stops** — trigger released, target
+  lost, or (transiently, before the next designation) mid-switch. Visibility
+  is driven directly off `tracked_target_index >= 0 and _battle.is_alive(...)`,
+  so there's no separate state to fall out of sync with the actual lock.
+- Verified headlessly end to end: designates, flies in and converges exactly
+  onto the true target direction, spins while acquiring, settles and turns
+  green on lock, and vanishes on release — 15/15 checks passing.
+
 ## Countermeasure flares
 
 Left controller's X button ("ax_button", free during normal flight —
@@ -1141,64 +1234,151 @@ All of it is first-pass and unverified in the headset, like every other
 visual tuning in this project. The exported roughness knobs and the
 Environment's grade values are the dials.
 
-### Altitude-driven fog (`atmosphere.gd`)
+### Altitude-driven cloud band + lit deck (`atmosphere.gd` + `cloud_deck.gd`)
 
-A thick smog layer that hides the skyline from above, which **thins to a
-controllable visibility once the ship is inside it**. This resolved the one
-real complaint about the original tall fog: the look was right, but flying
-into it meant seeing nothing at all.
+Fog as a genuine **cloud layer at a fixed absolute altitude, covering the
+entire map**, with clear air below it — not fog filling the sky down to the
+ground. Two pieces, each doing what it's good at:
 
-**Why that happened — it was the ramp, not the density.** Godot's depth fog
-ramps from `fog_depth_begin` (clear) to `fog_depth_end` (fully fogged), and
-those were 2500m and 70000m, tuned so a city 20km away sat in the right
-haze. Flying inside that layer, everything around the player was still tens
-of thousands of metres short of "clear", so the whole view saturated. The
-fog wasn't too dense; its ramp was calibrated for looking at things 20km
-away.
+- `atmosphere.gd` (`Atmosphere`) — the FEEL of being inside the layer:
+  drives depth fog's ramp from the player's absolute world Y, so visibility
+  only collapses while inside `[cloud_base_y, cloud_base_y +
+  cloud_thickness]`.
+- `cloud_deck.gd` (`CloudDeck`) — the VISIBLE layer: a single lit mesh at
+  the midpoint of that same band, alpha-blended with a soft noise pattern.
 
-So the ramp is driven by altitude instead of switching techniques. Measured
-response at the city (layer top 3200m, 500m transition band):
+**Why absolute altitude, not local-ground-relative.** An earlier version
+measured the band above LOCAL ground, resampled under the player every
+frame. Two real complaints came out of that: the visible layer read as "way
+too low" wherever the ground itself was low (since it was anchored to the
+terrain directly under the city, ~800m up), and it only covered wherever
+`cloud_deck.gd` had built geometry — the city footprint, not the rest of
+the 100km map ("I'd like that fog to cover the entire map"). A fixed world-Y
+band fixes both: it's the same altitude everywhere, mountains can poke up
+into it exactly like real cloud-capped peaks, and it needs no per-location
+terrain sampling in `_process()` at all.
 
-| altitude | state | clear to | opaque at | density |
-|---|---|---|---|---|
-| 5200m | above | 2500m | 70000m | 0.55 |
-| 3000m | entering | 1545m | 42180m | 0.71 |
-| 2700m and below | inside | 113m | 450m | 0.95 |
+**Why a mesh deck, not volumetric fog, for the visible layer.** This is the
+cheap way to get the one thing volumetric fog was wanted for — building
+shadows crossing the fog. Because the deck is an ordinary LIT surface
+(`shading_mode = PER_PIXEL`), the sun's shadow map applies to it exactly as
+it does to the ground, no froxel grid required. It's 1 draw call and
+~18k triangles for the *entire map*, visible from any distance (it's
+geometry, not a screen-space effect), and it cannot jitter because nothing
+is resampled as the camera moves.
 
-`interior_visibility` (450m) is the single dial for how far you can see in
-there; the clear bubble is a quarter of it. `fog_top` is synced onto
-`Environment.fog_height` in `_ready()` so there is one number to tune rather
-than two that can silently disagree.
+**The deck sits below the tallest towers on purpose** — shadows fall away
+from the light, and the overhead sun cannot cast onto anything above
+itself. With the deck at the band's midpoint, several hundred buildings
+punch through it (measured: 483 of 1466 at the earlier city-only sizing),
+and it's those protruding towers that lay real shadows across the cloud
+surface below. Soft edges are carried in vertex alpha (`_edge_alpha`, a
+radial fade using the larger of the two axis distances so the mesh's
+corners fade too), so the deck doesn't terminate in a hard rectangle
+against the sky at the map's own boundary.
 
-**Volumetric fog is deliberately not used**, despite being the more obvious
-answer. It was built and rejected in play twice, and both failures were
-structural rather than tuning:
+**The "spider web" bug.** The first cloud texture (noise frequency 0.9, 4
+fractal octaves, a gradient snapping from 0.0 to 0.12 alpha within the
+first 38% of its range) read as a lace/web pattern from above rather than
+fog. High-frequency fractal noise is naturally made of thin connected
+ridges, and a high-contrast alpha cutoff turns those ridges into visible
+tendrils instead of soft puffs. Fixed on both ends: the noise itself is
+lower frequency with fewer octaves (fewer, bigger blobs), and the gradient
+floor is raised with the whole ramp widened so there's no sharp edge for a
+ridge to snap into — density now fades gradually instead of tracing the
+noise's contour lines.
 
-- **Jitter.** Volumetric fog accumulates into a camera-aligned froxel grid.
-  Stretched across this 100x world it was **~187m per depth slice**
-  (12000m over 64 slices). Every camera movement resampled across those
-  enormous cells so the fog swam, with temporal reprojection fighting VR
-  head motion on top.
-- **Range.** The froxel grid only exists within `volumetric_fog_length` of
-  the camera, so the fog didn't appear until the player had nearly flown
-  into the city.
-- **Cost.** A 3D grid evaluated every frame, per eye in VR — and the cost
-  is the *grid*, not the amount of fog in it, so a thin layer is no cheaper
-  than a thick one.
+**A real node-ordering bug worth remembering.** `CloudDeck`'s original
+`_ready()` sampled `Terrain.get_height_at()` to place itself, but Godot
+calls `_ready()` parent-to-child, sibling-by-declaration-order — not
+dependency order — and `CloudDeck` was declared before `Terrain` in
+`Town.tscn`. The heightmap was still empty, `get_height_at()` returned 0
+for every sample, and the entire deck landed 55m above sea level instead of
+hundreds of metres above the actual ground. Moving to an absolute-altitude
+model (reading `Atmosphere.cloud_base_y` and `Terrain.world_size`, both
+plain exported values available immediately, not `_ready()`-computed state)
+removed the dependency entirely rather than just reordering the fix.
 
-Driving the ramp costs three property writes a frame and cannot jitter,
-because nothing is being resampled. All the `volumetric_fog_*` values
-remain in the Environment but `volumetric_fog_enabled` is absent, so no
-grid runs.
+**Measured response at the city** (band 3200-3800m, 220m soft edges):
 
-**Rejected approaches, kept because each failed structurally:** height fog
-couldn't hug ground that spans 2080m under one city (`fog_height` is an
-absolute world Y); drifting fog banks read as blobs arriving nearby; a
-player-following volumetric sheet fixed the blobs but put fog everywhere;
-city-only volumetric tiles still jittered and were invisible until close.
+| altitude | zone | clear to | opaque at |
+|---|---|---|---|
+| 4400m | above the clouds | 2500m | 70000m |
+| 1400m | below — clear | 2500m | 70000m |
+| 3200-3800m | **IN CLOUD** | 113m | 450m |
+
+Confirmed identical at a point 40km from the city, near the world edge —
+the band is genuinely global. `interior_visibility` (450m) is the single
+dial for "how blind am I inside the cloud"; `cloud_base_y`/`cloud_thickness`
+on `Atmosphere` are the only two numbers that define the band's real-world
+position, and `CloudDeck` reads them directly rather than duplicating them.
+
+**Volumetric fog is deliberately not used**, despite three separate
+attempts. All three failed structurally, not on tuning:
+
+- **Jitter.** The froxel grid stretched over this 100x world worked out to
+  **~187m per depth slice** (12000m over 64 slices). Every camera movement
+  resampled across those enormous cells and the fog visibly swam, with
+  temporal reprojection fighting VR head motion on top.
+- **Range.** The grid only exists within `volumetric_fog_length` of the
+  camera, so nothing was visible until the player had nearly flown into
+  whatever it covered.
+- **Cost is the grid itself, not the fog's thickness** — a 147,456-cell
+  (48x48x64) 3D grid evaluated every frame, per eye in VR, with a shadow
+  lookup per lit cell if shadows were wanted. A thin volumetric layer costs
+  exactly the same as a thick one, since the expense is the grid existing
+  at all.
+
+Driving the depth-fog ramp by altitude costs three property writes a frame
+and cannot jitter, because nothing is being resampled. The mesh deck is 1
+draw call. `volumetric_fog_enabled` is absent from the Environment, so no
+grid runs at all.
+
+**Rejected approaches kept in history rather than re-attempted:** plain
+height fog (monotonic, can't bound a slab, reaches the ground everywhere);
+drifting volumetric fog banks (read as blobs arriving nearby); a
+player-following volumetric sheet (fixed the blobs, put fog everywhere);
+city-only volumetric tiles (still jittered, invisible until close); a thin
+volumetric layer above the fog purely for shadows (costs the same as a
+thick one, for the reason above); ground-relative cloud placement (too low
+over low terrain, city-footprint-only coverage).
+
+### Overcast lighting under the deck
+
+`atmosphere.gd` also dims and cools the sun and ambient light for the whole
+space **underneath** the cloud band, since real direct sunlight is heavily
+diffused by an actual cloud layer and everything below was reading as full
+unobstructed sunshine under a sky that's nominally overcast.
+
+- Reuses the cloud band's own bounds for the transition rather than a
+  separate softness constant (`_overcast_factor`): 0.0 (untouched) at or
+  above the band's own TOP, ramping linearly to 1.0 (fully overcast) at the
+  band's BOTTOM, staying at 1.0 for everything further down. Physically,
+  sunlight is progressively cut off as you sink through an actual cloud
+  layer, so "how overcast does it feel" and "how far down through the
+  clouds have you come" are treated as the same question rather than two
+  separately tuned curves that could drift out of sync.
+  **Above the clouds is left completely untouched by construction** — this
+  was a direct requirement, verified bit-for-bit equal to the scene's
+  authored sun energy/colour/ambient at and above the band's top, not just
+  approximately close.
+- `overcast_sun_energy_scale` (0.32) and `overcast_ambient_energy_scale`
+  (0.55) scale `DirectionalLight3D.light_energy` and
+  `Environment.ambient_light_energy`; `overcast_sun_color` (a cool grey,
+  0.72/0.75/0.8) is lerped in alongside the energy scale, because dimming
+  alone still reads as "the same warm sun, just turned down" rather than a
+  genuinely different sky.
+- **Base values are captured from the scene's own authored numbers in
+  `_ready()`** (`_base_sun_energy`, `_base_sun_color`,
+  `_base_ambient_energy`), not hardcoded — if `Town.tscn`'s lighting is
+  ever retuned, "untouched" automatically follows the new baseline instead
+  of silently reverting to a stale constant.
+- Verified across the full range: exactly the base values above and at the
+  band's top, partial dimming partway down that's strictly between the base
+  and the floor, the exact configured floor once fully below, and full
+  recovery on climbing back above — 10/10 checks.
 
 ### Shadows
-
 `shadow_enabled` was **already true** on the Sun and had been the whole
 time — but Godot's default `directional_shadow_max_distance` is **100
 metres**, in a world where the city is 10800m across and buildings are

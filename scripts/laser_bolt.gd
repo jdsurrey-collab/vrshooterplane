@@ -40,6 +40,16 @@ extends Node3D
 @export var player_hit_radius: float = 4.0  # meters — approximates the player's ShipHull bounding sphere
 @export var fired_by_player: bool = true
 
+## Radius override for the PLAYER'S OWN bolts only — see _thin_player_mesh().
+## LaserBolt.tscn's baseline (top 0.05 / bottom 0.28) was sized for the
+## ambient mass-battle bolts, where hundreds need to read as visible tracers
+## from far across the city. Up close, in the player's own cockpit, that
+## same radius looked like "big tubes" rather than a laser. Aliens firing at
+## the player keep the scene's original thickness — this only reshapes the
+## mesh on bolts this script itself confirms came from the player's own gun.
+@export var player_bolt_top_radius: float = 0.015
+@export var player_bolt_bottom_radius: float = 0.055
+
 var _traveled: float = 0.0
 var _max_range: float = 0.0
 var _terrain: Node
@@ -53,8 +63,31 @@ func _ready() -> void:
 	get_tree().create_timer(lifetime).timeout.connect(queue_free)
 	_terrain = get_tree().current_scene.get_node_or_null("Terrain")
 	_battle = get_tree().current_scene.get_node_or_null("FactionBattle")
-	if not fired_by_player:
+	if fired_by_player:
+		_thin_player_mesh()
+	else:
 		_resolve_player_refs()
+
+
+## Swaps this ONE instance's mesh for a slimmer CylinderMesh, leaving
+## LaserBolt.tscn's shared SubResource (still used by every alien-fired
+## bolt) completely untouched — a brand new CylinderMesh is created and
+## assigned only to this node's MeshInstance3D, not edited in place, so
+## there's no risk of the change leaking into other bolts. Height and
+## radial_segments are read off the existing mesh rather than duplicated
+## here, so the length (already tuned for player-fire visibility/timing)
+## can't silently drift out of sync between the two.
+func _thin_player_mesh() -> void:
+	var mesh_instance := get_node_or_null("Mesh") as MeshInstance3D
+	if not mesh_instance or not (mesh_instance.mesh is CylinderMesh):
+		return
+	var base := mesh_instance.mesh as CylinderMesh
+	var thin := CylinderMesh.new()
+	thin.top_radius = player_bolt_top_radius
+	thin.bottom_radius = player_bolt_bottom_radius
+	thin.height = base.height
+	thin.radial_segments = base.radial_segments
+	mesh_instance.mesh = thin
 
 
 func _resolve_player_refs() -> void:

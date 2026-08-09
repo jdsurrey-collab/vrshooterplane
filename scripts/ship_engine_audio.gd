@@ -75,6 +75,25 @@ var _rescan_timer: float = 0.0
 
 var _stream: AudioStream
 
+## Set by game_flow.gd (same convention as flight_controller.gd/
+## weapon_system.gd) while the player is at a menu/death/game-over screen.
+## At MENU specifically the player sits parked on the friendly mothership
+## deck surrounded by up to 100 other parked ships within audible_radius —
+## every voice in the pool ramps up almost immediately, which is what made
+## the menu screen "way too loud" despite nothing actually flying yet.
+var paused: bool = false:
+	set(value):
+		paused = value
+		if paused:
+			# Force every voice silent immediately rather than waiting for
+			# the normal gain ramp — this is a hard scene-state change
+			# (arriving at a menu), not gameplay the ramp's smoothing exists
+			# to protect.
+			for v in _voices:
+				v["gain"] = SILENT_DB
+				(v["player"] as AudioStreamPlayer3D).volume_db = SILENT_DB
+				v["key"] = -1
+
 
 func _ready() -> void:
 	_battle = get_parent()
@@ -107,6 +126,13 @@ func _build_voices() -> void:
 
 
 func _process(delta: float) -> void:
+	if paused:
+		# The `paused` setter already forced every voice silent and released
+		# them once; returning here every frame is what keeps them that way
+		# — without it, the very next _reassign_voices()/_update_voices()
+		# call would immediately re-attach nearby parked ships and ramp
+		# volume straight back up.
+		return
 	if not _battle or not _player:
 		return
 

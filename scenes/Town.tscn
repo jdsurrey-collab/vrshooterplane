@@ -1,4 +1,4 @@
-[gd_scene load_steps=12 format=3 uid="uid://ceaei3xynkod2"]
+[gd_scene load_steps=13 format=3 uid="uid://ceaei3xynkod2"]
 
 [ext_resource type="PackedScene" uid="uid://c2dyoeywkgf30" path="res://scenes/Player.tscn" id="1_player"]
 [ext_resource type="Texture2D" uid="uid://neat1aug36g3" path="res://Assets/Skybox/panorama.tga" id="4_panorama"]
@@ -6,8 +6,9 @@
 [ext_resource type="Script" uid="uid://dl1fhj8eidhjb" path="res://scripts/faction_battle.gd" id="6_factionbattle"]
 [ext_resource type="Script" uid="uid://k20p8kbj87rh" path="res://scripts/city_generator.gd" id="7_citygen"]
 [ext_resource type="Script" uid="uid://valvihtvt6bi" path="res://scripts/game_flow.gd" id="8_gameflow"]
-[ext_resource type="Script" path="res://scripts/ship_engine_audio.gd" id="9_shipengineaudio"]
-[ext_resource type="Script" path="res://scripts/atmosphere.gd" id="10_atmosphere"]
+[ext_resource type="Script" uid="uid://bn6ebqm4ar41o" path="res://scripts/ship_engine_audio.gd" id="9_shipengineaudio"]
+[ext_resource type="Script" uid="uid://b60p1qhinfufc" path="res://scripts/atmosphere.gd" id="10_atmosphere"]
+[ext_resource type="Script" uid="uid://c5vu8gg2v8p2t" path="res://scripts/cloud_deck.gd" id="11_clouddeck"]
 
 [sub_resource type="PanoramaSkyMaterial" id="SkyMat_1"]
 panorama = ExtResource("4_panorama")
@@ -34,11 +35,10 @@ fog_mode = 1
 fog_light_color = Color(0.5, 0.51, 0.5, 1)
 fog_light_energy = 0.9
 fog_sun_scatter = 0.22
-fog_density = 0.55
+fog_density = 0.45
 fog_aerial_perspective = 0.55
 fog_sky_affect = 0.5
 fog_height = 3200.0
-fog_height_density = 0.02
 fog_depth_curve = 0.55
 fog_depth_begin = 2500.0
 fog_depth_end = 70000.0
@@ -81,6 +81,9 @@ script = ExtResource("5_terrain")
 world_size = 100000.0
 height_scale = 8000.0
 spawn_position_xz = Vector2(-16000, 0)
+
+[node name="CloudDeck" type="Node3D" parent="."]
+script = ExtResource("11_clouddeck")
 
 [node name="City" type="Node3D" parent="."]
 script = ExtResource("7_citygen")

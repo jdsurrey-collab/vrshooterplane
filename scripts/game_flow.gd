@@ -55,6 +55,8 @@ var _right_controller: XRController3D
 var _main_menu: Node
 var _death_screen: Node
 var _crash_handler: Node
+var _engine_audio: Node
+var _ship_engine_audio: Node
 
 var _confirm_button_was_down: bool = false
 
@@ -71,8 +73,11 @@ func _ready() -> void:
 		_main_menu = _player.get_node_or_null("XRCamera3D/MainMenu")
 		_death_screen = _player.get_node_or_null("XRCamera3D/DeathScreen")
 		_crash_handler = _player.get_node_or_null("CrashHandler")
+		_engine_audio = _player.get_node_or_null("EngineAudio")
 	_battle = get_node_or_null("../FactionBattle")
 	_terrain = get_node_or_null("../Terrain")
+	if _battle:
+		_ship_engine_audio = _battle.get_node_or_null("ShipEngineAudio")
 
 	_enter_menu()
 
@@ -119,6 +124,11 @@ func _confirm_death_choice() -> void:
 	_set_player_paused(false)
 
 
+## Also silences engine audio (the player's own idle hum, and the pooled
+## proximity engines from every ship on the mothership deck) — without this
+## the MENU/DEAD/GAME_OVER screens had audible engine noise even though
+## nothing is flying yet, when the intent for those screens is only the main
+## menu's own music/chatter.
 func _set_player_paused(value: bool) -> void:
 	if _flight_controller:
 		_flight_controller.paused = value
@@ -128,6 +138,10 @@ func _set_player_paused(value: bool) -> void:
 		_missile_system.paused = value
 	if _flare_system:
 		_flare_system.paused = value
+	if _engine_audio:
+		_engine_audio.paused = value
+	if _ship_engine_audio:
+		_ship_engine_audio.paused = value
 
 
 ## The player starts on the friendly mothership's flight deck alongside the
