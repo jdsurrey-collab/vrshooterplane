@@ -7,7 +7,7 @@
 [ext_resource type="Script" uid="uid://k20p8kbj87rh" path="res://scripts/city_generator.gd" id="7_citygen"]
 [ext_resource type="Script" uid="uid://valvihtvt6bi" path="res://scripts/game_flow.gd" id="8_gameflow"]
 [ext_resource type="Script" path="res://scripts/ship_engine_audio.gd" id="9_shipengineaudio"]
-[ext_resource type="Script" path="res://scripts/city_fog.gd" id="10_cityfog"]
+[ext_resource type="Script" path="res://scripts/atmosphere.gd" id="10_atmosphere"]
 
 [sub_resource type="PanoramaSkyMaterial" id="SkyMat_1"]
 panorama = ExtResource("4_panorama")
@@ -29,19 +29,19 @@ glow_intensity = 0.5
 glow_bloom = 0.06
 glow_blend_mode = 1
 glow_hdr_threshold = 1.15
+fog_enabled = true
 fog_mode = 1
 fog_light_color = Color(0.5, 0.51, 0.5, 1)
 fog_light_energy = 0.9
 fog_sun_scatter = 0.22
-fog_density = 0.425
+fog_density = 0.55
 fog_aerial_perspective = 0.55
 fog_sky_affect = 0.5
-fog_height = 830.0
-fog_height_density = 0.1
+fog_height = 3200.0
+fog_height_density = 0.02
 fog_depth_curve = 0.55
 fog_depth_begin = 2500.0
 fog_depth_end = 70000.0
-volumetric_fog_enabled = true
 volumetric_fog_density = 0.0
 volumetric_fog_albedo = Color(0.72, 0.74, 0.73, 1)
 volumetric_fog_gi_inject = 0.0
@@ -73,14 +73,14 @@ directional_shadow_max_distance = 14000.0
 
 [node name="Player" parent="." instance=ExtResource("1_player")]
 
+[node name="Atmosphere" type="Node" parent="."]
+script = ExtResource("10_atmosphere")
+
 [node name="Terrain" type="StaticBody3D" parent="."]
 script = ExtResource("5_terrain")
 world_size = 100000.0
 height_scale = 8000.0
 spawn_position_xz = Vector2(-16000, 0)
-
-[node name="CityFog" type="Node3D" parent="."]
-script = ExtResource("10_cityfog")
 
 [node name="City" type="Node3D" parent="."]
 script = ExtResource("7_citygen")
