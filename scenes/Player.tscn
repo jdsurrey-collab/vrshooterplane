@@ -178,6 +178,14 @@ text = "STICK LEFT / RIGHT TO SELECT
 RIGHT TRIGGER TO CONFIRM"
 font_size = 26
 
+[node name="Music" type="AudioStreamPlayer" parent="XRCamera3D/MainMenu"]
+stream = ExtResource("39_menumusic")
+volume_db = -8.0
+
+[node name="Chatter" type="AudioStreamPlayer" parent="XRCamera3D/MainMenu"]
+stream = ExtResource("40_menuchatter")
+volume_db = -14.0
+
 [node name="DeathScreen" type="Node3D" parent="XRCamera3D"]
 script = ExtResource("47_deathscreen")
 
@@ -191,10 +199,10 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.17, -0.55)
 pixel_size = 0.0016
 billboard = 1
 no_depth_test = true
-text = "DESTROYED"
 modulate = Color(1, 0.35, 0.3, 1)
-outline_size = 20
 outline_modulate = Color(0.15, 0, 0, 1)
+text = "DESTROYED"
+outline_size = 20
 
 [node name="RespawnLabel" type="Label3D" parent="XRCamera3D/DeathScreen"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.19, -0.02, -0.55)
@@ -217,18 +225,10 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.13, -0.55)
 pixel_size = 0.0012
 billboard = 1
 no_depth_test = true
+modulate = Color(0.72, 0.55, 0.55, 1)
 text = "STICK LEFT / RIGHT TO SELECT
 RIGHT TRIGGER TO CONFIRM"
 font_size = 26
-modulate = Color(0.72, 0.55, 0.55, 1)
-
-[node name="Music" type="AudioStreamPlayer" parent="XRCamera3D/MainMenu"]
-stream = ExtResource("39_menumusic")
-volume_db = -8.0
-
-[node name="Chatter" type="AudioStreamPlayer" parent="XRCamera3D/MainMenu"]
-stream = ExtResource("40_menuchatter")
-volume_db = -14.0
 
 [node name="OptionsMenu" type="Label3D" parent="XRCamera3D"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -0.5)
