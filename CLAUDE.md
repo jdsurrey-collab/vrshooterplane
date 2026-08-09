@@ -251,6 +251,25 @@ writes and wires up scenes/scripts directly.
   raising that gate silently makes ships fly through the tops of towers.
   `dome_radius` (8000m) is likewise sized against the city's ~7637m
   half-diagonal, which only holds while the footprint does.
+  **Buildings are batched into MultiMeshes, like the streets already were**
+  — this is what makes density affordable. Every building used to be its
+  own instantiated scene, so 745 buildings meant ~745 draw calls despite
+  the city being built from only **18 distinct meshes**. They're now
+  bucketed by mesh and emitted as `MultiMeshInstance3D`s: **~19 draw calls
+  for the entire city, down from ~746.** Collision is unaffected — each
+  building keeps its own `StaticBody3D` + `BoxShape3D` (with the scale baked
+  into the shape rather than applied to the body, so the collision shape
+  never carries a non-uniform scale, which Godot flags as unsupported).
+  `render_chunks` can split the batches into a spatial grid to restore
+  per-district frustum culling, but **defaults to 1 (no chunking) on
+  measured evidence**: the entire city's building geometry is only ~26,000
+  triangles (these models average ~35 triangles each), so there is nothing
+  for culling to save, and a 4x4 grid cost ~215 draw calls instead of 19 to
+  guard against a vertex cost that doesn't exist. Raise it only if the
+  building models are ever replaced with something genuinely heavy.
+  Net effect: **adding city density is now nearly free on the render side**
+  — more buildings means more instances in an existing batch, not more draw
+  calls.
 - `scripts/target_lock.gd` — left controller's **Y button**
   (`by_button`) **cycles** a lock through living aliens from
   `faction_battle.gd`'s roster, nearest-to-farthest
