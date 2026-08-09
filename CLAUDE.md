@@ -1121,41 +1121,32 @@ highlights and oversaturated mids. All of this lives in `Town.tscn`'s
 - **ACES filmic tonemapping** (`tonemap_mode = 3`, white 6.0). Single
   biggest change, and it costs nothing — it's the same fullscreen pass that
   was already running.
-- **Depth fog** rather than volumetric. `fog_mode = 1` (Depth) with an
-  explicit 1200m -> 24000m range, because exponential density is
-  unmanageable at this world scale (everything is 100x). Grey-green
-  (0.5, 0.51, 0.5) for smog, `fog_aerial_perspective` 0.55 for depth
-  cueing and `fog_sun_scatter` 0.22 for haze around the sun. Volumetric fog
-  was deliberately NOT used — it is expensive in VR stereo and this project
-  already has an open frame-rate question.
-- **Height fog is a thin ground blanket**: `fog_height` **830m** with a
-  steep `fog_height_density` of **0.1**. The density is what controls
-  thickness — it's the exponential falloff rate above `fog_height`, so a
-  large value gives a shallow layer (~30m) and a small one gives a tall
-  gradient. It was previously 0.0175 at 3200m, which is why fog was
-  swallowing the skyline rather than lying on the ground.
-- **KNOWN LIMITATION, measured.** `fog_height` is an ABSOLUTE world Y, and
-  the terrain under the city ranges from **506m to 2586m — a 2080m spread**
-  (mean 1090m, city centre 794m). A single absolute height therefore
-  *cannot* hug the ground everywhere: 830m sits about 30m over the city
-  centre, pools deeper in the low ground toward 506m, and is underground on
-  the high ground toward 2586m, which gets no blanket at all. This is
-  inherent to non-volumetric height fog and is not tunable away — the only
-  way to get a true terrain-following blanket is FogVolumes (see Rolling
-  fog banks below, currently disabled). If the uneven coverage becomes a
-  problem, the lever is `fog_height`: lower it toward 550m to favour the
-  valleys, raise it toward 1100m to favour the mean.
-- Both densities were **halved after the first look in the headset** —
-  `fog_density` 0.85 -> 0.425 and `fog_height_density` 0.035 -> 0.0175.
-- **FOG RANGE MUST EXCEED THE SPAWN DISTANCE.** The next look reported "I
-  can't see anything", and the cause was a scale mismatch rather than
-  density: the fog ran out at 24000m while the player spawns **22500m from
-  the city**, putting the entire objective at ~89% along the fog ramp —
-  fogged into flat colour before it could be seen at all. The range is now
-  **2500m -> 70000m**, which puts the city at ~30% and leaves it clearly
-  visible with atmospheric depth intact. Any future change to
-  `spawn_distance_from_city` has to be checked against `fog_depth_end`; the
-  two are coupled by what the player can actually see from the deck.
+- **World-wide fog is OFF.** `fog_enabled = false` and
+  `volumetric_fog_density = 0`. There is deliberately no atmospheric haze,
+  no height blanket and no fog over the mountains or the spawn areas —
+  fog exists only over the city (see City ground fog below). This was
+  arrived at by elimination across several live looks; the history is worth
+  keeping because each rejected approach failed for a structural reason,
+  not a tuning one:
+  - **Depth fog** (`fog_mode = 1`, an explicit metre range because
+    exponential density is unmanageable at 100x world scale) gave the
+    smoggy grade, but it is a per-pixel distance blend and **cannot receive
+    shadows** — nothing can ever cast into it.
+  - **Height fog** could not hug the ground: `fog_height` is an ABSOLUTE
+    world Y, and the terrain under the city measures **506m to 2586m, a
+    2080m spread**. One absolute height is ~30m over the city centre, pools
+    hundreds of metres deep in the valleys, and is underground on the high
+    ground. Not tunable away.
+  - **Drifting fog banks** read as blobs arriving nearby, because they were
+    discrete volumes recycling at 6.5km with nothing between them.
+  - **A player-following sheet** fixed the blobs but still put fog
+    everywhere, which was not wanted.
+  All of the Environment's fog values are still present and simply
+  disabled, so re-enabling any of it is one boolean.
+  One lesson worth keeping from that history: **any world-wide fog range
+  has to exceed the spawn distance.** An earlier setup ran out at 24000m
+  while the player spawns 22500m from the city, which fogged the entire
+  objective into flat colour and read as "I can't see anything".
 - **Glow** at low intensity (0.5, threshold 1.15, Screen blend). This is
   what makes the emissive lasers, engine trails and explosion fireballs
   read as hot rather than as flat coloured shapes. It's the one genuinely
@@ -1172,61 +1163,57 @@ All of it is first-pass and unverified in the headset, like every other
 visual tuning in this project. The exported roughness knobs and the
 Environment's grade values are the dials.
 
-### Shadowed ground fog sheet (`fog_banks.gd`)
+### City ground fog (`city_fog.gd`)
 
-**The reason this system exists is shadowing.** Depth fog is a per-pixel
-distance blend between scene colour and a fog colour — it has no notion of
-occlusion, so **nothing can ever cast a shadow into it**, at any setting.
-Volumetric fog accumulates density into a 3D froxel grid and lights each
-froxel through the scene's shadow maps, so a froxel inside a building's
-shadow is genuinely darker. That is the only way to get building shadows
-riding over the fog, which was a direct request.
+The only fog in the game. `CityFog` in `Town.tscn` builds a static grid of
+`FogVolume` tiles covering **exactly the city footprint and nothing else** —
+verified: 81 tiles spanning the city's 10800m, and **zero tiles within 3km
+of either spawn**.
 
-`scripts/fog_banks.gd` (`FogBanks` in `Town.tscn`) is a **continuous
-terrain-following sheet** of `FogVolume` tiles fed by a shared 3D
-`NoiseTexture3D`. `volumetric_fog_enabled` must be on for FogVolumes to
-render at all, but `volumetric_fog_density` stays at **0** so the
-volumetric pass contributes nothing globally and exists purely to draw this
-sheet — no double-fogging the whole world on top of the depth fog.
+Two specific jobs:
 
-**v1 was drifting banks and was rejected in play** — *"I can't see fog in
-the distance, but it's appearing next to me."* That was accurate: it was a
-handful of independent volumes drifting on random headings and recycling at
-6.5km, so they arrived as discrete blobs with nothing between them. v2
-replaces that with a fixed grid (`grid_radius` 4 -> **9x9 = 81 tiles**,
-13.5km of coverage) with no drift and no recycling. Measured:
+1. **Hiding the building foundations.** `city_generator.gd` places each
+   building at the terrain height sampled at its own *centre point*, but a
+   footprint can be 250m across on sloping ground, so the downhill side of
+   the base hangs in the air. A shallow fog layer at ground level masks
+   that seam. The alternative — conforming each building to the terrain —
+   would mean deforming meshes or sinking every building, and would break
+   the auto-sized collision boxes.
+2. **Catching shadows.** This is volumetric fog *specifically* because
+   depth fog cannot receive shadows at any setting. Volumetric fog
+   accumulates density into a froxel grid and lights each froxel through
+   the scene's shadow maps, so towers lay real shadow across the fog below
+   them. That was the whole point of the request.
 
-- Tiles overlap **188m per edge** and `edge_fade` 0.5 blends the seams, so
-  the sheet is continuous rather than blobby.
-- **Terrain draping is exact** — each tile samples the ground at its own
-  centre, giving 0.00m deviation from `terrain + height_above_terrain` and
-  5706m of drape across the sheet. `FogMaterial.height_falloff` (3.0)
-  concentrates density hard at the bottom of each 320m box, making a ~30m
-  blanket rather than filling the volume.
-- **World-locked, not welded to the camera.** The grid snaps to world-space
-  cells: moving the player a quarter tile moves the tiles 0m, and moving a
-  full tile steps them exactly 1500m. If tiles tracked the player
-  continuously the fog would slide along with your head.
-- **Shadow range must cover the froxel range**, or the far half of the fog
-  renders unshadowed. Currently 14000m of shadow against 12000m of froxel
-  grid — verified.
+Details that matter:
 
-**The 12km limit is inherent, not a bug.** Volumetric fog only exists
-inside the froxel grid, so this is ground fog you fly *into*, not something
-visible from the mothership 22km out; the depth fog covers distance haze
-past it.
-
-**This is the most expensive visual feature in the project** — a 3D froxel
-grid every frame with a shadow lookup per lit froxel, and in VR that
-happens per eye. `enabled` turns the sheet off in one click (also set
-`volumetric_fog_enabled = false` to stop paying for the empty grid). The
-froxel resolution is in `project.godot`
-(`rendering/environment/volumetric_fog/volume_size`, reduced to 48).
-**Check the HUD PERF line with this on before raising `grid_radius`.**
-
-Note the sheet and the height-fog blanket **overlap within 12km**, so
-near-field ground fog is the sum of both. If it reads too thick, drop
-`fog_height_density` — the sheet is the one carrying the shadowing.
+- **Static, so it costs nothing per frame.** Tiles are built once in
+  `_ready()` and never move — there is no `_process` on this node at all.
+  Earlier versions followed the player and had to reposition tiles every
+  frame.
+- The footprint is read from `CityGenerator`'s own `city_center`,
+  `grid_size` and `block_pitch` rather than hardcoded, so it stays in step
+  when the city's density is retuned (those two are deliberately inverse,
+  see the city section).
+- `fog_base_offset` (-25m) puts the bottom of each box *below* ground level
+  so there is no gap under the layer; verified at 0.00m deviation across
+  every tile. `height_falloff` (1.0) is the dial for how far up the fog
+  reaches — lower it if foundations still show through, raise it for a
+  tighter carpet.
+- Tiles are oversized 1.3x against their spacing so neighbours overlap, and
+  `edge_fade` blends the seams between tiles sitting at different terrain
+  heights.
+- **Shadow range must cover the froxel range**, or the far part of the fog
+  renders unshadowed: 14000m of shadow against `volumetric_fog_length`
+  12000m — verified.
+- The froxel grid only reaches `volumetric_fog_length` from the camera, so
+  this is visible as you approach and fly through the city, not from the
+  mothership 22km out. Inherent to the technique.
+- **Cost**: the froxel grid is evaluated every frame, per eye in VR,
+  whenever `volumetric_fog_enabled` is on. `CityFog.enabled` removes the
+  fog; also clearing the Environment's `volumetric_fog_enabled` reclaims
+  the grid itself. Froxel resolution is in `project.godot`
+  (`rendering/environment/volumetric_fog/volume_size`, reduced to 48).
 
 ### Shadows
 
