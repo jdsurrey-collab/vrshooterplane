@@ -1,4 +1,4 @@
-[gd_scene load_steps=32 format=3 uid="uid://c2dyoeywkgf30"]
+[gd_scene load_steps=40 format=3 uid="uid://c2dyoeywkgf30"]
 
 [ext_resource type="PackedScene" uid="uid://diyu06cw06syv" path="res://addons/godot-xr-tools/player/player_body.tscn" id="1_body"]
 [ext_resource type="PackedScene" uid="uid://clc5dre31iskm" path="res://addons/godot-xr-tools/xr/start_xr.tscn" id="4_startxr"]
@@ -27,6 +27,17 @@
 [ext_resource type="Script" uid="uid://cl6xo44r8wy6c" path="res://scripts/player_damage.gd" id="31_playerdamage"]
 [ext_resource type="Script" uid="uid://d1l2op8g0xd67" path="res://scripts/player_health_hud.gd" id="32_healthhud"]
 [ext_resource type="Script" uid="uid://dm3jd324byb6k" path="res://scripts/battle_hud.gd" id="33_battlehud"]
+[ext_resource type="Script" uid="uid://cjnnoa83vfh3f" path="res://scripts/missile_system.gd" id="35_missiles"]
+[ext_resource type="AudioStream" uid="uid://cycofup5n14hu" path="res://Assets/Audio/missile_launch.mp3" id="36_missilelaunch"]
+[ext_resource type="AudioStream" path="res://Assets/Audio/missile_lock.tres" id="37_missilelock"]
+[ext_resource type="Script" uid="uid://bhmsq6f7q4bn3" path="res://scripts/main_menu.gd" id="38_mainmenu"]
+[ext_resource type="AudioStream" uid="uid://ds1xaumhjrx6a" path="res://Assets/Audio/menu_music.mp3" id="39_menumusic"]
+[ext_resource type="AudioStream" uid="uid://b4jgxjkx1o86e" path="res://Assets/Audio/menu_radio_chatter.mp3" id="40_menuchatter"]
+[ext_resource type="Script" path="res://scripts/flare_system.gd" id="41_flares"]
+[ext_resource type="Script" path="res://scripts/kill_feed_hud.gd" id="42_killfeed"]
+[ext_resource type="Script" path="res://scripts/missile_alert.gd" id="43_missilealert"]
+[ext_resource type="AudioStream" path="res://Assets/Audio/missile_alert_1.mp3" id="44_alert1"]
+[ext_resource type="AudioStream" path="res://Assets/Audio/missile_alert_2.mp3" id="45_alert2"]
 
 [sub_resource type="CylinderMesh" id="CylinderMesh_arrow"]
 top_radius = 0.0
@@ -37,6 +48,14 @@ radial_segments = 8
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_arrow"]
 shading_mode = 0
 albedo_color = Color(1, 0.85, 0.1, 1)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_fade"]
+transparency = 1
+shading_mode = 0
+albedo_color = Color(0, 0, 0, 1)
+
+[sub_resource type="QuadMesh" id="QuadMesh_fade"]
+size = Vector2(1.2, 1.2)
 
 [sub_resource type="SphereMesh" id="SphereMesh_crosshair"]
 radius = 0.3
@@ -65,6 +84,16 @@ GUN: --"
 font_size = 30
 horizontal_alignment = 0
 script = ExtResource("15_hud")
+
+[node name="KillFeedHUD" type="Label3D" parent="XRCamera3D"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.22, -0.17, -0.4)
+pixel_size = 0.00018
+billboard = 1
+no_depth_test = true
+font_size = 26
+horizontal_alignment = 0
+vertical_alignment = 2
+script = ExtResource("42_killfeed")
 
 [node name="EnemyLocator" type="Node3D" parent="XRCamera3D"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.15, 0.05, -0.4)
@@ -97,6 +126,46 @@ FRIENDLY 50% - ENEMY 50%
 10:00"
 font_size = 30
 script = ExtResource("33_battlehud")
+
+[node name="MainMenu" type="Node3D" parent="XRCamera3D"]
+script = ExtResource("38_mainmenu")
+
+[node name="Fade" type="MeshInstance3D" parent="XRCamera3D/MainMenu"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -0.15)
+material_override = SubResource("StandardMaterial3D_fade")
+mesh = SubResource("QuadMesh_fade")
+
+[node name="Title" type="Label3D" parent="XRCamera3D/MainMenu"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.2, -0.55)
+pixel_size = 0.0015
+billboard = 1
+no_depth_test = true
+text = "ALIEN INVASION
+AIR SUPERIORITY"
+
+[node name="StartLabel" type="Label3D" parent="XRCamera3D/MainMenu"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.13, -0.02, -0.55)
+pixel_size = 0.0018
+billboard = 1
+no_depth_test = true
+text = "▶ START"
+font_size = 34
+
+[node name="QuitLabel" type="Label3D" parent="XRCamera3D/MainMenu"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.13, -0.02, -0.55)
+pixel_size = 0.0018
+billboard = 1
+no_depth_test = true
+text = "✕ QUIT"
+font_size = 34
+
+[node name="Music" type="AudioStreamPlayer" parent="XRCamera3D/MainMenu"]
+stream = ExtResource("39_menumusic")
+volume_db = -8.0
+
+[node name="Chatter" type="AudioStreamPlayer" parent="XRCamera3D/MainMenu"]
+stream = ExtResource("40_menuchatter")
+volume_db = -14.0
 
 [node name="OptionsMenu" type="Label3D" parent="XRCamera3D"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -0.5)
@@ -156,6 +225,29 @@ surface_material_override/0 = SubResource("StandardMaterial3D_crosshair")
 [node name="WeaponSystem" type="Node" parent="."]
 script = ExtResource("14_weapons")
 
+[node name="MissileSystem" type="Node" parent="."]
+script = ExtResource("35_missiles")
+
+[node name="LaunchAudio" type="AudioStreamPlayer3D" parent="MissileSystem"]
+stream = ExtResource("36_missilelaunch")
+max_distance = 800.0
+
+[node name="LockAudio" type="AudioStreamPlayer3D" parent="MissileSystem"]
+stream = ExtResource("37_missilelock")
+max_distance = 800.0
+
+[node name="FlareSystem" type="Node" parent="."]
+script = ExtResource("41_flares")
+
+[node name="MissileAlert" type="Node" parent="."]
+script = ExtResource("43_missilealert")
+
+[node name="AlertA" type="AudioStreamPlayer" parent="MissileAlert"]
+stream = ExtResource("44_alert1")
+
+[node name="AlertB" type="AudioStreamPlayer" parent="MissileAlert"]
+stream = ExtResource("45_alert2")
+
 [node name="EngineAudio" type="Node" parent="."]
 script = ExtResource("17_engineaudio")
 
@@ -170,6 +262,7 @@ script = ExtResource("31_playerdamage")
 
 [node name="CrashHandler" type="Node" parent="."]
 script = ExtResource("20_crash")
+respawn_position_xz = Vector2(-4000, 0)
 
 [node name="CrashAudio" type="AudioStreamPlayer" parent="CrashHandler"]
 stream = ExtResource("23_crashsound")

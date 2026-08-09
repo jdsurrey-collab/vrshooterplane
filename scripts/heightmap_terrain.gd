@@ -7,6 +7,13 @@ extends StaticBody3D
 @export var mesh_stride: int = 2
 @export var reposition_player: bool = true
 @export var player_spawn_height_offset: float = 102.0  # +100m above the old 2.0
+## World X/Z the player spawns at — matches faction_battle.gd's
+## friendly_spawn_center (city_center + (-10000, 0)) so the player launches
+## alongside their own squadron instead of alone at the world origin. Kept
+## as a plain exported value rather than read live from FactionBattle to
+## avoid a _ready()-order dependency between the two scripts; update this
+## by hand if the friendly spawn formula in faction_battle.gd ever changes.
+@export var spawn_position_xz: Vector2 = Vector2.ZERO
 
 var _height_grid: PackedFloat32Array
 var _sampled_w: int = 0
@@ -121,9 +128,9 @@ func _ready() -> void:
 		var player := get_node_or_null("../Player")
 		print("[Terrain] player found=", player)
 		if player:
-			var center_h: float = height_grid[(sampled_h / 2) * sampled_w + (sampled_w / 2)]
-			print("[Terrain] center_h=", center_h)
-			var target := Transform3D(Basis(), Vector3(0.0, center_h + player_spawn_height_offset, 0.0))
+			var spawn_h: float = get_height_at(spawn_position_xz.x, spawn_position_xz.y)
+			print("[Terrain] spawn_h=", spawn_h)
+			var target := Transform3D(Basis(), Vector3(spawn_position_xz.x, spawn_h + player_spawn_height_offset, spawn_position_xz.y))
 			var player_body := player.get_node_or_null("PlayerBody")
 			print("[Terrain] player_body found=", player_body, " has teleport=", player_body.has_method("teleport") if player_body else "n/a")
 			if player_body and player_body.has_method("teleport"):

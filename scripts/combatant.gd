@@ -19,5 +19,6 @@ var alive: bool = true
 var target_index: int = -1  # index into the opposing faction's array, or -1
 var targeting_player: bool = false
 var fire_cooldown: float = 0.0
+var missile_cooldown: float = 0.0  # aliens only — see faction_battle.gd's alien-fires-missiles-at-player logic
 var respawn_time_remaining: float = 0.0
 var wander_point: Vector3 = Vector3.ZERO

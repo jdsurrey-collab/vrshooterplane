@@ -22,6 +22,10 @@ const RESPAWN_DELAY := 10.0
 
 @export var terrain_path: NodePath = ^"../../Terrain"
 @export var respawn_height_offset: float = 102.0  # +100m above the old 2.0, matches the initial spawn height
+## Matches heightmap_terrain.gd's spawn_position_xz / faction_battle.gd's
+## friendly_spawn_center — respawning should put the player back with their
+## own squadron, not alone at the world origin.
+@export var respawn_position_xz: Vector2 = Vector2.ZERO
 
 ## Live status, readable by the HUD.
 var crashed: bool = false
@@ -88,10 +92,11 @@ func _crash(impact: Vector3) -> void:
 
 func _respawn() -> void:
 	crashed = false
-	var ground_height: float = _terrain.get_height_at(0.0, 0.0)
+	var ground_height: float = _terrain.get_height_at(respawn_position_xz.x, respawn_position_xz.y)
 	# Reset orientation too, not just position — otherwise you respawn still
 	# tumbling/upside-down from however you hit the ground.
-	_player.global_transform = Transform3D(Basis(), Vector3(0.0, ground_height + respawn_height_offset, 0.0))
+	_player.global_transform = Transform3D(
+			Basis(), Vector3(respawn_position_xz.x, ground_height + respawn_height_offset, respawn_position_xz.y))
 	if _flight_controller:
 		_flight_controller.paused = false
 	if _weapon_system:

@@ -2,7 +2,8 @@ extends Label3D
 
 ## Top-center readout for the faction battle (faction_battle.gd): the
 ## friendly/enemy Air Superiority split and the match countdown, plus a
-## VICTORY/DEFEAT/DRAW line once the match ends.
+## VICTORY/DEFEAT/DRAW line and a "return to menu" prompt once the match
+## ends (game_flow.gd reads the same right-trigger press to act on it).
 
 @export var battle_path: NodePath = ^"../../../FactionBattle"
 
@@ -36,5 +37,6 @@ func _process(_delta: float) -> void:
 			lines.append("DEFEAT")
 		else:
 			lines.append("DRAW")
+		lines.append("PULL TRIGGER FOR MAIN MENU")
 
 	text = "\n".join(lines)

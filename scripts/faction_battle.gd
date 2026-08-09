@@ -54,6 +54,12 @@ extends Node3D
 ## exclusion check, just a consequence of the split.
 
 const LASER_BOLT := preload("res://scenes/LaserBolt.tscn")
+const SHIP_EXPLOSION := preload("res://scenes/ShipExplosion.tscn")
+const FLARE := preload("res://scenes/Flare.tscn")
+const MISSILE := preload("res://scenes/Missile.tscn")
+const MISSILE_ENGAGE_RANGE := 2500.0  # longer stand-off than the ambient-bolt ENGAGE_RANGE — missiles are a real threat, not routine
+const MISSILE_COOLDOWN_MIN := 15.0
+const MISSILE_COOLDOWN_MAX := 30.0
 const SHIP_MESH_PATH := "res://Assets/EnemyShip/ship1.obj"
 const SHIP_SCALE := 2.0  # matches EnemyShip.tscn / Player.tscn's ShipHull
 
@@ -66,7 +72,10 @@ const BOLT_HIT_RADIUS := 4.0  # matches laser_bolt.gd's enemy_hit_radius
 const RETARGET_STAGGER := 8
 const GRID_CELL_SIZE := 450.0  # city_generator.gd's block_pitch — reused as the bolt-hit bucket size
 const ENGAGE_RANGE := 700.0
+const MAX_ACQUISITION_RANGE := 3000.0  # targets beyond this aren't acquired at all — see _retarget_if_needed
 const TURN_RATE := 0.6  # rad/s-ish steering response
+const MIN_GROUND_CLEARANCE := 200.0  # meters; pull up if under this, same convention as enemy_ai.gd
+const LOOKAHEAD_TIME := 3.0  # seconds ahead to also check clearance for
 const RESPAWN_DELAY := 8.0
 const SPAWN_SCATTER_RADIUS := 1500.0
 const SPAWN_ALT_MIN := 300.0
@@ -75,14 +84,15 @@ const SPAWN_ALT_MAX := 900.0
 const FRIENDLY_COLOR := Color(0.25, 0.65, 1.0)
 const ENEMY_COLOR := Color(0.85, 0.1, 0.85)
 
-@export var friendly_count: int = 200
-@export var enemy_count: int = 200
+@export var friendly_count: int = 100  # scaled down from 200 pending the FPS investigation — see CLAUDE.md's Known gaps
+@export var enemy_count: int = 100
 @export var dome_radius: float = 8000.0  # covers the city's ~7637m corner-to-corner footprint
 @export var dome_ceiling: float = 3500.0  # above terrain
 @export var match_duration: float = 600.0  # 10 minutes
 @export var aggro_radius_player: float = 2500.0
 @export var max_ambient_bolts: int = 180
 @export var enable_building_collision_check: bool = true
+@export var as_generation_multiplier: float = 0.01  # 10% of the previous 0.1 (i.e. 1% of the original 1 AS/sec per net ship)
 
 ## Live status, readable by battle_hud.gd / target_lock.gd / enemy_locator.gd.
 var air_superiority: float = 0.0  # -100 (enemy control) .. +100 (friendly control)
@@ -90,6 +100,19 @@ var match_time_remaining: float = 0.0
 var game_over: bool = false
 var winning_faction: int = -1  # Combatant.Faction.FRIENDLY/ENEMY, or -1 for a draw
 var dome_center: Vector3 = Vector3(6000.0, 0.0, 0.0)
+
+## Gated by game_flow.gd — false until the player confirms the start menu,
+## so ships spawn and sit visibly (frozen) rather than fighting/scoring
+## before the match has actually begun.
+var simulation_active: bool = false
+
+## Pre-joined recent-kills text ("who died and how"), read directly by
+## kill_feed_hud.gd — see _add_kill_feed_entry()/_update_kill_feed().
+var kill_feed_text: String = ""
+
+const KILL_FEED_MAX_ENTRIES := 6
+const KILL_FEED_ENTRY_LIFETIME := 8.0
+var _kill_feed_entries: Array = []  # Array of {"text": String, "age": float}
 
 var _friendlies: Array[Combatant] = []
 var _enemies: Array[Combatant] = []
@@ -130,22 +153,47 @@ func _ready() -> void:
 
 
 func _physics_process(delta: float) -> void:
-	if game_over:
-		return
+	if simulation_active and not game_over:
+		_update_match_timer(delta)
 
-	_update_match_timer(delta)
+		for i in _friendlies.size():
+			_update_combatant(_friendlies[i], i, _enemies, false, delta)
+		for i in _enemies.size():
+			_update_combatant(_enemies[i], i, _friendlies, true, delta)
 
-	for i in _friendlies.size():
-		_update_combatant(_friendlies[i], i, _enemies, false, delta)
-	for i in _enemies.size():
-		_update_combatant(_enemies[i], i, _friendlies, true, delta)
+		_rebuild_spatial_grids()
+		_update_ambient_bolts(delta)
+		_update_air_superiority(delta)
+		_update_kill_feed(delta)
+		_frame_counter += 1
 
-	_rebuild_spatial_grids()
-	_update_ambient_bolts(delta)
-	_update_air_superiority(delta)
+	# Always write transforms, even while paused (pre-match menu / post-match
+	# summary) — ships stay visibly present, just frozen, instead of vanishing
+	# because their MultiMesh instances were never given a transform.
 	_write_multimesh_transforms()
 
-	_frame_counter += 1
+
+## Called by game_flow.gd once the player confirms the start menu.
+func start_battle() -> void:
+	simulation_active = true
+
+
+## Called by game_flow.gd on "return to main menu" — puts the battle back
+## in its pre-match state (everyone alive and repositioned, AS/timer reset)
+## without a real scene reload.
+func reset_battle() -> void:
+	simulation_active = false
+	game_over = false
+	winning_faction = -1
+	air_superiority = 0.0
+	match_time_remaining = match_duration
+	_ambient_bolts.clear()
+	_kill_feed_entries.clear()
+	kill_feed_text = ""
+	for c in _friendlies:
+		_respawn_combatant(c, _friendly_spawn_center)
+	for c in _enemies:
+		_respawn_combatant(c, _enemy_spawn_center)
 
 
 # ---------------------------------------------------------------------------
@@ -237,6 +285,17 @@ func _update_combatant(c: Combatant, my_index: int, opposing: Array, can_target_
 
 	var desired_dir: Vector3 = (target_pos - c.position) if has_target else _wander_or_advance_direction(c)
 
+	# Ground avoidance overrides combat/wander steering when low or about to
+	# be low — same reactive-pull-up pattern enemy_ai.gd already uses for the
+	# player's own foe (current + lookahead clearance checks). The mass
+	# battle never got this ported over initially; ships flying level from
+	# spawn can clip real terrain elevation along the way otherwise (this
+	# map's mountains reach into the thousands of meters, confirmed via a
+	# live-tested run — flying level is not automatically safe here).
+	if _needs_pull_up(c):
+		var level_forward := desired_dir if desired_dir.length() > 0.01 else c.heading
+		desired_dir = (level_forward.normalized() + Vector3.UP * 1.5)
+
 	if desired_dir.length() > 0.01:
 		var new_heading := c.heading.slerp(desired_dir.normalized(), clampf(TURN_RATE * delta, 0.0, 1.0))
 		if new_heading.length() > 0.01:
@@ -245,7 +304,7 @@ func _update_combatant(c: Combatant, my_index: int, opposing: Array, can_target_
 	c.position += c.heading * c.speed * delta
 
 	if _check_ground_or_building(c):
-		_kill_combatant(c)
+		_kill_combatant(c, my_index, "crashed")
 		return
 
 	c.fire_cooldown -= delta
@@ -254,7 +313,17 @@ func _update_combatant(c: Combatant, my_index: int, opposing: Array, can_target_
 		if c.targeting_player:
 			_fire_at_player(c, target_pos)
 		else:
-			_spawn_ambient_bolt(c, c.faction, target_pos)
+			_spawn_ambient_bolt(c, my_index, c.faction, target_pos)
+
+	# Rare, longer-range, longer-cooldown missile shot at the player
+	# specifically — independent of the ambient laser cooldown above, so a
+	# player-targeting alien fires both its routine lasers and, much less
+	# often, an actual homing missile (see missile.gd's target_is_player
+	# mode). This is what gives flare_system.gd's X button a real target.
+	c.missile_cooldown -= delta
+	if c.targeting_player and c.missile_cooldown <= 0.0 and c.position.distance_to(target_pos) <= MISSILE_ENGAGE_RANGE:
+		c.missile_cooldown = randf_range(MISSILE_COOLDOWN_MIN, MISSILE_COOLDOWN_MAX)
+		_fire_missile_at_player(c, target_pos)
 
 
 func _retarget_if_needed(c: Combatant, my_index: int, opposing: Array, can_target_player: bool) -> void:
@@ -270,12 +339,13 @@ func _retarget_if_needed(c: Combatant, my_index: int, opposing: Array, can_targe
 
 	var best_index := -1
 	var best_dist := INF
+	var max_acquisition_sq := MAX_ACQUISITION_RANGE * MAX_ACQUISITION_RANGE
 	for j in opposing.size():
 		var o: Combatant = opposing[j]
 		if not o.alive:
 			continue
 		var d := c.position.distance_squared_to(o.position)
-		if d < best_dist:
+		if d < best_dist and d <= max_acquisition_sq:
 			best_dist = d
 			best_index = j
 
@@ -320,6 +390,24 @@ func _random_point_in_dome() -> Vector3:
 	return Vector3(x, ground + altitude, z)
 
 
+## Reactive pull-up check — true if current or projected (LOOKAHEAD_TIME
+## ahead, along the current heading) ground clearance is under
+## MIN_GROUND_CLEARANCE. Deliberately simple compared to enemy_ai.gd's
+## version (no ground_avoidance_enabled toggle, no engine-health gating —
+## nothing here has engine damage) but the same core current+lookahead
+## check, since that's the part that actually matters.
+func _needs_pull_up(c: Combatant) -> bool:
+	if not _terrain:
+		return false
+	var ground_here: float = _terrain.get_height_at(c.position.x, c.position.z)
+	if c.position.y - ground_here < MIN_GROUND_CLEARANCE:
+		return true
+
+	var lookahead_pos := c.position + c.heading * c.speed * LOOKAHEAD_TIME
+	var ground_ahead: float = _terrain.get_height_at(lookahead_pos.x, lookahead_pos.z)
+	return lookahead_pos.y - ground_ahead < MIN_GROUND_CLEARANCE
+
+
 func _check_ground_or_building(c: Combatant) -> bool:
 	if _terrain:
 		var ground_height: float = _terrain.get_height_at(c.position.x, c.position.z)
@@ -340,22 +428,69 @@ func _respawn_combatant(c: Combatant, spawn_center: Vector3) -> void:
 	var altitude := randf_range(SPAWN_ALT_MIN, SPAWN_ALT_MAX)
 
 	c.position = Vector3(x, ground + altitude, z)
-	c.heading = (dome_center - c.position).normalized()
+	# Horizontal-only heading toward the dome, at spawn altitude — NOT
+	# `(dome_center - c.position)` directly. dome_center.y is 0 (sea
+	# level), but the terrain here is genuinely mountainous (the friendly
+	# spawn point alone sits at ~2713m per a live-tested run), so aiming
+	# at dome_center's raw position would point every freshly-spawned ship
+	# thousands of meters downward and send it straight into the ground
+	# before it ever gets a chance to level out.
+	var level_dome_target := Vector3(dome_center.x, c.position.y, dome_center.z)
+	c.heading = (level_dome_target - c.position).normalized()
 	c.wander_point = c.position + c.heading * 500.0
 	c.health = MAX_HEALTH
 	c.alive = true
 	c.target_index = -1
 	c.targeting_player = false
 	c.fire_cooldown = randf_range(0.6, 1.4)
+	c.missile_cooldown = randf_range(MISSILE_COOLDOWN_MIN, MISSILE_COOLDOWN_MAX)
 	c.respawn_time_remaining = RESPAWN_DELAY
 
 
-func _kill_combatant(c: Combatant) -> void:
+func _kill_combatant(c: Combatant, index: int, cause: String) -> void:
 	c.alive = false
 	c.target_index = -1
 	c.targeting_player = false
 	c.respawn_time_remaining = RESPAWN_DELAY
-	CrashEffects.spawn_laser_impact(get_tree().current_scene, c.position)
+
+	var explosion := SHIP_EXPLOSION.instantiate()
+	get_tree().current_scene.add_child(explosion)
+	explosion.global_position = c.position
+
+	_add_kill_feed_entry("%s %s" % [_combatant_label(c.faction, index), cause])
+
+
+func _combatant_label(faction: int, index: int) -> String:
+	return ("FRIENDLY-%03d" % index) if faction == Combatant.Faction.FRIENDLY else ("HOSTILE-%03d" % index)
+
+
+func _add_kill_feed_entry(text: String) -> void:
+	_kill_feed_entries.append({"text": text, "age": 0.0})
+	if _kill_feed_entries.size() > KILL_FEED_MAX_ENTRIES:
+		_kill_feed_entries.pop_front()
+	_rebuild_kill_feed_text()
+
+
+func _update_kill_feed(delta: float) -> void:
+	var changed := false
+	var i := 0
+	while i < _kill_feed_entries.size():
+		var entry: Dictionary = _kill_feed_entries[i]
+		entry["age"] = (entry["age"] as float) + delta
+		if (entry["age"] as float) > KILL_FEED_ENTRY_LIFETIME:
+			_kill_feed_entries.remove_at(i)
+			changed = true
+		else:
+			i += 1
+	if changed:
+		_rebuild_kill_feed_text()
+
+
+func _rebuild_kill_feed_text() -> void:
+	var lines: Array = []
+	for entry in _kill_feed_entries:
+		lines.append(entry["text"])
+	kill_feed_text = "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -372,7 +507,25 @@ func _fire_at_player(c: Combatant, target_pos: Vector3) -> void:
 	bolt.fired_by_player = false
 
 
-func _spawn_ambient_bolt(c: Combatant, faction: int, target_pos: Vector3) -> void:
+## Rare, longer-range shot — see the missile_cooldown gate in
+## _update_combatant(). Reuses missile.gd's target_is_player mode exactly
+## as the player's own missile_system.gd uses it for aliens, just aimed
+## the other way.
+func _fire_missile_at_player(c: Combatant, target_pos: Vector3) -> void:
+	if not _player:
+		return
+	var dir := (target_pos - c.position).normalized()
+	var up_ref := Vector3.FORWARD if absf(dir.dot(Vector3.UP)) > 0.99 else Vector3.UP
+
+	var missile := MISSILE.instantiate()
+	get_tree().current_scene.add_child(missile)
+	missile.global_transform = Transform3D(Basis.looking_at(dir, up_ref), c.position)
+	missile.target_is_player = true
+	missile.player = _player
+	missile.battle = self
+
+
+func _spawn_ambient_bolt(c: Combatant, shooter_index: int, faction: int, target_pos: Vector3) -> void:
 	if _ambient_bolts.size() >= max_ambient_bolts:
 		return
 	var dir := (target_pos - c.position).normalized()
@@ -380,6 +533,7 @@ func _spawn_ambient_bolt(c: Combatant, faction: int, target_pos: Vector3) -> voi
 		"position": c.position,
 		"velocity": dir * BOLT_SPEED,
 		"faction": faction,
+		"shooter_index": shooter_index,
 		"life": BOLT_LIFETIME,
 	})
 
@@ -434,7 +588,8 @@ func _check_ambient_bolt_hit(b: Dictionary, prev_pos: Vector3, new_pos: Vector3)
 			continue
 		var closest := _closest_point_on_segment(o.position, prev_pos, new_pos)
 		if closest.distance_to(o.position) <= BOLT_HIT_RADIUS:
-			_apply_damage_internal(opposing, idx, BOLT_DAMAGE)
+			var shooter_label := _combatant_label(owner_faction, b["shooter_index"])
+			_apply_damage_internal(opposing, idx, BOLT_DAMAGE, "shot down by %s" % shooter_label)
 			return true
 	return false
 
@@ -478,13 +633,13 @@ func _grid_candidates(grid: Dictionary, pos: Vector3) -> Array:
 	return result
 
 
-func _apply_damage_internal(units: Array, index: int, amount: float) -> void:
+func _apply_damage_internal(units: Array, index: int, amount: float, cause: String) -> void:
 	var c: Combatant = units[index]
 	if not c.alive:
 		return
 	c.health -= amount
 	if c.health <= 0.0:
-		_kill_combatant(c)
+		_kill_combatant(c, index, cause)
 
 
 # ---------------------------------------------------------------------------
@@ -503,7 +658,7 @@ func _update_air_superiority(delta: float) -> void:
 		friendly_in_dome += 1
 	var enemy_in_dome := _count_in_dome(_enemies)
 
-	var net_rate := float(friendly_in_dome - enemy_in_dome)
+	var net_rate := float(friendly_in_dome - enemy_in_dome) * as_generation_multiplier
 	air_superiority = clampf(air_superiority + net_rate * delta, -100.0, 100.0)
 
 	if absf(air_superiority) >= 100.0 and not game_over:
@@ -592,6 +747,44 @@ func get_nearest_alive_alien(from_position: Vector3) -> int:
 	return best_index
 
 
+## All living aliens' indices, nearest-to-farthest from `from_position` —
+## used by target_lock.gd's Y-button cycling (each press steps to the next
+## entry in this order, wrapping around).
+func get_alive_aliens_sorted_by_distance(from_position: Vector3) -> Array:
+	var alive_indices: Array = []
+	for i in _enemies.size():
+		if _enemies[i].alive:
+			alive_indices.append(i)
+	alive_indices.sort_custom(func(a, b):
+		return from_position.distance_squared_to(_enemies[a].position) < from_position.distance_squared_to(_enemies[b].position))
+	return alive_indices
+
+
+## Nearest living alien within `max_angle` (radians) of `direction` from
+## `origin`, and within `max_range` — used by missile_system.gd's lock-on
+## (the player's aim cone), as opposed to get_nearest_alive_alien()'s pure
+## nearest-by-distance (used for gun hits / target_lock.gd's Y-button lock).
+func get_nearest_alive_alien_in_cone(origin: Vector3, direction: Vector3, max_angle: float, max_range: float) -> int:
+	var dir := direction.normalized()
+	var max_range_sq := max_range * max_range
+	var best_index := -1
+	var best_dist := INF
+	for i in _enemies.size():
+		var c: Combatant = _enemies[i]
+		if not c.alive:
+			continue
+		var to_target := c.position - origin
+		var dist_sq := to_target.length_squared()
+		if dist_sq < 0.0001 or dist_sq > max_range_sq:
+			continue
+		if to_target.normalized().angle_to(dir) > max_angle:
+			continue
+		if dist_sq < best_dist:
+			best_dist = dist_sq
+			best_index = i
+	return best_index
+
+
 func is_alive(index: int) -> bool:
 	return index >= 0 and index < _enemies.size() and _enemies[index].alive
 
@@ -609,7 +802,23 @@ func get_velocity(index: int) -> Vector3:
 	return c.heading * c.speed
 
 
-func apply_damage(index: int, amount: float) -> void:
+func apply_damage(index: int, amount: float, cause: String = "destroyed by PLAYER") -> void:
 	if index < 0 or index >= _enemies.size():
 		return
-	_apply_damage_internal(_enemies, index, amount)
+	_apply_damage_internal(_enemies, index, amount, cause)
+
+
+## Spawns a flare at the given alien's current position — called by
+## missile.gd the first time an incoming player missile enters the flare
+## countermeasure window, since aliens have no button to press themselves
+## (flare_system.gd is the equivalent player-side control, currently
+## unconsumed since nothing fires missiles at the player yet). Always
+## spawns (no limited flare supply was specified) — the missile itself
+## owns the redirect-chance roll.
+func try_deploy_alien_flare(index: int) -> Node3D:
+	if index < 0 or index >= _enemies.size() or not _enemies[index].alive:
+		return null
+	var flare := FLARE.instantiate()
+	get_tree().current_scene.add_child(flare)
+	flare.global_position = _enemies[index].position
+	return flare

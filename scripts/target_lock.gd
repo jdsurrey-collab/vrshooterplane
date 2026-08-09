@@ -1,12 +1,18 @@
 extends Node
 
 ## Target lock-on: the left controller's Y button ("by_button" — free to
-## use, nothing else on this project binds it) toggles a lock onto the
-## nearest living alien from faction_battle.gd's 200-ship roster (the old
-## single hardcoded HOSTILE-1 enemy is retired). Because this only ever
-## queries the alien-faction array, friendlies are structurally impossible
-## to lock onto — not an explicit exclusion check, just a consequence of
-## the two factions being separate arrays in the manager. While locked:
+## use, nothing else on this project binds it) CYCLES a lock through living
+## aliens from faction_battle.gd's 200-ship roster, nearest-to-farthest,
+## wrapping back to nearest after the last one (the old single hardcoded
+## HOSTILE-1 enemy is retired) — first press locks nearest, each press
+## after that steps to the next one out. There's no manual unlock; it only
+## drops automatically (target dies, or drifts past max_lock_range).
+## Because this only ever queries the alien-faction array, friendlies are
+## structurally impossible to lock onto — not an explicit exclusion check,
+## just a consequence of the two factions being separate arrays in the
+## manager. `missile_system.gd`'s homing lock now requires this Y-lock to
+## already be active on a target before it'll even start building its own
+## 5-second track — see that script. While locked:
 ## - A red targeting square, an info readout (name, distance, closing/
 ##   opening speed), and a yellow PIP ring (see below) are all shown.
 ## - Closing/opening speed is the rate of change of the actual distance
@@ -70,8 +76,8 @@ var _targeting_box: Node3D
 var _pip_ring: MeshInstance3D
 var _info_label: Label3D
 
-var _locked: bool = false
-var _locked_index: int = -1
+var locked: bool = false
+var locked_index: int = -1
 var _lock_button_was_down: bool = false
 var _previous_distance: float = -1.0
 
@@ -100,38 +106,48 @@ func _process(delta: float) -> void:
 		_toggle_lock()
 	_lock_button_was_down = lock_button_down
 
-	if not _locked or not _battle or not _camera:
+	if not locked or not _battle or not _camera:
 		return
-	if not _battle.is_alive(_locked_index):
+	if not _battle.is_alive(locked_index):
 		_set_locked(false)
 		return
 
 	_update_lock_display(delta)
 
 
+## Y no longer toggles lock off — it CYCLES through living aliens,
+## nearest-to-farthest, wrapping back to nearest after the last one.
+## Unlocking still happens automatically (target dies or drifts past
+## max_lock_range, see _update_lock_display()), just not via Y itself.
 func _toggle_lock() -> void:
-	if _locked:
-		_set_locked(false)
-		return
 	if not _battle:
 		return
-	var index: int = _battle.get_nearest_alive_alien(_player.global_position)
-	if index < 0:
+	var sorted: Array = _battle.get_alive_aliens_sorted_by_distance(_player.global_position)
+	if sorted.is_empty():
+		_set_locked(false)
 		return
-	_locked_index = index
-	_set_locked(true)
+
+	if not locked:
+		locked_index = sorted[0]
+		_set_locked(true)
+		return
+
+	var pos: int = sorted.find(locked_index)
+	var next_pos: int = (pos + 1) % sorted.size() if pos >= 0 else 0
+	locked_index = sorted[next_pos]
+	_previous_distance = -1.0
 
 
 func _set_locked(value: bool) -> void:
-	_locked = value
-	_targeting_box.visible = _locked
-	_pip_ring.visible = _locked
-	_info_label.visible = _locked
+	locked = value
+	_targeting_box.visible = locked
+	_pip_ring.visible = locked
+	_info_label.visible = locked
 	_previous_distance = -1.0
 
 
 func _update_lock_display(delta: float) -> void:
-	var target_pos: Vector3 = _battle.get_alien_position(_locked_index)
+	var target_pos: Vector3 = _battle.get_alien_position(locked_index)
 	var distance := _player.global_position.distance_to(target_pos)
 	if distance > max_lock_range:
 		_set_locked(false)
@@ -157,7 +173,7 @@ func _update_lock_display(delta: float) -> void:
 	elif rate < -0.5:
 		rate_text = "OPENING %d m/s" % roundi(-rate)
 
-	var target_name := "HOSTILE-%03d" % _locked_index
+	var target_name := "HOSTILE-%03d" % locked_index
 	_info_label.text = "%s\n%d m\n%s" % [target_name, roundi(distance), rate_text]
 	# Below the box in VIEW-space (camera's own local down), not world down —
 	# stays correctly positioned relative to the box regardless of head tilt.
@@ -173,7 +189,7 @@ func _update_pip(cam_pos: Vector3, target_pos: Vector3) -> void:
 	if gun_left and gun_right:
 		shooter_pos = (gun_left.global_position + gun_right.global_position) * 0.5
 
-	var target_vel: Vector3 = _battle.get_velocity(_locked_index)
+	var target_vel: Vector3 = _battle.get_velocity(locked_index)
 	var intercept := _solve_intercept(shooter_pos, target_pos, target_vel, bolt_speed)
 
 	var pip_dir := (intercept - cam_pos).normalized()

@@ -7,6 +7,15 @@ extends Label3D
 ## in the editor console. The FPS line exists mainly to tell "the game is
 ## actually dropping frames" apart from "the game is fine, something
 ## external (OBS, Virtual Desktop encoding) is the bottleneck."
+##
+## PERF line added after a live report of FPS collapsing to ~6 during the
+## 400-ship Faction Battle — headless testing can confirm simulation logic
+## is correct (see faction_battle.gd's header) but can never measure actual
+## GPU draw-call cost or VR stereo rendering time, so this is the only way
+## to tell whether a slowdown is CPU-side (PHYS ms, the AI/physics-query
+## loop) or GPU-side (DRAW, draw call count — the 400-ship MultiMeshes,
+## bolts, and any live ShipExplosion particle/light effects) without
+## guessing.
 
 var _flight_controller: Node
 var _weapon_system: Node
@@ -27,6 +36,13 @@ func _ready() -> void:
 func _process(_delta: float) -> void:
 	var fps_text := "FPS: %d" % Engine.get_frames_per_second()
 
+	var perf_text := "PROC:%.1fms PHYS:%.1fms DRAW:%d OBJ:%d" % [
+			Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0,
+			Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0,
+			Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME),
+			Performance.get_monitor(Performance.OBJECT_COUNT),
+	]
+
 	var speed_text := "SPEED: -- m/s"
 	if _flight_controller:
 		speed_text = "SPEED: %d m/s" % roundi(_flight_controller.get_speed())
@@ -44,7 +60,7 @@ func _process(_delta: float) -> void:
 	if _enemy_locator and _enemy_locator.distance_to_objective >= 0.0:
 		enemy_text = "CITY: %d m — follow the yellow arrow" % roundi(_enemy_locator.distance_to_objective)
 
-	var lines := [fps_text, speed_text, gun_text, enemy_text]
+	var lines := [fps_text, perf_text, speed_text, gun_text, enemy_text]
 	if _crash_handler and _crash_handler.crashed:
 		lines.append("CRASHED — respawning in %ds" % ceili(_crash_handler.respawn_time_remaining))
 
