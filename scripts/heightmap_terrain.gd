@@ -103,12 +103,23 @@ func _ready() -> void:
 
 	var mat := StandardMaterial3D.new()
 	mat.albedo_texture = load(texture_path)
-	mat.roughness = 1.0
+	# Not fully matte — a little specular response off the sun is what makes
+	# the ground read as damp rather than dusty, matching the wet/smoggy
+	# grade set up in Town.tscn's Environment.
+	mat.roughness = 0.72
+	mat.metallic_specular = 0.45
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	array_mesh.surface_set_material(0, mat)
 
 	var mesh_instance := MeshInstance3D.new()
 	mesh_instance.mesh = array_mesh
+	# RECEIVES shadows but never CASTS them. This mesh is a 513x513 grid —
+	# over half a million triangles, roughly ten times the entire city — so
+	# letting it into the shadow pass would dominate the cost of having
+	# shadows at all, purely to render mountain self-shadowing that is barely
+	# visible from a cockpit. Excluding it is the single biggest thing that
+	# makes building shadows affordable here. See Town.tscn's Sun.
+	mesh_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(mesh_instance)
 
 	var shape := HeightMapShape3D.new()

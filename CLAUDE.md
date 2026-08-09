@@ -236,12 +236,14 @@ writes and wires up scenes/scripts directly.
   blocks means shrinking the pitch rather than growing the grid outward
   (24 blocks at 450m and 30 at 360m cover identical ground). `skip_chance`
   is then tuned so the *building count* lands where intended rather than
-  the raw block count — currently **743 buildings, +52%** over the previous
-  ~490, with the footprint measured unchanged at 10489m x 10495m.
-  `height_multiplier` (2.0) scales **Y only**, so towers are twice as tall
-  without being wider (mean 267m, tallest 1242m); scaling all three axes
+  the raw block count. Current: **42 x 42 blocks at 257.14m pitch, ~1432
+  buildings**, up from 744 (which was itself up from ~490) — footprint
+  measured unchanged throughout.
+  `height_multiplier` (**3.0**) scales **Y only**, so towers get taller
+  without getting wider (tallest measured **1868m**); scaling all three axes
   would have widened every footprint, crowded the blocks and effectively
-  grown the city. The `CollisionShape3D` is a child of the scaled
+  grown the city. `building_jitter` was reduced to 20m alongside the tighter
+  257m blocks so buildings stay off the streets. The `CollisionShape3D` is a child of the scaled
   `StaticBody3D`, so it inherits the non-uniform scale and collision stays
   correct for free.
   **Coupled to `faction_battle.gd`'s `MAX_BUILDING_HEIGHT`** (now 1400m):
@@ -270,6 +272,18 @@ writes and wires up scenes/scripts directly.
   Net effect: **adding city density is now nearly free on the render side**
   — more buildings means more instances in an existing batch, not more draw
   calls.
+  **The FBX import does not bring the building textures across.** Every
+  model imports with a material whose `albedo_texture` is null and whose
+  `albedo_color` is a flat off-white (0.906, 0.906, 0.906) — which is why
+  the city rendered as untextured white blocks for a long time despite all
+  eight textures sitting in `Assets/City/Textures` the whole time. The
+  meshes themselves carry correct UVs; only the material link is missing.
+  This is a common Godot FBX limitation (texture references in FBX are
+  frequently embedded or absolute authoring-tool paths that don't resolve).
+  `_material_for_scene()` rebuilds the material and recovers the texture
+  from the model path by family — `Models/building_04.2.fbx` ->
+  `Textures/building_04.png` — rather than a hand-maintained table.
+  Verified: 18 of 18 batches textured, all 8 textures in use.
 - `scripts/target_lock.gd` — left controller's **Y button**
   (`by_button`) **cycles** a lock through living aliens from
   `faction_battle.gd`'s roster, nearest-to-farthest
@@ -1095,6 +1109,74 @@ this is a cockpit alert, not a world-space effect. Processed once via
 volume trimmed down: `bass=g=8:f=100:w=0.5,lowpass=f=3200,aecho=0.8:0.7:
 60:0.25,volume=0.7`, saved as `Assets/Audio/missile_alert_1.mp3` /
 `missile_alert_2.mp3`.
+
+## Visual grade — smoggy, wet, and not cartoony
+
+The scene originally had a nearly empty `Environment`: no tonemapping, no
+fog, no glow, no colour grading. Godot's default `tonemap_mode` is **Linear**,
+which is exactly what "it looks sort of cartoony" is — flat, clipped
+highlights and oversaturated mids. All of this lives in `Town.tscn`'s
+`Env_1` sub-resource.
+
+- **ACES filmic tonemapping** (`tonemap_mode = 3`, white 6.0). Single
+  biggest change, and it costs nothing — it's the same fullscreen pass that
+  was already running.
+- **Depth fog** rather than volumetric. `fog_mode = 1` (Depth) with an
+  explicit 1200m -> 24000m range, because exponential density is
+  unmanageable at this world scale (everything is 100x). Grey-green
+  (0.5, 0.51, 0.5) for smog, `fog_aerial_perspective` 0.55 for depth
+  cueing and `fog_sun_scatter` 0.22 for haze around the sun. Volumetric fog
+  was deliberately NOT used — it is expensive in VR stereo and this project
+  already has an open frame-rate question.
+- **Height fog** (`fog_height` 2600m, density 0.035) pools the smog low so
+  the city sits in it. Kept subtle since the right height depends on local
+  terrain elevation, which varies by kilometres across this map.
+- **Glow** at low intensity (0.5, threshold 1.15, Screen blend). This is
+  what makes the emissive lasers, engine trails and explosion fireballs
+  read as hot rather than as flat coloured shapes. It's the one genuinely
+  non-free item here (several half-res blur passes).
+- **Colour grading** — contrast 1.14, saturation **0.78**, ambient dropped
+  1.2 -> 0.85. The desaturation is most of the "Skyrim" character.
+- **Wet surfaces are material, not post.** Roughness was lowered across the
+  board so things catch a specular highlight off the sun instead of reading
+  as matte cardboard: buildings 0.5 (`building_roughness`), roads 0.28 with
+  `metallic_specular` 0.85 (`road_roughness` — wet asphalt is the shiniest
+  thing down there), terrain 1.0 -> 0.72.
+
+All of it is first-pass and unverified in the headset, like every other
+visual tuning in this project. The exported roughness knobs and the
+Environment's grade values are the dials.
+
+### Shadows
+
+`shadow_enabled` was **already true** on the Sun and had been the whole
+time — but Godot's default `directional_shadow_max_distance` is **100
+metres**, in a world where the city is 10800m across and buildings are
+hundreds of metres tall. Shadows were being rendered for a 100m bubble
+around the camera and were effectively invisible. That default is the bug,
+not the shadow setting.
+
+Made affordable rather than merely enabled:
+
+- `directional_shadow_max_distance` 100m -> **6000m**, and
+  `directional_shadow_mode = 0` (Orthogonal, a **single** split) — the
+  cheapest directional shadow Godot offers, one shadow render instead of
+  PSSM's four. At 6000m over a 4096 map that's ~1.5m per texel, which is
+  ample for buildings this size.
+- `shadow_bias` 1.5 / `shadow_normal_bias` 12.0, scaled up hard from the
+  defaults because the depth range is 60x larger than the value they were
+  tuned for. Acne vs peter-panning is the thing to watch in the headset.
+- **The terrain is excluded from the shadow pass**
+  (`SHADOW_CASTING_SETTING_OFF`, still receives). It is a 513x513 grid —
+  **524,288 triangles, roughly ten times the entire city** — so letting it
+  cast would dominate the whole cost of having shadows, purely for mountain
+  self-shadowing barely visible from a cockpit. This single exclusion is
+  what makes building shadows cheap.
+- Ships, ambient bolts and street tiles are also excluded — 200 small
+  fast-moving ships would re-render into the shadow map every frame for
+  shadows a few pixels across, and flat road slabs have nothing to cast.
+- Measured result: **the shadow pass renders ~50,000 triangles instead of
+  ~574,000.**
 
 ## Proximity engine audio
 

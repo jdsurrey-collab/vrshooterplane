@@ -35,6 +35,7 @@ extends Node3D
 ## hitting the ground.
 
 const BUILDING_COLLISION_LAYER := 10
+const BUILDING_TEXTURE_DIR := "res://Assets/City/Textures/"
 
 const REGULAR_BUILDINGS := [
 	preload("res://Assets/City/Models/building_01.1.fbx"),
@@ -66,20 +67,19 @@ const LANDMARK_BUILDINGS := [
 ## `grid_size * block_pitch` (10800m across, unchanged since the first
 ## version), so packing more blocks in means shrinking the block pitch by
 ## the same factor rather than extending the grid outward. 24 blocks at
-## 450m and 30 blocks at 360m cover exactly the same ground.
+## 450m, 30 at 360m and 42 at 257.14m all cover exactly the same ground.
 ##
 ## Changing either of these WITHOUT compensating the other changes the
 ## city's real size, which would move the goalposts for
 ## `FactionBattle.dome_radius` (8000m, sized against the city's ~7637m
 ## half-diagonal).
-@export var grid_size: int = 30  # grid_size x grid_size city blocks
-@export var block_pitch: float = 360.0  # distance between street centerlines
+@export var grid_size: int = 42  # grid_size x grid_size city blocks
+@export var block_pitch: float = 257.14  # distance between street centerlines (42 * 257.14 = 10800m, the unchanged footprint)
 @export var road_width: float = 30.0
-@export var building_jitter: float = 30.0  # small — buildings should still read as grid-aligned, and blocks are tighter now
+@export var building_jitter: float = 20.0  # reduced with the tighter 257m blocks so buildings stay off the streets
 ## Tuned alongside grid_size so the actual building count lands on the
-## intended increase rather than the raw block count: 30x30 at 0.18 skip
-## gives ~738 buildings against the previous 24x24 at 0.15's ~490, i.e.
-## +50%.
+## intended increase rather than the raw block count. 42x42 at 0.18 skip
+## gives ~1470 buildings; the previous 30x30 gave ~740 and 24x24 gave ~490.
 @export var skip_chance: float = 0.18  # leave some blocks empty (plazas/lots)
 @export var landmark_chance: float = 0.08  # fraction of filled blocks that go supertall
 @export var regular_scale_min: float = 1.0
@@ -97,8 +97,8 @@ const LANDMARK_BUILDINGS := [
 ## above which its ships and bolts skip their building-collision physics
 ## query entirely. If the tallest building here can exceed that value,
 ## things fly through the tops of towers. Tallest right now: ~125m base *
-## 5.0 * 2.0 = ~1250m.
-@export var height_multiplier: float = 2.0
+## 5.0 landmark scale * 3.0 height multiplier = ~1830m measured.
+@export var height_multiplier: float = 3.0
 
 ## Buildings are drawn as batched MultiMeshes, optionally split into a
 ## render_chunks x render_chunks grid. Higher values improve frustum culling
@@ -107,13 +107,20 @@ const LANDMARK_BUILDINGS := [
 ## no per-district culling.
 ##
 ## DEFAULT IS 1, and that is a measured decision rather than a guess: the
-## entire city's building geometry is only ~26,000 triangles (these models
+## entire city's building geometry is only ~51,000 triangles (these models
 ## average ~35 triangles each — they are very low-poly boxes). Submitting
 ## all of it every frame costs essentially nothing, so there is nothing for
 ## culling to save, and 4x4 chunking was costing ~215 draw calls to protect
 ## against a vertex cost that doesn't exist. Raise this only if the building
 ## models are ever replaced with something genuinely heavy.
 @export var render_chunks: int = 1
+
+@export_group("Surface look")
+## Buildings, roads and terrain are all deliberately on the smooth side of
+## the roughness range — that specular response off the sun is what reads as
+## rain-slicked rather than matte. Raise toward 1.0 for a dry city.
+@export var building_roughness: float = 0.5
+@export var road_roughness: float = 0.28  # wet asphalt is the shiniest thing down there
 
 var _terrain: Node
 
@@ -134,8 +141,12 @@ func _generate_roads() -> void:
 	var half_total := grid_size * block_pitch * 0.5
 
 	var road_material := StandardMaterial3D.new()
-	road_material.albedo_color = Color(0.08, 0.08, 0.09)
-	road_material.roughness = 0.9
+	road_material.albedo_color = Color(0.055, 0.058, 0.065)
+	# Wet asphalt: dark and smooth, so the streets throw a long specular
+	# streak back at the sun instead of reading as flat grey tape.
+	road_material.roughness = road_roughness
+	road_material.metallic = 0.0
+	road_material.metallic_specular = 0.85
 
 	var tile_mesh := BoxMesh.new()
 	tile_mesh.size = Vector3(1.0, 0.15, 1.0)  # unit size — scaled per-instance below
@@ -174,6 +185,10 @@ func _generate_roads() -> void:
 
 	var mmi := MultiMeshInstance3D.new()
 	mmi.multimesh = multimesh
+	# Street tiles are flat slabs lying on the ground — they receive the
+	# buildings' shadows but have nothing meaningful to cast, so keeping
+	# 1860+ of them out of the shadow pass is free savings.
+	mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(mmi)
 
 
@@ -241,7 +256,8 @@ func _generate_buildings() -> void:
 			# --- rendering (batched) ---
 			var chunk := _chunk_index(x, z, half_total)
 			for part in (model["parts"] as Array):
-				_bucket_instance(chunk, part, world_xform * (part["xform"] as Transform3D))
+				_bucket_instance(chunk, part, model["material"],
+						world_xform * (part["xform"] as Transform3D))
 
 
 # ---------------------------------------------------------------------------
@@ -294,12 +310,43 @@ func _model_for(scene: PackedScene) -> Dictionary:
 	var model := {
 		"parts": [],
 		"aabb": _compute_local_aabb(instance),
+		"material": _material_for_scene(scene),
 	}
 	_collect_parts(instance, Transform3D(), model["parts"])
 	instance.free()
 
 	_model_cache[key] = model
 	return model
+
+
+## THE FBX IMPORT DOES NOT BRING THE TEXTURES ACROSS. Every building model
+## imports with a material whose albedo_texture is null and whose
+## albedo_color is a flat off-white (0.906, 0.906, 0.906) — which is why the
+## city rendered as untextured white blocks despite the textures being
+## present in Assets/City/Textures the whole time. The meshes themselves do
+## carry correct UVs; only the material link is missing. This is a common
+## Godot FBX limitation (texture references in FBX are frequently embedded
+## or absolute paths from the authoring tool and don't resolve on import).
+##
+## The filenames map one-to-one by family, so the texture is recovered from
+## the model path rather than hand-maintained per building:
+##   Models/building_04.2.fbx  ->  Textures/building_04.png
+func _material_for_scene(scene: PackedScene) -> StandardMaterial3D:
+	var family := scene.resource_path.get_file().split(".")[0]  # "building_04"
+	var texture_path := BUILDING_TEXTURE_DIR + family + ".png"
+	if not ResourceLoader.exists(texture_path):
+		push_warning("CityGenerator: no texture found at %s" % texture_path)
+		return null
+
+	var mat := StandardMaterial3D.new()
+	mat.albedo_texture = load(texture_path)
+	# Low roughness gives the wet, rain-slicked sheen — buildings catch a
+	# specular highlight from the sun instead of reading as flat matte
+	# cardboard. See building_roughness.
+	mat.roughness = building_roughness
+	mat.metallic = 0.0
+	mat.metallic_specular = 0.6
+	return mat
 
 
 func _collect_parts(node: Node, xform: Transform3D, parts: Array) -> void:
@@ -325,13 +372,17 @@ func _chunk_index(x: float, z: float, half_total: float) -> int:
 	return cz * render_chunks + cx
 
 
-func _bucket_instance(chunk: int, part: Dictionary, xform: Transform3D) -> void:
+func _bucket_instance(chunk: int, part: Dictionary, material: Material, xform: Transform3D) -> void:
 	var mesh: Mesh = part["mesh"]
 	var key := "%d|%d" % [chunk, mesh.get_instance_id()]
 	if not _instance_buckets.has(key):
+		# The rebuilt textured material wins over whatever the FBX import
+		# produced (a textureless white), falling back to any override the
+		# source scene actually set.
+		var chosen: Material = material if material != null else part["override"]
 		_instance_buckets[key] = {
 			"mesh": mesh,
-			"override": part["override"],
+			"override": chosen,
 			"xforms": [],
 		}
 	((_instance_buckets[key] as Dictionary)["xforms"] as Array).append(xform)

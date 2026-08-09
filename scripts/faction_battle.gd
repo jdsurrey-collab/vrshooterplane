@@ -160,7 +160,7 @@ const RESPAWN_DELAY := 8.0
 ## `height_multiplier` (2.0) = ~1250m, hence 1400m with margin. This value
 ## was 700m while buildings were half their current height — if the city's
 ## height settings change again, this has to move with them.
-const MAX_BUILDING_HEIGHT := 1400.0
+const MAX_BUILDING_HEIGHT := 2000.0
 
 ## Air Superiority is a slow scalar (as_generation_multiplier is 0.01) and
 ## counting every ship in the dome costs a terrain sample each. Recomputing
@@ -425,6 +425,9 @@ func _build_multimesh_nodes() -> void:
 	bolt_mat.emission_energy_multiplier = 6.0
 
 	_bolt_mmi = MultiMeshInstance3D.new()
+	# Bolts are unshaded emissive tracers — a shadow from one would be both
+	# wrong and a per-frame cost on hundreds of moving instances.
+	_bolt_mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(_bolt_mmi)
 	var bolt_multimesh := MultiMesh.new()
 	bolt_multimesh.transform_format = MultiMesh.TRANSFORM_3D
@@ -464,6 +467,10 @@ func _mothership_for(faction: int) -> Node3D:
 
 func _make_ship_multimesh(mesh: Mesh, tint: Color) -> MultiMeshInstance3D:
 	var mmi := MultiMeshInstance3D.new()
+	# 200 small, fast-moving ships would re-render into the shadow map every
+	# frame for shadows that are a few pixels across from any distance the
+	# player actually sees them at. Not worth the pass.
+	mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(mmi)
 
 	var mat := StandardMaterial3D.new()
