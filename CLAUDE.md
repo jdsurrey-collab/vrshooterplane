@@ -1132,10 +1132,16 @@ highlights and oversaturated mids. All of this lives in `Town.tscn`'s
   the city sits in it. Kept subtle since the right height depends on local
   terrain elevation, which varies by kilometres across this map.
 - Both densities were **halved after the first look in the headset** —
-  `fog_density` 0.85 -> 0.425 and `fog_height_density` 0.035 -> 0.0175. Only
-  the densities moved; the depth range (1200m -> 24000m) and curve were left
-  alone, so the fog reaches just as far, it's simply half as opaque. Those
-  two values are the thickness dial if it needs moving again.
+  `fog_density` 0.85 -> 0.425 and `fog_height_density` 0.035 -> 0.0175.
+- **FOG RANGE MUST EXCEED THE SPAWN DISTANCE.** The next look reported "I
+  can't see anything", and the cause was a scale mismatch rather than
+  density: the fog ran out at 24000m while the player spawns **22500m from
+  the city**, putting the entire objective at ~89% along the fog ramp —
+  fogged into flat colour before it could be seen at all. The range is now
+  **2500m -> 70000m**, which puts the city at ~30% and leaves it clearly
+  visible with atmospheric depth intact. Any future change to
+  `spawn_distance_from_city` has to be checked against `fog_depth_end`; the
+  two are coupled by what the player can actually see from the deck.
 - **Glow** at low intensity (0.5, threshold 1.15, Screen blend). This is
   what makes the emissive lasers, engine trails and explosion fireballs
   read as hot rather than as flat coloured shapes. It's the one genuinely
@@ -1163,11 +1169,19 @@ not the shadow setting.
 
 Made affordable rather than merely enabled:
 
-- `directional_shadow_max_distance` 100m -> **6000m**, and
-  `directional_shadow_mode = 0` (Orthogonal, a **single** split) — the
-  cheapest directional shadow Godot offers, one shadow render instead of
-  PSSM's four. At 6000m over a 4096 map that's ~1.5m per texel, which is
-  ample for buildings this size.
+- `directional_shadow_max_distance` 100m -> **14000m**, and
+  `directional_shadow_mode = 1` (PSSM, **2 splits**) so the near split keeps
+  resolution on whatever you're flying past while the far split reaches
+  across the city. Started at 6000m/Orthogonal for cheapness, but 6000m
+  turned out to be shorter than the distances that matter here — the city
+  is 22500m from spawn, so nothing cast a shadow anywhere in view and it
+  read as "no shadows".
+- **Shadows deliberately do NOT reach the city from spawn**, and chasing
+  that would be wrong: at 22km a building's shadow is far below one pixel,
+  and covering it would mean ~12m shadow texels plus worse acne everywhere
+  else. Shadows fade in as you approach and are crisp where the fighting
+  actually happens. The immediately visible one at spawn is the
+  mothership's own shadow cast onto the terrain 3822m below it.
 - `shadow_bias` 1.5 / `shadow_normal_bias` 12.0, scaled up hard from the
   defaults because the depth range is 60x larger than the value they were
   tuned for. Acne vs peter-panning is the thing to watch in the headset.
