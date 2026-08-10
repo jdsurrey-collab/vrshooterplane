@@ -69,9 +69,47 @@ const SHELL_BURST_ALTITUDE_MIN := 3700.0
 const SHELL_BURST_ALTITUDE_MAX := 4700.0
 const MAX_BURSTS := 10
 
+## Distant-explosion pool for flak detonations. Five variants rather than one
+## because these fire constantly over the city and a single repeating sample
+## is instantly recognisable as a loop; `_pick_burst_sound()` also never
+## plays the same one twice in a row, the same rule
+## player_damage_audio.gd already follows for hit sounds.
+##
+## All five are user-supplied recordings cut down and processed once through
+## ffmpeg into deliberately MUFFLED distant explosions — highs rolled off
+## hard at 1150Hz (rolling off the top end is what actually reads as
+## "far away", far more than volume does), low end pushed for body, and a
+## short echo for the city bouncing it back. Two of the source files turned
+## out to contain several distinct explosions each, so the pool is wider
+## than the number of files supplied.
+const BURST_SOUNDS: Array[AudioStream] = [
+	preload("res://Assets/Audio/city_explosion_1.mp3"),
+	preload("res://Assets/Audio/city_explosion_2.mp3"),
+	preload("res://Assets/Audio/city_explosion_3.mp3"),
+	preload("res://Assets/Audio/city_explosion_4.mp3"),
+	preload("res://Assets/Audio/city_explosion_5.mp3"),
+]
+
 @export var spawn_range: float = 9000.0  # only rooftops this close to the player are eligible launch points
 @export var city_path: NodePath = ^"../City"
 @export var player_path: NodePath = ^"../Player"
+
+@export_group("Burst audio")
+## How far a flak detonation can be heard. Generous, because hearing the city
+## being shelled from a distance is the entire point — but past this the
+## sound isn't spawned at all, which is also the budget gate.
+@export var burst_sound_range: float = 9000.0
+## Concurrent voice cap. Flak fires constantly; a heavy barrage would
+## otherwise stack dozens of players at once.
+@export var max_burst_sounds: int = 8
+## Distance at which attenuation begins — larger means the sound stays at
+## full strength further out before it starts falling off.
+@export var burst_sound_unit_size: float = 900.0
+## Godot's built-in distance low-pass. Low on purpose: these should read as
+## muffled thuds through a canopy, not sharp cracks.
+@export var burst_sound_cutoff_hz: float = 900.0
+## Trim if flak ends up competing with the dogfight; raise if it's too shy.
+@export var burst_volume_db: float = -4.0
 
 var _city: Node
 var _player: Node3D
@@ -87,6 +125,8 @@ var _shells: Array = []  # {"position", "velocity", "target_altitude"}
 var _shell_timer: float = 0.0
 var _shell_mmi: MultiMeshInstance3D
 var _burst_count: int = 0
+var _burst_sounds: Array = []
+var _last_burst_sound: int = -1
 
 
 func _ready() -> void:
@@ -242,6 +282,56 @@ func _spawn_burst(at_position: Vector3) -> void:
 	_burst_count += 1
 	get_tree().current_scene.add_child(burst)
 	burst.global_position = at_position
+	_play_burst_sound(at_position)
+
+
+## Positional thump for a flak detonation. Budgeted and distance-gated the
+## same way faction_battle.gd's own battle audio is — flak fires constantly,
+## so without a cap a heavy barrage would spawn dozens of concurrent voices.
+##
+## `attenuation_filter_cutoff_hz` is doing most of the work here: it is
+## Godot's built-in distance low-pass, so a burst on the far side of the city
+## arrives not merely quieter but genuinely duller, which is what sells
+## distance far better than volume alone. Set aggressively low, because these
+## are meant to read as muffled thuds heard through a cockpit rather than
+## sharp cracks.
+func _play_burst_sound(at_position: Vector3) -> void:
+	if _player == null or BURST_SOUNDS.is_empty():
+		return
+	if _player.global_position.distance_to(at_position) > burst_sound_range:
+		return
+
+	for i in range(_burst_sounds.size() - 1, -1, -1):
+		if not is_instance_valid(_burst_sounds[i]):
+			_burst_sounds.remove_at(i)
+	if _burst_sounds.size() >= max_burst_sounds:
+		return
+
+	var sound := AudioStreamPlayer3D.new()
+	get_tree().current_scene.add_child(sound)
+	sound.global_position = at_position
+	sound.stream = _pick_burst_sound()
+	sound.volume_db = burst_volume_db
+	sound.unit_size = burst_sound_unit_size
+	sound.max_distance = burst_sound_range
+	sound.attenuation_filter_cutoff_hz = burst_sound_cutoff_hz
+	sound.attenuation_filter_db = -32.0
+	sound.play()
+	sound.finished.connect(sound.queue_free)
+	_burst_sounds.append(sound)
+
+
+## Random pick that never repeats the immediately-previous one — with bursts
+## going off every couple of seconds, back-to-back repeats are the thing that
+## makes a small pool sound small.
+func _pick_burst_sound() -> AudioStream:
+	if BURST_SOUNDS.size() == 1:
+		return BURST_SOUNDS[0]
+	var i := randi() % BURST_SOUNDS.size()
+	if i == _last_burst_sound:
+		i = (i + 1 + (randi() % (BURST_SOUNDS.size() - 1))) % BURST_SOUNDS.size()
+	_last_burst_sound = i
+	return BURST_SOUNDS[i]
 
 
 # ---------------------------------------------------------------------------

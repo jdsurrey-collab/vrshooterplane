@@ -48,6 +48,14 @@ extends Node3D
 const TANK_MESH_PATH := "res://Assets/Industrial/gas_tank.glb"
 const SHIP_EXPLOSION := preload("res://scenes/ShipExplosion.tscn")
 
+## Deliberately its OWN sound rather than one of ground_flak.gd's five
+## burst variants: a fuel tank going up is the single biggest event on the
+## ground, and it should not be mistakable for routine anti-aircraft fire.
+## Longer (11.5s of rolling rumble against their 2-4s thumps) and processed
+## with the same muffled-distance treatment, so it still reads as something
+## heavy happening below rather than a crack in the cockpit.
+const TANK_EXPLOSION_SOUND := preload("res://Assets/Audio/tank_explosion.mp3")
+
 ## The source model is a real-world propane tank, ~4m long — invisible from a
 ## fighter. Scaled up into a piece of city-scale industrial infrastructure:
 ## at 25x it is ~100m long and ~54m tall, which reads clearly from the air
@@ -77,6 +85,17 @@ const SHIP_EXPLOSION := preload("res://scenes/ShipExplosion.tscn")
 ## when scattering them. Both are in metres.
 @export var tank_min_spacing: float = 600.0
 @export var tank_building_clearance: float = 120.0
+
+@export_group("Detonation audio")
+## A tank going up should carry much further than flak — it's a landmark
+## event, and hearing one you didn't cause is real information about how the
+## match is going.
+@export var explosion_sound_range: float = 16000.0
+@export var explosion_sound_unit_size: float = 1800.0
+## Distance low-pass. Kept low so it stays a deep muffled rumble rather than
+## a sharp bang, matching the rest of this project's distant-combat audio.
+@export var explosion_sound_cutoff_hz: float = 800.0
+@export var explosion_volume_db: float = 0.0
 
 @export var city_path: NodePath = ^"../City"
 @export var battle_path: NodePath = ^"../FactionBattle"
@@ -309,6 +328,8 @@ func _detonate(pos: Vector3, index: int, cause: String) -> void:
 	get_tree().current_scene.add_child(boom)
 	boom.global_position = pos + Vector3(0.0, _tank_radius * 0.5, 0.0)
 
+	_play_explosion_sound(pos)
+
 	if _city and _city.has_method("collapse_near"):
 		_city.collapse_near(pos, collapse_radius)
 
@@ -321,6 +342,29 @@ func _detonate(pos: Vector3, index: int, cause: String) -> void:
 		if _battle.has_method("grant_air_superiority"):
 			_battle.grant_air_superiority(signed_gain,
 					"FUEL TANK %d/%d %s" % [tank_count - tanks_remaining, tank_count, cause])
+
+
+## Positional rumble for a tank detonation. Needs no concurrency cap of its
+## own the way flak does — there are only ever 20 tanks in a whole match and
+## they cannot be destroyed faster than the player can fly between them, so
+## the natural rate is already the budget. Spawned as a standalone
+## short-lived player rather than a child of anything, since the tank itself
+## is a MultiMesh instance with no node to attach to.
+func _play_explosion_sound(at_position: Vector3) -> void:
+	var listener: Node3D = get_tree().current_scene.get_node_or_null("Player") as Node3D
+	if listener and listener.global_position.distance_to(at_position) > explosion_sound_range:
+		return
+	var sound := AudioStreamPlayer3D.new()
+	get_tree().current_scene.add_child(sound)
+	sound.global_position = at_position
+	sound.stream = TANK_EXPLOSION_SOUND
+	sound.volume_db = explosion_volume_db
+	sound.unit_size = explosion_sound_unit_size
+	sound.max_distance = explosion_sound_range
+	sound.attenuation_filter_cutoff_hz = explosion_sound_cutoff_hz
+	sound.attenuation_filter_db = -30.0
+	sound.play()
+	sound.finished.connect(sound.queue_free)
 
 
 func _attackers_win() -> void:

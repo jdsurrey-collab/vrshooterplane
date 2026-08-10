@@ -1866,6 +1866,62 @@ when the player happens to be far from the nearest few candidates.
   full just doesn't spawn a burst that cycle, the same "pool full, skip
   it" convention `faction_battle.gd`'s own ambient bolts already use.
 
+### Burst audio — distant, muffled explosions over the city
+
+Flak bursts were **completely silent** until now. They and the fuel-tank
+detonations (`tank_objective.gd`) both draw on user-supplied recordings from
+`city explsosions/` at the project root, cut and processed once through
+`ffmpeg`.
+
+**Five burst variants from four source files.** Two of the supplied files
+turned out to contain several distinct explosions each — one held three
+separate detonations with clean gaps, another a series of concussive thumps
+— so the pool is wider than the file count. That matters because flak fires
+constantly and a single repeating sample is instantly recognisable as a
+loop. `_pick_burst_sound()` additionally never plays the same variant twice
+in a row, the rule `player_damage_audio.gd` already uses for hit sounds.
+
+**Processing is what makes them read as distant** (per the request: "pretty
+muffled inside the cockpit, but loud enough to where we can hear it"):
+highs rolled off hard at 1150Hz, low end pushed (`bass=g=9:f=95`), a short
+`aecho` for the city bouncing it back, then peak-normalised to about -1dBFS
+so no variant is quieter than the others. **Rolling off the top end is what
+actually reads as "far away"** — far more than volume does, which is the
+same conclusion this project already reached for `battle_explosion.mp3`.
+All are mono, since `AudioStreamPlayer3D` can only position a mono source.
+
+On top of the baked-in processing, both systems lean on Godot's built-in
+distance low-pass (`attenuation_filter_cutoff_hz`, 900Hz for flak / 800Hz
+for tanks), so a detonation across the city arrives duller as well as
+quieter rather than merely fading.
+
+**Budgeted like everything else here.** `max_burst_sounds` (8) caps
+concurrent flak voices and `burst_sound_range` (9000m) is both the audible
+range and the spawn gate — beyond it no voice is created at all, rather
+than an inaudible one being spawned and immediately attenuated to nothing.
+Measured over a real barrage: **peak 4 concurrent voices against the cap of
+8**, so there is real headroom.
+
+**Tank detonations get their own, deliberately different sound** —
+`tank_explosion.mp3`, 11.6s of rolling rumble against the bursts' 2-5s
+thumps, carrying much further (`explosion_sound_range` 16000m vs 9000m). A
+fuel tank going up is the biggest event on the ground and should never be
+mistakable for routine anti-aircraft fire; hearing one you didn't cause is
+also real information about how the match is going. It needs no concurrency
+cap of its own — there are only 20 tanks in a match and they cannot be
+destroyed faster than the player can fly between them, so the natural rate
+*is* the budget.
+
+Every level is exported (`burst_volume_db`, `burst_sound_unit_size`,
+`burst_sound_cutoff_hz` and the tank equivalents) because "muffled but
+audible" is precisely the kind of balance that can only be judged in the
+headset.
+
+Verified headlessly (8/8): pool loads, clip lengths are right, the tank
+sound is the long one, 0 back-to-back repeats in 400 picks, bursts audible
+over the city, voices inside budget, out-of-range bursts culled entirely
+rather than merely quiet, and a tank detonation spawns its sound.
+
 ### A real bug caught during verification, not a hypothetical
 
 An early version's `_pick_launch_point()` always returned "not found" —
