@@ -1584,6 +1584,40 @@ func _update_air_superiority(delta: float) -> void:
 		_end_game()
 
 
+## Lump-sum contribution to `air_superiority`, for OBJECTIVES rather than
+## dome presence. `_update_air_superiority()` above is a RATE — a continuous
+## per-second trickle from who is holding the dome — which had no way to
+## express "this thing just happened and it was worth N points". Ground
+## objectives (tank_objective.gd) need exactly that.
+##
+## `amount` is signed the same way the scalar itself is: positive is toward
+## FRIENDLY, negative toward ENEMY. `reason` is threaded into the kill feed
+## using the same mechanism kill attribution already uses, so a scoring event
+## the player didn't personally cause is still visible to them.
+func grant_air_superiority(amount: float, reason: String) -> void:
+	if game_over:
+		return
+	air_superiority = clampf(air_superiority + amount, -100.0, 100.0)
+	if reason != "":
+		_add_kill_feed_entry(reason)
+	if absf(air_superiority) >= 100.0:
+		_end_game()
+
+
+## Ends the match immediately with an explicit winner, bypassing both the
+## +/-100 threshold and the timer. Used by objectives that are themselves a
+## win condition — destroying every fuel tank wins outright rather than
+## merely scoring (see tank_objective.gd).
+func declare_winner(faction: int, reason: String) -> void:
+	if game_over:
+		return
+	winning_faction = faction
+	game_over = true
+	simulation_active = false
+	if reason != "":
+		_add_kill_feed_entry(reason)
+
+
 func _count_in_dome(units: Array) -> int:
 	var count := 0
 	for c in units:

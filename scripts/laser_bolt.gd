@@ -54,6 +54,7 @@ var _traveled: float = 0.0
 var _max_range: float = 0.0
 var _terrain: Node
 var _battle: Node
+var _tanks: Node  # TankObjective — the ground objective, absent in some scenes
 var _player: Node3D
 var _player_damage: Node
 
@@ -63,6 +64,7 @@ func _ready() -> void:
 	get_tree().create_timer(lifetime).timeout.connect(queue_free)
 	_terrain = get_tree().current_scene.get_node_or_null("Terrain")
 	_battle = get_tree().current_scene.get_node_or_null("FactionBattle")
+	_tanks = get_tree().current_scene.get_node_or_null("TankObjective")
 	if fired_by_player:
 		_thin_player_mesh()
 	else:
@@ -103,6 +105,9 @@ func _physics_process(delta: float) -> void:
 	_traveled += step
 
 	if fired_by_player:
+		if _check_tank_hit(previous_position):
+			queue_free()
+			return
 		if _check_enemy_hit(previous_position):
 			queue_free()
 			return
@@ -142,6 +147,27 @@ func _check_enemy_hit(previous_position: Vector3) -> bool:
 		return false
 
 	_battle.apply_damage(index, damage)
+	return true
+
+
+## Ground objective: the city's fuel tanks (tank_objective.gd). Checked
+## BEFORE the alien test in _physics_process — a tank sits on the ground with
+## a much larger body than a fighter, so if a bolt is inside one it should
+## detonate there rather than continue toward whatever ship happened to be
+## flying overhead.
+##
+## The faction gate lives in tank_objective.can_be_damaged_by(): tanks belong
+## to the DEFENDING side, so this only ever connects when the player is the
+## attacker that match. A defending player shooting their own tanks does
+## nothing, which is the correct behaviour rather than an oversight.
+func _check_tank_hit(previous_position: Vector3) -> bool:
+	if _tanks == null or not _tanks.can_be_damaged_by(Combatant.Faction.FRIENDLY):
+		return false
+	var index: int = _tanks.check_hit(previous_position, global_position)
+	if index < 0:
+		return false
+	_tanks.apply_damage(index, damage, "destroyed by PLAYER")
+	CrashEffects.spawn_laser_impact(get_tree().current_scene, global_position)
 	return true
 
 

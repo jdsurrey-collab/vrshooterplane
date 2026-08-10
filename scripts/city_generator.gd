@@ -132,6 +132,56 @@ const LANDMARK_BUILDINGS := [
 ## variety without tracking every one of ~1400 buildings.
 var landmark_rooftops: Array[Vector3] = []
 
+# ---------------------------------------------------------------------------
+# Per-building records — what makes individual buildings destructible
+# ---------------------------------------------------------------------------
+#
+# Buildings are drawn as batched MultiMeshes (see below), which is what keeps
+# ~1400 of them at ~19 draw calls. The cost of that batching is that a
+# building is not a node you can move — it is a transform at some index
+# inside a shared instance buffer. So to make one collapse, its slot has to
+# be remembered at placement time.
+#
+# Each entry is:
+#   pos     Vector3  world position of the building's base
+#   radius  float    horizontal footprint radius, for splash queries
+#   height  float    world-space height — how far it must sink to vanish
+#   body    StaticBody3D  its collision box (sinks with it, then freed)
+#   parts   Array    one per mesh this building is built from:
+#                      key   String        bucket it was batched into
+#                      index int           its slot in that bucket
+#                      mmi   MultiMeshInstance3D  resolved after batching
+#                      xform Transform3D   its original, un-sunk transform
+#   sink    float    metres descended so far
+#   state   int      BuildingState below
+var buildings: Array[Dictionary] = []
+
+enum BuildingState { STANDING, COLLAPSING, GONE }
+
+## Bounds handed to every building MultiMesh — see _build_building_multimeshes.
+const CITY_BATCH_AABB := AABB(
+		Vector3(-24000.0, -10000.0, -24000.0), Vector3(48000.0, 24000.0, 48000.0))
+
+## How long a doomed building takes to disappear, in SECONDS — deliberately a
+## duration rather than a sink speed in metres/second. This city's buildings
+## range from ~100m to ~1870m tall, so a fixed speed would drop a low block in
+## four seconds while a supertall tower ground down for over a minute; each
+## building instead descends at its own rate, `(height + extra) / duration`,
+## so an entire condemned block goes under together and the effect has a
+## predictable length regardless of what happened to be standing there.
+@export var collapse_duration: float = 7.0
+## Extra depth kept descending past the building's own height before it is
+## hidden outright, so one on sloping ground can't leave a corner poking out
+## of the hillside.
+@export var collapse_extra_depth: float = 40.0
+
+## Indices into `buildings` that are currently sinking. Kept as a separate
+## list so _process() iterates only the handful actually collapsing rather
+## than all ~1400 every frame.
+var _collapsing: Array[int] = []
+
+var _bucket_mmi: Dictionary = {}
+
 var _terrain: Node
 
 
@@ -145,6 +195,10 @@ func _ready() -> void:
 	# Buildings are only bucketed during placement; this turns the buckets
 	# into the actual MultiMeshInstance3D nodes.
 	_build_building_multimeshes()
+
+	# Nothing is collapsing at match start, and a city of ~1400 buildings has
+	# no other per-frame work at all — collapse_near() switches this back on.
+	set_process(false)
 
 
 func _generate_roads() -> void:
@@ -269,9 +323,30 @@ func _generate_buildings() -> void:
 
 			# --- rendering (batched) ---
 			var chunk := _chunk_index(x, z, half_total)
+			var parts_ref: Array = []
 			for part in (model["parts"] as Array):
-				_bucket_instance(chunk, part, model["material"],
-						world_xform * (part["xform"] as Transform3D))
+				var part_xform: Transform3D = world_xform * (part["xform"] as Transform3D)
+				var slot := _bucket_instance(chunk, part, model["material"], part_xform)
+				parts_ref.append({
+					"key": slot[0],
+					"index": slot[1],
+					"mmi": null,  # resolved in _build_building_multimeshes()
+					"xform": part_xform,
+				})
+
+			# Footprint radius from the measured mesh bounds rather than a
+			# guess, so splash queries scale correctly with height_multiplier
+			# and the landmark/regular scale split.
+			var footprint: Vector3 = local_aabb.size * scale_vec
+			buildings.append({
+				"pos": Vector3(x, ground_height, z),
+				"radius": maxf(footprint.x, footprint.z) * 0.5,
+				"height": footprint.y,
+				"body": body,
+				"parts": parts_ref,
+				"sink": 0.0,
+				"state": BuildingState.STANDING,
+			})
 
 
 # ---------------------------------------------------------------------------
@@ -386,7 +461,12 @@ func _chunk_index(x: float, z: float, half_total: float) -> int:
 	return cz * render_chunks + cx
 
 
-func _bucket_instance(chunk: int, part: Dictionary, material: Material, xform: Transform3D) -> void:
+## Returns the bucket key and the instance's index within that bucket, so
+## _generate_buildings() can remember exactly which MultiMesh slot each part
+## of each building ended up in — that pair is what makes a building
+## individually movable (and therefore collapsible) later, even though it is
+## drawn as part of a shared batch. See `buildings` / collapse_near().
+func _bucket_instance(chunk: int, part: Dictionary, material: Material, xform: Transform3D) -> Array:
 	var mesh: Mesh = part["mesh"]
 	var key := "%d|%d" % [chunk, mesh.get_instance_id()]
 	if not _instance_buckets.has(key):
@@ -399,7 +479,9 @@ func _bucket_instance(chunk: int, part: Dictionary, material: Material, xform: T
 			"override": chosen,
 			"xforms": [],
 		}
-	((_instance_buckets[key] as Dictionary)["xforms"] as Array).append(xform)
+	var xforms: Array = (_instance_buckets[key] as Dictionary)["xforms"]
+	xforms.append(xform)
+	return [key, xforms.size() - 1]
 
 
 ## One MultiMeshInstance3D per (chunk, mesh) pair, built once after all
@@ -415,14 +497,129 @@ func _build_building_multimeshes() -> void:
 		mm.instance_count = xforms.size()
 		for i in xforms.size():
 			mm.set_instance_transform(i, xforms[i])
+		# Fixed bounds. These batches were write-once and so never dirtied
+		# their AABB before, but collapse_near() now rewrites instance
+		# transforms at runtime — and a dirty MultiMesh with no custom_aabb
+		# recomputes its bounds by walking EVERY instance it owns, which for
+		# a single city-wide batch is hundreds of buildings per frame while
+		# anything is sinking. Generous enough to cover the whole city
+		# including buildings on their way down through the terrain.
+		mm.custom_aabb = CITY_BATCH_AABB
 
 		var mmi := MultiMeshInstance3D.new()
 		mmi.multimesh = mm
 		if bucket["override"] != null:
 			mmi.material_override = bucket["override"]
 		add_child(mmi)
+		_bucket_mmi[key] = mmi
 
 	_instance_buckets.clear()
+
+	# Buildings recorded their parts as (bucket key, index) pairs during
+	# placement, because the MultiMeshInstance3D nodes did not exist yet.
+	# Now they do, so swap each reference over to the real node once, here,
+	# rather than doing a Dictionary lookup per part on every collapse frame.
+	for b in buildings:
+		for part in (b["parts"] as Array):
+			part["mmi"] = _bucket_mmi.get(part["key"])
+	_bucket_mmi.clear()
+
+
+# ---------------------------------------------------------------------------
+# Collapse — buildings sinking into the earth
+# ---------------------------------------------------------------------------
+#
+# Driven by tank_objective.gd: blowing up a fuel tank takes the block down
+# with it. Rather than a fracture/physics simulation (which for ~1400 batched
+# buildings would be enormous), a doomed building simply DESCENDS — it slides
+# straight down into the terrain until it is buried, then stops being drawn.
+# That reads as a controlled demolition/sinkhole from the air, costs one
+# transform write per part per frame while it moves, and nothing at all once
+# it's gone.
+#
+# Collision sinks WITH the mesh instead of being freed up front, so the
+# building stays solid exactly as long as it is still visible — a half-sunk
+# tower you can fly through would be worse than either extreme.
+
+
+## Starts every standing building whose footprint is within `radius` of
+## `center` (horizontal distance only — this is a ground blast) sinking.
+## Returns how many were newly condemned.
+func collapse_near(center: Vector3, radius: float) -> int:
+	var started := 0
+	for i in buildings.size():
+		var b: Dictionary = buildings[i]
+		if b["state"] != BuildingState.STANDING:
+			continue
+		var pos: Vector3 = b["pos"]
+		var dx := pos.x - center.x
+		var dz := pos.z - center.z
+		if dx * dx + dz * dz > (radius + float(b["radius"])) * (radius + float(b["radius"])):
+			continue
+		b["state"] = BuildingState.COLLAPSING
+		_collapsing.append(i)
+		started += 1
+	if started > 0:
+		set_process(true)
+	return started
+
+
+func _process(delta: float) -> void:
+	if _collapsing.is_empty():
+		set_process(false)
+		return
+
+	for n in range(_collapsing.size() - 1, -1, -1):
+		var i: int = _collapsing[n]
+		var b: Dictionary = buildings[i]
+		var total_drop: float = float(b["height"]) + collapse_extra_depth
+		b["sink"] = float(b["sink"]) + (total_drop / maxf(collapse_duration, 0.01)) * delta
+		var sink: float = b["sink"]
+		var buried: bool = sink >= total_drop
+
+		for part in (b["parts"] as Array):
+			var mmi: MultiMeshInstance3D = part["mmi"]
+			if mmi == null:
+				continue
+			if buried:
+				# Same technique faction_battle.gd uses to hide a dead ship:
+				# MultiMesh has no per-instance visibility flag for an
+				# arbitrary middle index, so a zero-scale basis is how an
+				# instance is removed from view without disturbing anyone
+				# else's index.
+				mmi.multimesh.set_instance_transform(int(part["index"]),
+						Transform3D(Basis().scaled(Vector3.ZERO), Vector3.ZERO))
+			else:
+				var xf: Transform3D = part["xform"]
+				xf.origin.y -= sink
+				mmi.multimesh.set_instance_transform(int(part["index"]), xf)
+
+		var body: Node3D = b["body"]
+		if is_instance_valid(body):
+			if buried:
+				body.queue_free()
+			else:
+				body.position.y = float((b["pos"] as Vector3).y) - sink
+
+		if buried:
+			b["state"] = BuildingState.GONE
+			_collapsing.remove_at(n)
+
+
+## True if (x, z) is clear of every standing building by at least
+## `clearance` metres. Used by tank_objective.gd to scatter fuel tanks onto
+## open ground/streets instead of inside a tower.
+func is_ground_clear(x: float, z: float, clearance: float) -> bool:
+	for b in buildings:
+		if b["state"] == BuildingState.GONE:
+			continue
+		var pos: Vector3 = b["pos"]
+		var dx := pos.x - x
+		var dz := pos.z - z
+		var need: float = float(b["radius"]) + clearance
+		if dx * dx + dz * dz < need * need:
+			return false
+	return true
 
 
 var _model_cache: Dictionary = {}

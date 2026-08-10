@@ -60,6 +60,7 @@ var player: Node3D  # set by faction_battle.gd when target_is_player is true
 var _player_damage: Node
 var _flare_system: Node
 var _terrain: Node
+var _tanks: Node  # TankObjective — the ground objective, absent in some scenes
 var _velocity: Vector3 = Vector3.ZERO
 var _flare_target: Node3D = null
 var _flare_check_done: bool = false
@@ -70,6 +71,7 @@ func _ready() -> void:
 	get_tree().create_timer(lifetime).timeout.connect(queue_free)
 	_velocity = -global_transform.basis.z * speed
 	_terrain = get_tree().current_scene.get_node_or_null("Terrain")
+	_tanks = get_tree().current_scene.get_node_or_null("TankObjective")
 	_spawn_trail()
 	if target_is_player:
 		add_to_group("player_seeking_missiles")
@@ -115,6 +117,21 @@ func _physics_process(delta: float) -> void:
 	var facing := _velocity.normalized() if _velocity.length() > 0.01 else -global_transform.basis.z
 	var up_ref := Vector3.FORWARD if absf(facing.dot(Vector3.UP)) > 0.99 else Vector3.UP
 	global_transform.basis = Basis.looking_at(facing, up_ref)
+
+	# Ground objective (tank_objective.gd). Checked before the environment
+	# test below, because a fuel tank sits ON the ground: an unguided/
+	# overshooting missile that ends its run in a tank should detonate the
+	# tank rather than register as a plain terrain impact a few metres later.
+	# Only the player's own missiles can do this, and only while the player
+	# is the attacking faction — the gate is in can_be_damaged_by().
+	if not target_is_player and _tanks != null \
+			and _tanks.can_be_damaged_by(Combatant.Faction.FRIENDLY):
+		var tank_index: int = _tanks.check_hit(previous_position, global_position)
+		if tank_index >= 0:
+			_tanks.apply_damage(tank_index, DAMAGE, "destroyed by PLAYER missile")
+			_play_hit_sound(global_position)
+			queue_free()
+			return
 
 	# Terrain/buildings stop a missile like they stop everything else in this
 	# project — otherwise a missile chasing a low target (or one that has gone

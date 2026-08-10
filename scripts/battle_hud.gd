@@ -6,12 +6,15 @@ extends Label3D
 ## ends (game_flow.gd reads the same right-trigger press to act on it).
 
 @export var battle_path: NodePath = ^"../../../FactionBattle"
+@export var tanks_path: NodePath = ^"../../../TankObjective"
 
 var _battle: Node
+var _tanks: Node
 
 
 func _ready() -> void:
 	_battle = get_node_or_null(battle_path)
+	_tanks = get_node_or_null(tanks_path)
 
 
 func _process(_delta: float) -> void:
@@ -29,6 +32,13 @@ func _process(_delta: float) -> void:
 		"FRIENDLY %d%% - ENEMY %d%%" % [roundi(friendly_pct), roundi(enemy_pct)],
 		"%02d:%02d" % [minutes, seconds],
 	]
+
+	# Ground objective. The role line matters as much as the count: which side
+	# of the tank fight the player is on is rerolled every match, so it can't
+	# be assumed and has to be stated.
+	if _tanks and _tanks.active:
+		lines.append("FUEL TANKS: %d/%d  [%s]"
+				% [_tanks.tanks_remaining, _tanks.tank_count, _tanks.player_role_text()])
 
 	if _battle.game_over:
 		if _battle.winning_faction == Combatant.Faction.FRIENDLY:

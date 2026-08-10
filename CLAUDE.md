@@ -1455,6 +1455,147 @@ volume trimmed down: `bass=g=8:f=100:w=0.5,lowpass=f=3200,aecho=0.8:0.7:
 60:0.25,volume=0.7`, saved as `Assets/Audio/missile_alert_1.mp3` /
 `missile_alert_2.mp3`.
 
+## Ground objective — attack/defend over the city's fuel tanks
+
+`scripts/tank_objective.gd` (`TankObjective`, a sibling of `City`/
+`FactionBattle` in `Town.tscn`). The **first of three intended scoring
+tiers** (ground / dogfight / air) and the first objective in this project
+that isn't ship-vs-ship.
+
+### The match shape
+
+One faction is randomly the **ATTACKER**, the other the **DEFENDER**,
+rerolled every match. `tank_count` (**20**) propane tanks belong to the
+defender and are scattered at random across the city floor, also rerolled
+every match — both rolls happen in `start_objective()`, called from
+`game_flow.gd._start_match()`, deliberately **not** in `_ready()`, so
+there's no fixed layout or fixed side to memorise.
+
+**Destroying every tank wins the match outright for the attacker**, via the
+new `FactionBattle.declare_winner()` — not merely a score bump. Partial
+progress still counts: each tank pays `air_superiority_per_tank` (2.5) into
+the same `air_superiority` scalar everything else feeds, **signed toward
+whichever faction is attacking**. That matters because the match can also
+end on the 10-minute timer, and without partial credit an attacker who
+destroyed 19 of 20 would have nothing to show for it. 20 x 2.5 = 50 points
+— half the bar, deliberately comparable to what a whole match of dome
+presence generates at `as_generation_multiplier` 0.01, so the ground tier
+is a genuine moneymaker rather than a side activity.
+
+### Two new `FactionBattle` entry points
+
+- `grant_air_superiority(amount, reason)` — the **lump-sum** counterpart to
+  `_update_air_superiority()`'s continuous rate. The existing scoring had no
+  way to express "this just happened and it was worth N points". `reason`
+  goes through `_add_kill_feed_entry()`, so a scoring event the player
+  didn't personally cause is still visible to them.
+- `declare_winner(faction, reason)` — ends the match immediately with an
+  explicit winner, bypassing both the +/-100 threshold and the timer.
+
+### The asset
+
+`Assets/Industrial/gas_tank.glb`, from a user-supplied PSX-style industrial
+pack (the raw pack lives in the parent `Vrgame/industrial/`, matching where
+every other source-asset folder sits; only the one mesh + its texture were
+copied into the project). Measured: **268 triangles**, 3.98 x 2.17 x 1.85m,
+origin at its base. Unlike the city's `.fbx` buildings, this `.glb`
+**does** carry its albedo texture across the import, so no material rebuild
+is needed.
+
+`tank_scale` (**25.0**) blows a real-world ~4m propane tank up to ~100m long
+and ~54m tall — city-scale industrial infrastructure that actually reads
+from a fighter, against buildings running ~100m to ~1870m. All 20 render
+through one `MultiMeshInstance3D` (~5,400 triangles, **1 draw call**), the
+same technique the ships and the city already use; a destroyed tank is
+hidden by zeroing its instance transform, since `MultiMesh` has no
+per-instance visibility flag for an arbitrary middle index.
+
+### Placement
+
+Rejection sampling across the city footprint against a new
+`CityGenerator.is_ground_clear(x, z, clearance)`, rejecting anything landing
+inside a building (`tank_building_clearance` 120m) or too near another tank
+(`tank_min_spacing` 600m). Verified: 20/20 placed, 0 overlapping a building,
+closest pair ~790-890m.
+
+### The collapse — buildings sinking into the earth
+
+Destroying a tank takes its block down with it: every building within
+`collapse_radius` (400m, about a block and a half at the city's 257m pitch)
+**sinks bodily into the terrain and disappears.**
+
+Deliberately a descent, not a fracture simulation. With ~1400 buildings
+drawn as batched `MultiMesh` instances, sliding a transform downward is
+affordable where real destruction geometry would not be, and from a cockpit
+at altitude it reads as the ground swallowing a city block.
+
+**This required per-building bookkeeping that didn't exist.** Batching is
+what keeps the city at ~19 draw calls, but its cost is that a building is
+not a node you can move — it's a transform at some index inside a shared
+buffer, and a single building can span several buckets (one per mesh it's
+built from). `city_generator.gd` now records, per building: world position,
+footprint radius, height, its `StaticBody3D`, and every `(bucket, index)`
+slot it occupies. `_bucket_instance()` returns the slot it appended at, and
+those keys are resolved to real `MultiMeshInstance3D` refs once, after
+batching, rather than a Dictionary lookup per part per collapse frame.
+
+- **`collapse_duration` (7s) is a DURATION, not a sink speed** — and that
+  was a real bug caught in verification. A fixed m/s rate dropped a low
+  block in ~4s while an 1870m supertall ground down for over a minute (the
+  test caught it as "0 buildings finished sinking"). Each building now
+  descends at its own `(height + extra) / duration`, so a condemned block
+  goes under together and the effect has a predictable length whatever
+  happened to be standing there.
+- **Collision sinks WITH the mesh** rather than being freed up front — a
+  half-sunk tower you could fly through would be worse than either extreme.
+  The body is freed only once the building is fully buried.
+- `_collapsing` is a separate index list so `_process()` walks only the
+  handful actually moving, and `set_process(false)` is the resting state —
+  a city of 1400 buildings otherwise has no per-frame work at all.
+- The building batches gained `custom_aabb` (`CITY_BATCH_AABB`). They were
+  write-once before and so never dirtied their bounds; now that collapse
+  rewrites instance transforms at runtime, without it every frame of a
+  collapse would rebuild the AABB by walking every building in the batch.
+
+### Weapons
+
+`laser_bolt.gd` and `missile.gd` both route through
+`TankObjective.check_hit(from, to)` — the same **swept segment** test they
+already use against ships, because a plain point check would let a 600 m/s
+bolt tunnel clean through a tank between two sampled positions. Both check
+tanks **before** their existing tests: a tank sits on the ground with a far
+larger body than a fighter, so a shot inside one should detonate there
+rather than continue to whatever was flying overhead (or register as a plain
+terrain impact a few metres later).
+
+`can_be_damaged_by(faction)` is the gate: tanks belong to the **defender**,
+so only the attacking faction gets credit. A defending player shooting their
+own tanks does nothing — correct behaviour, not an oversight, and without it
+a defending player could hand the match to the other side.
+
+`battle_hud.gd` gained a `FUEL TANKS: n/20 [ATTACK|DEFEND]` line. The role
+half matters as much as the count, since which side of the tank fight the
+player is on is rerolled every match and can't be assumed.
+
+### Known gap — the AI does not attack tanks yet
+
+**The single most important open item on this feature.** Only the player can
+currently destroy tanks. Since roles are randomised, that means roughly half
+of all matches assign the player to DEFEND against an attacker that never
+attacks, and the objective sits inert. Closing this needs a real addition to
+`faction_battle.gd`'s targeting: `Combatant` today can target only "an
+opposing ship" or "the player", and would need a third target type plus a
+ground-attack approach state. Until then the ground tier is effectively
+player-versus-clock. Deliberately left for its own pass rather than bolted
+on, but it should be the next thing done here.
+
+Verified headlessly end to end (19/19): placement clear and spread, layout
+and roles both genuinely rerolling, the attacker/defender gate working in
+both directions, swept hit detection hitting and missing correctly, a kill
+condemning nearby buildings, scoring signed toward the attacker, buildings
+actually descending and then vanishing, and clearing all 20 ending the match
+with the attacker declared winner.
+
 ## Ground flak — cosmetic anti-aircraft fire from the city
 
 `scripts/ground_flak.gd` (`GroundFlak` node, sibling of `City`/

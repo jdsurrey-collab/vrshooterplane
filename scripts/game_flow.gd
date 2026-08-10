@@ -50,6 +50,7 @@ var _missile_system: Node
 var _flare_system: Node
 var _player_damage: Node
 var _battle: Node
+var _tanks: Node  # TankObjective — the ground objective (see tank_objective.gd)
 var _terrain: Node
 var _right_controller: XRController3D
 var _main_menu: Node
@@ -76,6 +77,7 @@ func _ready() -> void:
 		_crash_handler = _player.get_node_or_null("CrashHandler")
 		_engine_audio = _player.get_node_or_null("EngineAudio")
 	_battle = get_node_or_null("../FactionBattle")
+	_tanks = get_node_or_null("../TankObjective")
 	_terrain = get_node_or_null("../Terrain")
 	if _battle:
 		_ship_engine_audio = _battle.get_node_or_null("ShipEngineAudio")
@@ -182,6 +184,10 @@ func _start_match() -> void:
 	_set_player_paused(false)
 	if _battle:
 		_battle.start_battle()
+	# Rerolls attacker/defender AND the tank layout — deliberately per match,
+	# not in _ready(), so there is no fixed layout to memorise.
+	if _tanks:
+		_tanks.start_objective()
 
 
 func _enter_dead() -> void:
@@ -200,4 +206,6 @@ func _return_to_menu() -> void:
 	_reposition_player()
 	if _battle:
 		_battle.reset_battle()
+	if _tanks:
+		_tanks.reset_objective()
 	_enter_menu()
