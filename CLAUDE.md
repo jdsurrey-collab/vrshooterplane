@@ -2421,6 +2421,13 @@ request didn't call for.
   `player_damage.gd` mirrors for the player's own ship) — the 400-ship
   Faction Battle mass units deliberately use a simpler single-HP pool
   instead, for performance at that scale.
+- `docs/objectives-roadmap.md` — **brainstorm, not a spec, nothing in it
+  implemented.** Captures a stated vision for objectives beyond pure
+  dogfighting (destructible ground batteries, a bomber ship role, escort
+  missions), organized against the systems that already exist (the
+  `air_superiority` scalar, `ground_flak.gd`'s rooftop infrastructure as a
+  plausible seed for real batteries) and a set of open questions a real
+  design pass would need to answer first.
 
 ## Testing workflow
 
