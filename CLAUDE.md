@@ -124,6 +124,47 @@ writes and wires up scenes/scripts directly.
   deleted by the earlier pitch/yaw split — would have thrown at runtime
   the moment anyone actually held the air brake button, never caught by
   the headless parse gate.
+  **Two REAL momentum bugs, found by reproducing a live report.** Reported
+  as "if I drift off, I'm not able to recompensate into a different
+  direction with boost, and I should be able to." Both were genuine
+  physics errors, not missing features:
+  - **The speed governor was deleting real momentum on every turn.** A
+    naive `clampf(new_value, min_value, max_value)` inside
+    `OmegaMotion.step_acceleration()` ran against a single LOCAL axis —
+    but turning the ship reprojects EXISTING momentum onto different local
+    axes, and the moment a turn moved speed onto a lower-ceilinged axis
+    (lateral caps at 100 m/s vs. forward's 300) the clamp silently
+    destroyed it. Measured: **300 m/s dropped to 100 m/s in a single
+    frame** after a 90° turn with zero thrust input. Fixed by making the
+    clamp one-sided — it now only engages while acceleration is actively
+    pushing FURTHER past a boundary, so momentum that arrived by
+    reprojection is left alone. Momentum retention went from 33% to 99%.
+  - **Acceleration was stored in world space and reprojected like
+    velocity.** Wrong: velocity is momentum (conserved in world space, must
+    survive a turn), but acceleration is engine thrust (body-fixed, must
+    turn WITH the ship). Reprojecting it dragged the previous frame's
+    thrust direction into the new local frame, which then tripped the
+    governor above on whatever axis it landed on. `_linear_accel` is now
+    stored in the ship's LOCAL frame; only the engine's spool state
+    persists, never a stale direction.
+  **Per-axis aerodynamic drag — the real reason velocity settles onto the
+  nose.** Straight from `IFCS3_0.pdf`: "Each ship is tuned with a separate
+  coefficient for each axial direction to indicate its relative
+  performance when moving along each axial direction through atmosphere."
+  A fighter is streamlined nose-on and barn-door broadside, so
+  `drag_coefficient_lateral`/`_vertical` (0.0025) are ~125x
+  `drag_coefficient_forward` (0.00002). This is the airframe's shape doing
+  the work, **not an assist** — and it's genuinely load-bearing: with pure
+  vacuum physics, thrusting forward while drifting sideways only ever ADDS
+  a forward component and never removes the sideways one, leaving the ship
+  **permanently diagonal** (measured: locked at a 45° offset forever).
+  With it, a 90°-off velocity vector converges to ~10° of the nose within
+  6 seconds of thrust (most of that in the first 3), which is the "turn,
+  thrust, and within a few seconds you're going that way" behaviour that
+  was reported missing. Verified not to break flight-assist-OFF coasting:
+  releasing the throttle at 300 m/s still retains **95.6% of speed after
+  10 full seconds**. The AI is unaffected (98/97 ships alive at t=150s in
+  a 100v100 regression run).
   **No auto-braking, anywhere, ever — corrected live, twice.** The
   original coasting-drag model (a real quadratic air-drag curve on throttle
   release) was replaced first with an assisted brake to a goal velocity of

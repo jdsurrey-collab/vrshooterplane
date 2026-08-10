@@ -93,17 +93,20 @@ var _angular_velocity: Vector3 = Vector3.ZERO  # local pitch/yaw/roll rates
 ## frames (see omega_motion.gd). Discarding these would degrade the whole
 ## model back to an instant-acceleration snap.
 ##
-## `_linear_accel` is stored in WORLD space, exactly like `_linear_velocity`
-## above, and reprojected into the ship's current local frame alongside it
-## every frame. That pairing is what preserves the Newtonian flip-and-thrust
-## behaviour this project documents: flip the ship 180 degrees mid-drift and
-## thrust, and the existing drift is decelerated first — velocity passes
-## through zero — before speed builds the new way, with no special-casing,
-## because thrust always acts along the ship's CURRENT nose like a real
-## engine. Storing acceleration in local space instead would let a rotation
-## silently redirect in-progress acceleration, which is not how a rocket
-## works.
-var _linear_accel: Vector3 = Vector3.ZERO  # world space
+## `_linear_accel` is stored in the ship's own LOCAL/BODY frame, unlike
+## `_linear_velocity` (world space) — and that difference is the whole
+## point, not an inconsistency. Velocity is momentum: conserved in world
+## space, so turning the ship must NOT change it. Acceleration is engine
+## thrust: body-fixed, pointing wherever the nose currently points, so it
+## must turn WITH the ship. An earlier version stored acceleration in world
+## space and reprojected it every frame alongside velocity, which meant a
+## turn dragged the previous frame's thrust direction along into the new
+## local frame — measured as a real bug, since that stale reprojected
+## acceleration then tripped the speed governor on whatever axis it landed
+## on and deleted genuine momentum. Only the ENGINE SPOOL state (how far
+## thrust has ramped up on each body axis) persists here; the direction is
+## always the ship's current one.
+var _linear_accel: Vector3 = Vector3.ZERO  # LOCAL/body space — see above
 var _angular_accel: Vector3 = Vector3.ZERO  # local pitch/yaw/roll
 
 # Latest raw input values, 0..1 (grips) or -1..1 (stick axes), for other
@@ -229,13 +232,15 @@ func _update_translation(right_grip: float, left_grip: float, left_stick: Vector
 	var vertical_input := left_stick.y
 	vertical_input_value = vertical_input
 
-	# Work in the craft's local frame so thrust acts along the axes the
-	# pilot actually feels, then convert straight back to world space.
-	# Acceleration is carried through the same round trip as velocity — see
-	# _linear_accel's declaration for why that pairing matters.
+	# VELOCITY is reprojected from world space into the ship's current local
+	# frame (momentum is conserved in world space, so turning must not
+	# change it — this reprojection is exactly what carries drift/skid
+	# through a turn). ACCELERATION is NOT reprojected: it's already stored
+	# body-fixed, because engine thrust points wherever the nose currently
+	# points. See _linear_accel's declaration for the bug that caused.
 	var inv := basis.inverse()
 	var local_velocity := inv * _linear_velocity
-	var local_accel := inv * _linear_accel
+	var local_accel := _linear_accel
 
 	# -Z is forward, so positive forward_input (right grip) needs to drive
 	# velocity.z NEGATIVE — same sign convention the old goal-based version
@@ -283,11 +288,46 @@ func _update_translation(right_grip: float, left_grip: float, left_stick: Vector
 	local_velocity.x = lateral.x
 	local_accel.x = lateral.y
 
+	local_velocity = _apply_axis_drag(local_velocity, delta)
+
 	_linear_velocity = basis * local_velocity
-	_linear_accel = basis * local_accel
+	_linear_accel = local_accel  # already body-fixed, see _linear_accel's declaration
 
 	if not gravity_compensator_active:
 		_linear_velocity.y -= gravity_accel * delta
+
+
+## Per-axis quadratic aerodynamic drag, applied in the ship's LOCAL frame so
+## each axis uses its own coefficient — straight from IFCS3_0.pdf: "Each
+## ship is tuned with a separate coefficient for each axial direction to
+## indicate its relative performance when moving along each axial direction
+## through atmosphere."
+##
+## This is the airframe's own shape doing the work, NOT an assist: a fighter
+## is streamlined nose-on and barn-door broadside, so sideways/vertical
+## drift bleeds off ~40x faster than forward speed does. That asymmetry is
+## what makes a decoupled ship's velocity naturally settle onto its nose a
+## few seconds after you turn and thrust — the behaviour that was reported
+## missing. Without it, pure vacuum physics leaves the ship permanently
+## diagonal (measured: locked at a 45-degree offset forever, since forward
+## thrust only ever ADDS a forward component, it never removes the sideways
+## one).
+##
+## Deceleration always opposes motion and can never reverse it (the
+## move_toward floor at zero), so this bleeds drift off without ever
+## becoming a spring that pulls the ship backwards.
+func _apply_axis_drag(local_velocity: Vector3, delta: float) -> Vector3:
+	local_velocity.x = _drag_axis(local_velocity.x, profile.drag_coefficient_lateral, delta)
+	local_velocity.y = _drag_axis(local_velocity.y, profile.drag_coefficient_vertical, delta)
+	local_velocity.z = _drag_axis(local_velocity.z, profile.drag_coefficient_forward, delta)
+	return local_velocity
+
+
+func _drag_axis(v: float, coefficient: float, delta: float) -> float:
+	if is_zero_approx(v) or coefficient <= 0.0:
+		return v
+	var decel := coefficient * v * v  # velocity-squared drag equation
+	return move_toward(v, 0.0, decel * delta)
 
 
 ## The ONE deliberate exception to this ship's flight-assist-OFF rule (see

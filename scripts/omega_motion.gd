@@ -76,6 +76,26 @@ extends RefCounted
 ## This is what the player's ship uses on every one of its 6 axes. The AI
 ## never calls this — an autopilot always has a concrete target speed/rate
 ## it's trying to hold, which is what step_velocity/step_position are for.
+##
+## THE CLAMP IS ONE-SIDED, DELIBERATELY — a real bug, found and fixed after
+## live testing: `value`/`min_value`/`max_value` here are a single LOCAL
+## axis (e.g. flight_controller.gd re-projects world-space velocity into
+## the ship's current local frame every frame — see that file for why).
+## Turning the ship reprojects EXISTING momentum onto different local
+## axes, and a naive `clampf(new_value, min_value, max_value)` would
+## silently delete real momentum the instant a turn puts more of it onto a
+## lower-ceilinged axis than the one it started on — reproduced directly:
+## 300 m/s of straight flight dropped to 100 m/s in a single frame after a
+## 90-degree turn with zero thrust input, because that speed became
+## "lateral" velocity in the new local frame and got clamped to the
+## lateral axis's much lower 100 m/s cap. The fix: only ever clamp while
+## `new_accel` is actively pushing FURTHER past the boundary `value` is
+## already at or beyond — a value that arrived there some other way (like
+## reprojection) is left alone, exactly matching true inertia. This is
+## also what makes "turn, then thrust the other way, and your trajectory
+## pulls toward your nose" actually work: the old momentum has to survive
+## the turn for the new thrust to have something real to fight against and
+## redirect, rather than starting from an artificially-deleted near-zero.
 static func step_acceleration(value: float, accel: float, input: float,
 		max_accel: float, accel_time: float, delta: float,
 		min_value: float, max_value: float) -> Vector2:
@@ -83,7 +103,12 @@ static func step_acceleration(value: float, accel: float, input: float,
 
 	var blend: float = 1.0 - exp(-delta / maxf(accel_time, 0.0001))
 	var new_accel: float = accel + (target_accel - accel) * blend
-	var new_value: float = clampf(value + new_accel * delta, min_value, max_value)
+	var new_value: float = value + new_accel * delta
+
+	if new_value > max_value and new_accel > 0.0:
+		new_value = max_value
+	elif new_value < min_value and new_accel < 0.0:
+		new_value = min_value
 
 	return Vector2(new_value, new_accel)
 

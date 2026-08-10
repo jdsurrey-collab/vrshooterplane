@@ -53,6 +53,38 @@ extends Resource
 ## the right grip (forward) always gets the full forward_max_accel.
 @export var reverse_thrust_fraction: float = 0.4
 
+@export_group("Aerodynamic drag (per-axis)")
+## Real, source-grounded per-axis drag — IFCS3_0.pdf: "Each ship is tuned
+## with a separate coefficient for each axial direction to indicate its
+## relative performance when moving along each axial direction through
+## atmosphere," applied against a velocity-squared drag equation.
+##
+## This is what makes a decoupled ship's velocity naturally settle onto its
+## nose over a few seconds instead of drifting diagonally forever, and it
+## is NOT an assist — it's the airframe's own shape doing the work. A
+## fighter presents a small cross-section nose-on and a huge one broadside,
+## so sideways/vertical drift bleeds off fast while forward speed barely
+## suffers. Without this, pure vacuum physics leaves you permanently
+## diagonal: thrusting forward while drifting sideways just adds a forward
+## component, it never removes the sideways one (measured: stuck at a
+## 45-degree offset indefinitely).
+##
+## Units: deceleration = coefficient * speed^2 along that local axis, so
+## these already fold air density, Cd and cross-sectional area into one
+## number per axis (same simplification docs/flight-physics-reference.md
+## documents for the original single drag_coefficient).
+##
+## Forward is deliberately tiny — a streamlined nose-on fighter should
+## coast a long time, and this must NOT undo the flight-assist-OFF
+## behaviour of holding speed when you let off the throttle.
+@export var drag_coefficient_forward: float = 0.00002  # ~1.8 m/s^2 at 300 m/s
+## Lateral/vertical are ~40x forward: broadside is where a fighter's drag
+## actually lives. At 300 m/s of sideways drift this is ~72 m/s^2, bleeding
+## that drift off in a few seconds; at low drift speeds it's gentle
+## (quadratic), so it never feels like a snap-to-center assist.
+@export var drag_coefficient_lateral: float = 0.0008
+@export var drag_coefficient_vertical: float = 0.0008
+
 @export_group("Vertical / lateral (maneuvering thrusters)")
 @export var max_vertical_speed: float = 100.0  # m/s
 @export var max_lateral_speed: float = 100.0  # m/s
