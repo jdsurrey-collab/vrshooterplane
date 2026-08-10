@@ -39,11 +39,24 @@ extends Node3D
 const CANDIDATE_MULTIPLIER := 6
 const FONT := preload("res://Assets/Fonts/Orbitron-Variable.ttf")
 
-## Pool size — the maximum number of friendly tags visible at once. Squads
-## are 1-5 ships and separation steering holds same-faction ships ~550-620m
-## apart in combat, so this comfortably covers a normal engagement without
-## paying for a hundred labels.
-@export var tag_count: int = 18
+## Pool size — the maximum number of friendly tags visible at once, and the
+## real cost dial for this system.
+##
+## This is NOT the same thing as `tag_radius`, and at 18000m the two are very
+## far apart. Measured friendly counts inside 18km over a match: 100 (the
+## entire fleet) for the first minute while everyone is still transiting from
+## the mothership, then 45-59 once the battle spreads out. Tagging all of
+## them would mean up to 100 always-on-top transparent labels — both a real
+## draw cost and, more importantly, unreadable: because `fixed_size` holds
+## every callsign at the same apparent size, a ship 18km away renders its
+## name just as large as a wingman 200m away, so a hundred of them stack into
+## noise and defeat the point.
+##
+## 40 is the compromise: well past the ~29 that were ever within 6km, so
+## anything meaningfully near you is covered, while capping the clutter and
+## the cost. Past the cap the pool holds the NEAREST 40, which is the right
+## thing to drop.
+@export var tag_count: int = 40
 
 ## RANGE — raised from an originally-specified 1000m after measuring what
 ## 1000m actually covers in this world, which is nearly nothing.
@@ -60,12 +73,19 @@ const FONT := preload("res://Assets/Fonts/Orbitron-Variable.ttf")
 ##     <6000m  29 16 1 2 1 1 1 1 3 6 9 6 9 9 10
 ##
 ## 1000m simply isn't "nearby" at this scale — the dome alone is 8000m in
-## radius and the city is 10800m across. 4000m keeps the peak inside the
-## label pool while making the feature actually do its job. Because
-## `fixed_size` holds apparent size constant (see `font_size`), a callsign at
-## 4000m is exactly as legible as one at 400m, so range costs nothing in
-## readability. Drop it back to 1000.0 if the wider net reads as clutter.
-@export var tag_radius: float = 4000.0
+## radius and the city is 10800m across. Because `fixed_size` holds apparent
+## size constant (see `font_size`), a callsign at any range is exactly as
+## legible as one at 400m, so distance costs nothing in readability — which
+## is what makes a very wide net practical at all.
+##
+## Now **18000m**, wide enough to see the fleet across the whole battlespace
+## rather than only your immediate neighbours. Note this is deliberately far
+## larger than the number of ships that can actually be tagged: inside 18km
+## there are often 45-59 friendlies (and ~100 during the opening transit),
+## against a `tag_count` of 40. `tag_radius` sets how far the system will
+## look; `tag_count` sets how many it will draw. See `tag_count` for why
+## drawing all of them would be worse, not better.
+@export var tag_radius: float = 18000.0
 
 ## A tag keeps its ship until that ship dies or drifts past
 ## `tag_radius * release_hysteresis`, so ships hovering right at the boundary

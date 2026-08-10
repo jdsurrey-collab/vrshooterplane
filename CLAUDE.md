@@ -1522,7 +1522,7 @@ it.
 white callsign labels floating under every FRIENDLY ship within
 `tag_radius`, so you can read who is flying near you.
 
-### `tag_radius` is 4000m, raised from a specified 1000m — measured, not guessed
+### `tag_radius` is 18000m, raised from a specified 1000m — measured, not guessed
 
 Reported live as "I'm not seeing the callsigns on the allies." The pooling
 logic was working correctly; **1000m simply isn't "nearby" at this world's
@@ -1538,19 +1538,28 @@ friendlies in range once the fleet launches (~t=30s):
 | <6000m | 29 | 16 | 1 | 2 | 1 | 3 | 9 | 9 | 10 |
 
 The nearest friendly sits **1.5km to 8.8km** away for most of the match —
-the dome alone is 8000m in radius and the city is 10800m across. 4000m keeps
-the peak inside the 18-label pool while making the feature actually work.
-Because `fixed_size` holds apparent size constant, a callsign at 4000m is
-exactly as legible as one at 400m, so range costs nothing in readability.
-`font_size` also went 28 -> 36. After the fix: tags present in **18 of 25
-post-launch samples (peak 16), up from 0**, plus 18 live on the deck.
+the dome alone is 8000m in radius and the city is 10800m across. Because
+`fixed_size` holds apparent size constant, a callsign at any range is as
+legible as one at 400m, so distance costs nothing in readability, which is
+what makes a wide net practical. `font_size` also went 28 -> 36.
+
+**`tag_radius` and `tag_count` are different dials, and at 18km they are far
+apart.** Friendlies inside 18km measure ~100 (the whole fleet) through the
+opening transit, then 45-59 once the battle spreads. Tagging all of them
+would be worse, not better: `fixed_size` renders an 18km-distant callsign
+*exactly as large* as a wingman at 200m, so a hundred of them stack into
+unreadable noise, on top of ~100 always-on-top transparent draws. So
+`tag_radius` (18000m) is how far the system LOOKS and `tag_count` (40) is
+how many it DRAWS — past the cap it keeps the nearest 40, which is the right
+ones to keep. Verified: pool saturates at 40, never exceeds it, and tags are
+present in 26 of 26 samples across a match.
 
 **Why this is a pool, not a label per ship.** Friendly ships are not nodes —
 they are `Combatant` objects (`RefCounted`, never in the scene tree) drawn
 through a single `MultiMeshInstance3D`, which is the whole reason a 200-ship
 battle is affordable. So there is nothing to parent a `Label3D` to, and
 creating 100 of them would hand back a large part of what that design
-bought. Instead a fixed pool of `tag_count` (18) labels is dynamically
+bought. Instead a fixed pool of `tag_count` (40) labels is dynamically
 attached to whichever friendlies are nearest the player — structurally the
 same solution as `ship_engine_audio.gd`'s 12 voices and
 `thruster_trails.gd`'s 10 emitters, reusing the identical
