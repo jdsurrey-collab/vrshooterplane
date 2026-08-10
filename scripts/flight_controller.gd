@@ -1,18 +1,54 @@
 extends Node
 
-## Inertia-based 6DOF flight controller — "flight assist ON" handling, the
-## default mode on Star Citizen fighters (Arrow/Gladius class): stick and
-## trigger input drives acceleration, not position directly. Releasing input
-## lets dampers bleed velocity back to zero rather than stopping instantly or
-## drifting forever.
+## Inertia-based 6DOF flight controller — **flight assist OFF, on every
+## axis, no exceptions.** Stick and grip input commands a target
+## ACCELERATION directly (not a velocity, not a goal to return to);
+## releasing input idles that acceleration back to zero over a short jerk
+## ramp and leaves the ship coasting at whatever velocity/rotation rate it
+## already had. Nothing in this script ever auto-brakes the ship back
+## toward zero. This was a direct, explicit correction after an earlier
+## pass reintroduced auto-braking on throttle release: "this is flight
+## assist off on all fronts... not flight assistance in any way."
 ##
 ## Right joystick: pitch (Y axis) and yaw (X axis)
 ## Left joystick:  roll (X axis) and elevation / vertical thrust (Y axis)
 ## Right grip:     forward thrust
-## Left grip:      backward thrust
+## Left grip:      reverse thrust — a distinct, weaker system from the main
+##                  drive, not the same engine run backwards (see
+##                  ShipFlightProfile.reverse_thrust_fraction): only ~40% of
+##                  forward_max_accel, "not reliable for space braking and
+##                  also not incredibly powerful for flying backwards."
+## Right A button:  air brake — the ONE deliberate exception to flight-assist
+##                  OFF (see below). Holding it overrides every other input
+##                  and decelerates all six axes toward zero at
+##                  ShipFlightProfile.air_brake_fraction of forward_max_accel.
 ##
 ## Attached to a child of the player's XROrigin3D; moves/rotates its parent
 ## directly each physics frame.
+##
+## SHARED FLIGHT MODEL, DIFFERENT CONTROL MODE. Every axis runs through
+## `OmegaMotion.step_acceleration()` (see scripts/omega_motion.gd and
+## docs/omega-flight-model.md) against a `ShipFlightProfile` resource — the
+## SAME max-speed/max-accel numbers the 100-200 AI combatants in
+## faction_battle.gd fly by, so the player and the AI are still the same
+## craft with the same performance envelope. What differs is HOW input maps
+## to motion: the AI's own autopilot is goal-seeking (`step_velocity`/
+## `step_position` — it always has a concrete target speed or heading to
+## hold), while the player's stick is pure acceleration control with no
+## goal at all. This split is drawn directly from the user's own reference
+## material: "acceleration control is used for decoupled mode linear
+## control... positional and rotational control is used for all automated
+## ship control, including AI movement" (IFCS3_0.pdf).
+##
+## What changed from the ORIGINAL (pre-Omega) version, and why it matters:
+## every axis used to be driven by `move_toward(current, goal, accel *
+## delta)` with a separate flat damping constant for when input was
+## released — 2nd-order motion with a hard corner in acceleration at both
+## ends, AND an assist that braked the ship back to a stop. Both problems
+## are gone: acceleration itself ramps up and down smoothly (the jerk
+## limit), and there is no goal to brake toward — only real inertia.
+## `docs/flight-physics-reference.md` keeps the old drag-equation section
+## as historical/sourcing context; that code path no longer exists.
 ##
 ## GRAVITY COMPENSATOR STANDARD — every flight-capable craft on this planet
 ## is built with drives that actively cancel gravity while powered, so
@@ -22,51 +58,15 @@ extends Node
 ## should follow the same convention — compensator on by default, and
 ## flipping it off (e.g. on a power/systems failure) is what lets the craft
 ## fall.
-##
-## Tunable constants below (gravity, air density, drag) are grounded in real
-## NASA-sourced reference data — see docs/flight-physics-reference.md for the
-## derivations and worked examples.
+
+## The shared performance definition. Swap this resource to fly a different
+## ship class; edit the .tres to retune the player and the entire AI fleet
+## together.
+@export var profile: ShipFlightProfile = preload("res://Assets/ShipProfiles/standard_fighter.tres")
 
 @export_group("Gravity Compensator")
 @export var gravity_compensator_active: bool = true
 @export var gravity_accel: float = 800.0  # m/s^2, scaled for the 100x world
-
-@export_group("Rotation")
-## Pitch/yaw grounded in real F-16 data: max observed pitch rate ~34°/s,
-## sustained turn rate ~17.5°/s at altitude — 0.44 rad/s (~25°/s) sits
-## between those. The previous value (1.5 rad/s, ~86°/s, applied uniformly
-## to all three axes) was 3-4x faster than even a real fighter jet sustains
-## on pitch, which is what made it feel "touchy." See
-## docs/flight-physics-reference.md for the sourced figures.
-@export var max_pitch_yaw_speed: float = 0.44  # radians/sec (~25°/s)
-@export var pitch_yaw_acceleration: float = 1.2  # radians/sec^2
-@export var pitch_yaw_damping: float = 1.8  # radians/sec^2 (braking, no stick input)
-
-## Roll is legitimately much faster than pitch/yaw on a real aircraft —
-## ailerons roll efficiently, while pitch/yaw are limited by G-tolerance and
-## engine/rudder authority. Kept at the original value (not flagged as
-## touchy) rather than pushed toward a real fighter's ~240°/s max, partly
-## because fast rotation is a common VR-comfort issue independent of
-## realism.
-@export var max_roll_speed: float = 1.5  # radians/sec (~86°/s)
-@export var roll_acceleration: float = 4.0  # radians/sec^2
-@export var roll_damping: float = 6.0  # radians/sec^2 (braking, no stick input)
-
-@export_group("Translation")
-@export var max_forward_speed: float = 300.0  # m/s
-@export var max_reverse_speed: float = 150.0  # m/s
-@export var max_vertical_speed: float = 100.0  # m/s
-@export var forward_acceleration: float = 500.0  # m/s^2
-@export var vertical_acceleration: float = 120.0  # m/s^2
-@export var linear_damping: float = 180.0  # m/s^2 (braking, vertical/side axes only)
-
-@export_group("Coasting Drag (forward axis, throttle released)")
-## Releasing the throttle no longer snaps to a stop — it coasts down under
-## real quadratic air drag (F_drag = 0.5 * air_density * drag_coefficient *
-## speed^2), same as an aircraft at 300 m/s through Earth's atmosphere would:
-## fast bleed-off up high, a long gentle coast near idle speed.
-@export var air_density: float = 1.225  # kg/m^3, Earth sea-level atmosphere
-@export var drag_coefficient: float = 0.00015  # combined Cd*frontal_area/(2*mass); tune to taste
 
 @export_group("Input")
 @export var stick_deadzone: float = 0.15
@@ -81,6 +81,23 @@ var _origin: Node3D
 
 var _linear_velocity: Vector3 = Vector3.ZERO  # world space
 var _angular_velocity: Vector3 = Vector3.ZERO  # local pitch/yaw/roll rates
+
+## The jerk-limiting acceleration state step_acceleration() carries between
+## frames (see omega_motion.gd). Discarding these would degrade the whole
+## model back to an instant-acceleration snap.
+##
+## `_linear_accel` is stored in WORLD space, exactly like `_linear_velocity`
+## above, and reprojected into the ship's current local frame alongside it
+## every frame. That pairing is what preserves the Newtonian flip-and-thrust
+## behaviour this project documents: flip the ship 180 degrees mid-drift and
+## thrust, and the existing drift is decelerated first — velocity passes
+## through zero — before speed builds the new way, with no special-casing,
+## because thrust always acts along the ship's CURRENT nose like a real
+## engine. Storing acceleration in local space instead would let a rotation
+## silently redirect in-progress acceleration, which is not how a rocket
+## works.
+var _linear_accel: Vector3 = Vector3.ZERO  # world space
+var _angular_accel: Vector3 = Vector3.ZERO  # local pitch/yaw/roll
 
 # Latest raw input values, 0..1 (grips) or -1..1 (stick axes), for other
 # systems to react to (e.g. engine_audio.gd) without re-reading controllers.
@@ -111,8 +128,14 @@ func _physics_process(delta: float) -> void:
 	right_grip_value = right_grip
 	left_grip_value = left_grip
 
-	_update_rotation(right_stick, left_stick, delta)
-	_update_translation(right_grip, left_grip, left_stick, delta)
+	if _right_controller.is_button_pressed("ax_button"):
+		# Air brake overrides every other control input entirely — see
+		# _apply_air_brake()'s own doc comment for why this is the one
+		# deliberate exception to flight-assist OFF.
+		_apply_air_brake(delta)
+	else:
+		_update_rotation(right_stick, left_stick, delta)
+		_update_translation(right_grip, left_grip, left_stick, delta)
 
 	_origin.rotate_object_local(Vector3.UP, _angular_velocity.y * delta)
 	_origin.rotate_object_local(Vector3.RIGHT, _angular_velocity.x * delta)
@@ -120,18 +143,39 @@ func _physics_process(delta: float) -> void:
 	_origin.global_position += _linear_velocity * delta
 
 
+## Stick position commands a rotation ACCELERATION, not a rate — centering
+## the stick idles that acceleration to zero and leaves the ship spinning
+## at whatever rate it already had (real tumble/spin persistence) until
+## countered by opposite stick input. The rate itself is still clamped to
+## max_pitch_yaw_speed/max_roll_speed — the artificial governor every ship
+## in this game has — but that clamp only ever engages at the ceiling, it
+## never pulls the rate back down on its own.
 func _update_rotation(right_stick: Vector2, left_stick: Vector2, delta: float) -> void:
 	var yaw_input := -right_stick.x
 	var pitch_input := -right_stick.y
 	var roll_input := left_stick.x
 	roll_input_value = roll_input
 
-	_angular_velocity.y = _approach_axis(
-			_angular_velocity.y, yaw_input, max_pitch_yaw_speed, pitch_yaw_acceleration, pitch_yaw_damping, delta)
-	_angular_velocity.x = _approach_axis(
-			_angular_velocity.x, pitch_input, max_pitch_yaw_speed, pitch_yaw_acceleration, pitch_yaw_damping, delta)
-	_angular_velocity.z = _approach_axis(
-			_angular_velocity.z, roll_input, max_roll_speed, roll_acceleration, roll_damping, delta)
+	var yaw := OmegaMotion.step_acceleration(
+			_angular_velocity.y, _angular_accel.y, yaw_input,
+			profile.pitch_yaw_max_accel, profile.pitch_yaw_accel_time, delta,
+			-profile.max_pitch_yaw_speed, profile.max_pitch_yaw_speed)
+	_angular_velocity.y = yaw.x
+	_angular_accel.y = yaw.y
+
+	var pitch := OmegaMotion.step_acceleration(
+			_angular_velocity.x, _angular_accel.x, pitch_input,
+			profile.pitch_yaw_max_accel, profile.pitch_yaw_accel_time, delta,
+			-profile.max_pitch_yaw_speed, profile.max_pitch_yaw_speed)
+	_angular_velocity.x = pitch.x
+	_angular_accel.x = pitch.y
+
+	var roll := OmegaMotion.step_acceleration(
+			_angular_velocity.z, _angular_accel.z, roll_input,
+			profile.roll_max_accel, profile.roll_accel_time, delta,
+			-profile.max_roll_speed, profile.max_roll_speed)
+	_angular_velocity.z = roll.x
+	_angular_accel.z = roll.y
 
 
 func _update_translation(right_grip: float, left_grip: float, left_stick: Vector2, delta: float) -> void:
@@ -140,45 +184,86 @@ func _update_translation(right_grip: float, left_grip: float, left_stick: Vector
 	var vertical_input := left_stick.y
 	vertical_input_value = vertical_input
 
-	# Work in the craft's local frame so damping pulls velocity to zero along
-	# the axes the pilot actually feels, then convert back to world space.
-	var local_velocity := basis.inverse() * _linear_velocity
+	# Work in the craft's local frame so thrust acts along the axes the
+	# pilot actually feels, then convert straight back to world space.
+	# Acceleration is carried through the same round trip as velocity — see
+	# _linear_accel's declaration for why that pairing matters.
+	var inv := basis.inverse()
+	var local_velocity := inv * _linear_velocity
+	var local_accel := inv * _linear_accel
 
-	var forward_max := max_forward_speed if forward_input >= 0.0 else max_reverse_speed
-	if absf(forward_input) > 0.0:
-		local_velocity.z = move_toward(local_velocity.z, -forward_input * forward_max, forward_acceleration * delta)
-	else:
-		local_velocity.z = _apply_coasting_drag(local_velocity.z, delta)
-	local_velocity.y = _approach_axis(
-			local_velocity.y, vertical_input, max_vertical_speed, vertical_acceleration, linear_damping, delta)
-	local_velocity.x = _approach_axis(
-			local_velocity.x, 0.0, max_vertical_speed, vertical_acceleration, linear_damping, delta)
+	# -Z is forward, so positive forward_input (right grip) needs to drive
+	# velocity.z NEGATIVE — same sign convention the old goal-based version
+	# used. The speed governor is asymmetric (max_forward_speed vs.
+	# max_reverse_speed) — and now so is the acceleration itself: reverse
+	# (left grip, forward_input < 0) is scaled down to reverse_thrust_fraction
+	# of forward_max_accel, a distinct weaker system from the main drive, not
+	# the same engine run backwards. Scaling the INPUT rather than passing a
+	# different max_accel keeps this a one-line change at the call site
+	# instead of needing a second branch through step_acceleration.
+	var reverse_scale := 1.0 if forward_input >= 0.0 else profile.reverse_thrust_fraction
+	var forward := OmegaMotion.step_acceleration(
+			local_velocity.z, local_accel.z, -forward_input * reverse_scale,
+			profile.forward_max_accel, profile.forward_accel_time, delta,
+			-profile.max_forward_speed, profile.max_reverse_speed)
+	local_velocity.z = forward.x
+	local_accel.z = forward.y
+
+	var vertical := OmegaMotion.step_acceleration(
+			local_velocity.y, local_accel.y, vertical_input,
+			profile.maneuver_max_accel, profile.maneuver_accel_time, delta,
+			-profile.max_vertical_speed, profile.max_vertical_speed)
+	local_velocity.y = vertical.x
+	local_accel.y = vertical.y
+
+	# No lateral input is bound to any control — this axis only ever
+	# reflects whatever the world-space velocity vector looks like once
+	# reprojected into the ship's new local frame after a turn (real
+	# inertia/skid: carrying momentum through a turn, exactly as a
+	# flight-assist-off craft should). Input is always 0 here, so this call
+	# does nothing but let existing lateral drift persist rather than
+	# auto-correcting it — the old goal-of-zero "bleed off drift" behavior
+	# was itself an assist, and is gone along with the others.
+	var lateral := OmegaMotion.step_acceleration(
+			local_velocity.x, local_accel.x, 0.0,
+			profile.maneuver_max_accel, profile.maneuver_accel_time, delta,
+			-profile.max_lateral_speed, profile.max_lateral_speed)
+	local_velocity.x = lateral.x
+	local_accel.x = lateral.y
 
 	_linear_velocity = basis * local_velocity
+	_linear_accel = basis * local_accel
 
 	if not gravity_compensator_active:
 		_linear_velocity.y -= gravity_accel * delta
 
 
-## Real quadratic air-drag deceleration: a = air_density * drag_coefficient *
-## speed^2, opposing whatever direction the craft is currently coasting in.
-func _apply_coasting_drag(z_velocity: float, delta: float) -> float:
-	var speed := absf(z_velocity)
-	if speed < 0.01:
-		return 0.0
-	var drag_decel := air_density * drag_coefficient * speed * speed
-	var new_speed := maxf(0.0, speed - drag_decel * delta)
-	return signf(z_velocity) * new_speed
+## The ONE deliberate exception to this ship's flight-assist-OFF rule (see
+## this file's header) — a direct, explicit pilot command, not an automatic
+## assist that kicks in whenever input is released. While held, this
+## replaces _update_rotation()/_update_translation() entirely rather than
+## running alongside them, which is what makes it "override any buttons
+## that are pushed for movement" — no other input is even read this frame.
+##
+## Uses Vector3.move_toward() directly rather than OmegaMotion: there's no
+## goal-switching/overshoot concern to manage here (the goal is always
+## exactly zero, held for as long as the button is), so a flat linear
+## approach to zero is both correct and simpler than reusing the jerk-
+## limited machinery built for a continuously-changing goal.
+##
+## Accel state is zeroed every frame this runs, not just left alone —
+## releasing the brake should resume normal flight from a clean idle
+## engine, not from whatever acceleration happened to be stored the instant
+## the brake was pressed.
+func _apply_air_brake(delta: float) -> void:
+	var linear_decel: float = profile.air_brake_fraction * profile.forward_max_accel
+	_linear_velocity = _linear_velocity.move_toward(Vector3.ZERO, linear_decel * delta)
+	_linear_accel = Vector3.ZERO
 
-
-## Drives `current` toward `input * max_value` using `accel`, and brakes it
-## back toward zero at a flat `damping` rate whenever there's no input on
-## this axis — this pairing is what gives the "flight assist" feel (bounded,
-## dampened) rather than true Newtonian drift or instant direct control.
-func _approach_axis(current: float, input: float, max_value: float, accel: float, damping: float, delta: float) -> float:
-	if absf(input) > 0.0:
-		return move_toward(current, input * max_value, accel * delta)
-	return move_toward(current, 0.0, damping * delta)
+	_angular_velocity.x = move_toward(_angular_velocity.x, 0.0, profile.pitch_yaw_max_accel * delta)
+	_angular_velocity.y = move_toward(_angular_velocity.y, 0.0, profile.pitch_yaw_max_accel * delta)
+	_angular_velocity.z = move_toward(_angular_velocity.z, 0.0, profile.roll_max_accel * delta)
+	_angular_accel = Vector3.ZERO
 
 
 func _apply_deadzone(stick: Vector2) -> Vector2:
@@ -191,8 +276,23 @@ func get_speed() -> float:
 	return _linear_velocity.length()
 
 
+## World-space velocity vector — the real "where the ship is actually
+## headed" direction, as distinct from where its nose points. This is what
+## flight_hud.gd's flight-path marker is built on: on a flight-assist-off
+## ship, momentum and heading routinely diverge (a turn carries sideways
+## drift, see this file's header), so the marker showing true velocity
+## direction is meaningfully different information from the boresight.
+func get_velocity() -> Vector3:
+	return _linear_velocity
+
+
 ## Zeroes velocity so the ship doesn't keep drifting through the ground
 ## while frozen after a crash, and doesn't carry speed into a respawn.
+## Acceleration is cleared too — leaving a stored acceleration behind would
+## have the ship spontaneously accelerate itself on the frame after a
+## respawn, without any input.
 func reset_velocity() -> void:
 	_linear_velocity = Vector3.ZERO
 	_angular_velocity = Vector3.ZERO
+	_linear_accel = Vector3.ZERO
+	_angular_accel = Vector3.ZERO

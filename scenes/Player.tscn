@@ -40,16 +40,8 @@
 [ext_resource type="AudioStream" uid="uid://da06ry565wnav" path="res://Assets/Audio/missile_alert_2.mp3" id="45_alert2"]
 [ext_resource type="Script" uid="uid://dufkeef6mawu4" path="res://scripts/damage_feedback.gd" id="46_damagefeedback"]
 [ext_resource type="Script" path="res://scripts/death_screen.gd" id="47_deathscreen"]
-
-[sub_resource type="CylinderMesh" id="CylinderMesh_arrow"]
-top_radius = 0.0
-bottom_radius = 0.02
-height = 0.08
-radial_segments = 8
-
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_arrow"]
-shading_mode = 0
-albedo_color = Color(1, 0.85, 0.1, 1)
+[ext_resource type="Script" uid="uid://bxg783bfypqqk" path="res://scripts/flight_hud.gd" id="48_flighthud"]
+[ext_resource type="FontFile" uid="uid://l3cfm2xy05pd" path="res://Assets/Fonts/Orbitron-Variable.ttf" id="49_orbitron"]
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_fade"]
 render_priority = -1
@@ -66,9 +58,9 @@ transparency = 1
 shading_mode = 0
 albedo_color = Color(0.55, 0.02, 0.02, 0)
 
-[sub_resource type="SphereMesh" id="SphereMesh_crosshair"]
-radius = 0.3
-height = 0.6
+[sub_resource type="TorusMesh" id="TorusMesh_crosshair"]
+inner_radius = 0.008
+outer_radius = 0.011
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_crosshair"]
 shading_mode = 0
@@ -88,9 +80,12 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.22, -0.17, -0.4)
 pixel_size = 0.00018
 billboard = 1
 no_depth_test = true
-text = "SPEED: -- m/s
-GUN: --"
+modulate = Color(0, 2.2, 2.4, 1)
+outline_modulate = Color(0, 0.05, 0.05, 1)
+text = "GUN: --"
+font = ExtResource("49_orbitron")
 font_size = 30
+outline_size = 8
 horizontal_alignment = 0
 script = ExtResource("15_hud")
 
@@ -99,7 +94,11 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.22, -0.17, -0.4)
 pixel_size = 0.00018
 billboard = 1
 no_depth_test = true
+modulate = Color(2.2, 0.7, 0.2, 1)
+outline_modulate = Color(0.05, 0.02, 0, 1)
+font = ExtResource("49_orbitron")
 font_size = 26
+outline_size = 8
 horizontal_alignment = 0
 vertical_alignment = 2
 script = ExtResource("42_killfeed")
@@ -108,20 +107,19 @@ script = ExtResource("42_killfeed")
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.15, 0.05, -0.4)
 script = ExtResource("21_locator")
 
-[node name="Arrow" type="MeshInstance3D" parent="XRCamera3D/EnemyLocator"]
-transform = Transform3D(1, 0, 0, 0, -4.37114e-08, 1, 0, -1, -4.37114e-08, 0, 0, 0)
-mesh = SubResource("CylinderMesh_arrow")
-surface_material_override/0 = SubResource("StandardMaterial3D_arrow")
-
 [node name="HealthHUD" type="Label3D" parent="XRCamera3D"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.24, 0.2, -0.4)
 pixel_size = 0.00018
 billboard = 1
 no_depth_test = true
+modulate = Color(0, 2.2, 2.4, 1)
+outline_modulate = Color(0, 0.05, 0.05, 1)
 text = "COCKPIT: --
 ENGINE: --
 HULL: --"
+font = ExtResource("49_orbitron")
 font_size = 30
+outline_size = 8
 horizontal_alignment = 0
 script = ExtResource("32_healthhud")
 
@@ -130,10 +128,14 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.28, -0.4)
 pixel_size = 0.00018
 billboard = 1
 no_depth_test = true
+modulate = Color(2.2, 2.2, 2.4, 1)
+outline_modulate = Color(0.02, 0.02, 0.05, 1)
 text = "AIR SUPERIORITY
 FRIENDLY 50% - ENEMY 50%
 10:00"
+font = ExtResource("49_orbitron")
 font_size = 30
+outline_size = 8
 script = ExtResource("33_battlehud")
 
 [node name="MainMenu" type="Node3D" parent="XRCamera3D"]
@@ -149,24 +151,36 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.2, -0.55)
 pixel_size = 0.0015
 billboard = 1
 no_depth_test = true
+modulate = Color(0, 2.2, 2.4, 1)
+outline_modulate = Color(0, 0.05, 0.05, 1)
 text = "ALIEN INVASION
 AIR SUPERIORITY"
+font = ExtResource("49_orbitron")
+outline_size = 10
 
 [node name="StartLabel" type="Label3D" parent="XRCamera3D/MainMenu"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.19, -0.02, -0.55)
 pixel_size = 0.0018
 billboard = 1
 no_depth_test = true
+modulate = Color(0, 2.2, 2.4, 1)
+outline_modulate = Color(0, 0.05, 0.05, 1)
 text = "START"
+font = ExtResource("49_orbitron")
 font_size = 34
+outline_size = 10
 
 [node name="QuitLabel" type="Label3D" parent="XRCamera3D/MainMenu"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.19, -0.02, -0.55)
 pixel_size = 0.0018
 billboard = 1
 no_depth_test = true
+modulate = Color(0, 2.2, 2.4, 1)
+outline_modulate = Color(0, 0.05, 0.05, 1)
 text = "QUIT"
+font = ExtResource("49_orbitron")
 font_size = 34
+outline_size = 10
 
 [node name="Hint" type="Label3D" parent="XRCamera3D/MainMenu"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.13, -0.55)
@@ -176,6 +190,7 @@ no_depth_test = true
 modulate = Color(0.6, 0.6, 0.65, 1)
 text = "STICK LEFT / RIGHT TO SELECT
 RIGHT TRIGGER TO CONFIRM"
+font = ExtResource("49_orbitron")
 font_size = 26
 
 [node name="Music" type="AudioStreamPlayer" parent="XRCamera3D/MainMenu"]
@@ -202,6 +217,7 @@ no_depth_test = true
 modulate = Color(1, 0.35, 0.3, 1)
 outline_modulate = Color(0.15, 0, 0, 1)
 text = "DESTROYED"
+font = ExtResource("49_orbitron")
 outline_size = 20
 
 [node name="RespawnLabel" type="Label3D" parent="XRCamera3D/DeathScreen"]
@@ -209,16 +225,24 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.19, -0.02, -0.55)
 pixel_size = 0.0018
 billboard = 1
 no_depth_test = true
+modulate = Color(0, 2.2, 2.4, 1)
+outline_modulate = Color(0, 0.05, 0.05, 1)
 text = "RESPAWN"
+font = ExtResource("49_orbitron")
 font_size = 34
+outline_size = 10
 
 [node name="MenuLabel" type="Label3D" parent="XRCamera3D/DeathScreen"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.19, -0.02, -0.55)
 pixel_size = 0.0018
 billboard = 1
 no_depth_test = true
+modulate = Color(0, 2.2, 2.4, 1)
+outline_modulate = Color(0, 0.05, 0.05, 1)
 text = "MAIN MENU"
+font = ExtResource("49_orbitron")
 font_size = 34
+outline_size = 10
 
 [node name="Hint" type="Label3D" parent="XRCamera3D/DeathScreen"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.13, -0.55)
@@ -228,6 +252,7 @@ no_depth_test = true
 modulate = Color(0.72, 0.55, 0.55, 1)
 text = "STICK LEFT / RIGHT TO SELECT
 RIGHT TRIGGER TO CONFIRM"
+font = ExtResource("49_orbitron")
 font_size = 26
 
 [node name="OptionsMenu" type="Label3D" parent="XRCamera3D"]
@@ -236,8 +261,12 @@ visible = false
 pixel_size = 0.0015
 billboard = 1
 no_depth_test = true
+modulate = Color(0, 2.2, 2.4, 1)
+outline_modulate = Color(0, 0.05, 0.05, 1)
 text = "OPTIONS"
+font = ExtResource("49_orbitron")
 font_size = 28
+outline_size = 8
 script = ExtResource("16_options")
 
 [node name="LeftHand" type="XRController3D" parent="."]
@@ -282,8 +311,12 @@ stream = ExtResource("22_lasersound")
 max_distance = 500.0
 
 [node name="Crosshair" type="MeshInstance3D" parent="Ship"]
-mesh = SubResource("SphereMesh_crosshair")
+transform = Transform3D(1, 0, 0, 0, 0, 1, 0, -1, 0, 0, 0, 0)
+mesh = SubResource("TorusMesh_crosshair")
 surface_material_override/0 = SubResource("StandardMaterial3D_crosshair")
+
+[node name="FlightHUD" type="Node3D" parent="Ship"]
+script = ExtResource("48_flighthud")
 
 [node name="WeaponSystem" type="Node" parent="."]
 script = ExtResource("14_weapons")

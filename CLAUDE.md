@@ -58,28 +58,83 @@ writes and wires up scenes/scripts directly.
   confirmed-working wander/chase AI depends on local -Z already being
   forward), so copying the flip onto `ShipHull` would have pointed the
   hull's modeled nose backwards.
-- `scripts/flight_controller.gd` — inertia-based 6DOF flight ("flight assist
-  ON" style, like Star Citizen's Arrow/Gladius): grip/stick input drives
-  acceleration, not position directly; releasing input lets it coast down
-  under real quadratic air drag rather than snapping to a stop. Right
-  grip/left grip = forward/reverse thrust; right stick = pitch/yaw; left
-  stick = roll/elevation. Velocity is stored in **world space** and
-  reprojected into the ship's current local frame each frame only to apply
-  thrust/drag — so flipping the ship around and thrusting decelerates
-  existing drift before building speed the new way, real Newtonian
-  behavior, with no special-casing required. Pitch/yaw and roll use
-  **separate** rotation-rate tunables — pitch/yaw capped at ~25°/s
-  (grounded in real F-16 sustained/peak pitch rate data), roll left faster
-  at ~86°/s. They used to share one rate 3-4x faster than a real fighter's
-  sustained pitch rate, which read as "touchy" — roll wasn't flagged as a
-  problem so it was left alone rather than also chased toward a real
-  fighter's ~240°/s roll rate, partly because fast rotation is its own VR
-  comfort issue independent of realism. All tunables (gravity, air density,
-  drag, rotation rates) are grounded in real NASA/aircraft-performance data
-  — see `docs/flight-physics-reference.md`. Includes the **gravity
-  compensator standard**: `gravity_compensator_active` (default `true`)
-  means gravity is never applied during normal flight; flipping it off is
-  the hook for a future "ship shutdown" state.
+- `scripts/flight_controller.gd` — inertia-based 6DOF flight, **flight
+  assist OFF on every axis, no exceptions**: grip/stick input directly
+  commands an acceleration, never a goal to return to. Right grip/left grip
+  = forward/reverse thrust; right stick = pitch/yaw; left stick =
+  roll/elevation. Velocity is stored in **world space** and reprojected
+  into the ship's current local frame each frame only to apply thrust — so
+  flipping the ship around and thrusting decelerates existing drift before
+  building speed the new way, real Newtonian behavior, with no
+  special-casing required.
+  **Every axis runs through `OmegaMotion.step_acceleration()`
+  (`scripts/omega_motion.gd`) against a shared `ShipFlightProfile` resource
+  (`Assets/ShipProfiles/standard_fighter.tres`)** — see
+  `docs/omega-flight-model.md` for the full design, condensed from two
+  flight-model-design PDFs the user supplied (John Pritchett's X4 "Omega"
+  motion doc and his Star Citizen IFCS design doc). Short version: the old
+  `move_toward(current, goal, accel*delta)` ramps were 2nd-order motion —
+  acceleration snapped instantly to its max the moment a stick was touched,
+  and back to zero the moment input released. Omega bounds that:
+  acceleration itself ramps smoothly up and down (the jerk limit). **This
+  profile is shared with every AI combatant in `faction_battle.gd`** —
+  direct answer to "the player's ship should have the same characteristics
+  as the AI ship": both draw the same max speeds/accelerations from the
+  same resource, not two separately-tuned approximations of each other.
+  Pitch/yaw and roll keep **separate** rotation-rate caps — pitch/yaw
+  ~25°/s (grounded in real F-16 sustained/peak pitch rate data), roll ~86°/s
+  (deliberately well under a real fighter's ~240°/s — fast rotation is its
+  own VR-comfort issue independent of realism) — carried over unchanged
+  into the shared profile; see `docs/flight-physics-reference.md` for that
+  grounding.
+  **No auto-braking, anywhere, ever — corrected live, twice.** The
+  original coasting-drag model (a real quadratic air-drag curve on throttle
+  release) was replaced first with an assisted brake to a goal velocity of
+  zero, which direct playtest feedback immediately flagged as still an
+  assist and far too strong ("if I let off the gas I slow down incredibly
+  fast, this should not be the case"). The actual, final design has no
+  goal-seeking on the player's ship at all: `step_acceleration()` commands
+  acceleration directly from input (-1..1 fraction of `max_accel`, jerk-
+  smoothed), clamps the resulting velocity/rate to the profile's governor
+  (`[min_value, max_value]` — an artificial top-speed ceiling every ship
+  has, matching IFCS's own "Speed Regulation," but the clamp only ever
+  engages exactly at the ceiling, never pulling the value back down), and
+  otherwise never touches velocity. Releasing input idles thrust and
+  leaves the ship coasting at whatever velocity/rotation rate it already
+  had — true inertia, including sideways drift/skid picked up mid-turn,
+  which is left completely alone rather than auto-corrected. **The AI is
+  unaffected**: its autopilot is legitimately goal-seeking
+  (`OmegaMotion.step_velocity()`/`step_position()`, see the Faction Battle
+  section below) because it always has a concrete target speed/heading to
+  hold — the split between "player = pure acceleration control" and
+  "AI = goal-seeking control" is drawn directly from the reference
+  material's own distinction between decoupled pilot input and automated
+  ship control. See `docs/omega-flight-model.md`.
+  Includes the **gravity compensator standard**: `gravity_compensator_active`
+  (default `true`) means gravity is never applied during normal flight;
+  flipping it off is the hook for a future "ship shutdown" state.
+  **Reverse thrust is a distinct, weaker system from the main drive, not
+  the same engine run backwards** — `ShipFlightProfile.reverse_thrust_fraction`
+  (0.4) scales the commanded acceleration whenever the LEFT grip is what's
+  driving the forward axis, so reverse tops out at 40% of forward's power:
+  "not reliable for space braking and also not incredibly powerful for
+  flying backwards." Implemented by scaling the INPUT before it reaches
+  `step_acceleration()`, not by branching the function itself.
+  **Air brake (right controller's A/`ax_button`) is the ONE deliberate
+  exception to flight-assist OFF** — a direct, explicit pilot command,
+  not an automatic assist. Holding it skips `_update_rotation()`/
+  `_update_translation()` entirely for that frame (real input is not even
+  read) and instead decelerates all six axes toward zero via
+  `_apply_air_brake()`: linear axes at `ShipFlightProfile.air_brake_fraction`
+  (0.6) of `forward_max_accel`, rotation at each axis's own existing
+  max_accel. Uses plain `Vector3.move_toward()`/`move_toward()` rather than
+  `OmegaMotion` — the goal is always exactly zero for as long as the button
+  is held, so there's no goal-switching/overshoot concern to manage, and a
+  flat linear approach is both correct and simpler than reusing the
+  jerk-limited machinery built for a continuously-changing goal. Zeroes the
+  stored acceleration state every frame it runs, so releasing the brake
+  resumes normal flight from a clean idle engine rather than whatever
+  acceleration happened to be stored the instant the brake was pressed.
 - `scripts/weapon_system.gd` — twin-gun laser weapon on `Ship/GunMountLeft`
   / `GunMountRight`. Fires on the right trigger (`trigger_click`),
   alternating muzzle each shot. The two mounts are **toed in** via
@@ -434,7 +489,12 @@ what it sounds like — two enormous undifferentiated clouds. Now:
 - Wingmen hold a **formation station** on their leader (staggered
   V/echelon, `_formation_station()`) with a **throttle** that speeds up or
   slows down to close on that station — flying at one fixed speed either
-  strings a squad out behind its leader or piles it into them.
+  strings a squad out behind its leader or piles it into them. Throttle
+  response now runs through the same `OmegaMotion.step_velocity()` the
+  player's own throttle uses (see `docs/omega-flight-model.md`), against
+  the identical shared `ShipFlightProfile` — cruise speed is
+  `flight_profile.max_forward_speed * (0.75-0.95, per pilot)`, up from a
+  flat, disconnected `140-210 m/s` band.
 - Squads **focus fire**: the leader's target is weighted as much closer
   than it is during retargeting, so a squad concentrates rather than
   fragmenting onto five separate targets the moment it arrives.
@@ -447,6 +507,22 @@ what it sounds like — two enormous undifferentiated clouds. Now:
 
 Per-pilot state machine (`Combatant.State`), layered under the squad's
 orders, modelled on how modern combat-flight AI reads:
+
+**Heading convergence uses `OmegaMotion.step_position()`**
+(`_turn_toward()`), replacing a flat `heading.slerp(desired,
+TURN_RATE*delta)` that had two problems: its effective angular speed scaled
+with how far off the target was (a 180° reversal swung faster than a small
+correction — backwards from how an airframe behaves), and it had no
+acceleration at all, so a ship went from flying straight to turning at full
+rate within a single frame. The new version turns at a real, bounded,
+ramped rate — `flight_profile.ai_turn_max_rate`, the same F-16-grounded
+pitch/yaw cap the player's own ship obeys, not a separate AI-only number —
+ramping up, cruising, and braking into alignment with zero overshoot (the
+textbook trapezoidal-velocity-profile switch, `sqrt(2*accel*angle_remaining)`).
+Reuses the pitch/yaw cap rather than roll's deliberately: an AI ship
+re-points its nose omnidirectionally instead of rolling into a turn, so
+letting it turn at roll speed would make it strictly more maneuverable
+than the player flying the identical ship.
 
 - **FORMATION** — holding station (or, for a leader, flying the objective).
 - **PURSUE** — running in on a target using a real lead/intercept solution
@@ -1202,6 +1278,243 @@ this is a cockpit alert, not a world-space effect. Processed once via
 volume trimmed down: `bass=g=8:f=100:w=0.5,lowpass=f=3200,aecho=0.8:0.7:
 60:0.25,volume=0.7`, saved as `Assets/Audio/missile_alert_1.mp3` /
 `missile_alert_2.mp3`.
+
+## Flight HUD — projected on the ship's own glass, not the helmet
+
+Two genuinely different HUD layers now exist in this game, and the
+distinction is load-bearing, not cosmetic:
+
+- **Helmet-anchored** — `hud.gd`, `kill_feed_hud.gd`, `player_health_hud.gd`,
+  `battle_hud.gd`, all `Label3D`s parented under `XRCamera3D`. These stay
+  centered on the player's VIEW regardless of head rotation — appropriate
+  for debug info (FPS/PERF), kill feed, health, and match stats
+  (Air Superiority %/timer), none of which is about *flying the ship*, all
+  of which were explicitly kept here per direct instruction.
+- **Ship-anchored (glass)** — `scripts/flight_hud.gd` (`FlightHUD` node,
+  child of `Ship`, not `XRCamera3D`). This is the new one: speed, altitude,
+  heading, thrust input, and the flight-path (velocity vector) marker — the
+  actual flight-dynamics telemetry, "a holographic image on the glass of
+  the ship itself above the dashboard." Being parented under `Ship` instead
+  of the camera is what makes that true: it shows real parallax as the
+  player moves their head, exactly like `weapon_system.gd`'s pre-existing
+  `Ship/Crosshair` already does ("like a reticle etched on the glass, not a
+  HUD marker") — `FlightHUD` reuses that same parenting convention for
+  every element it builds, rather than introducing a second HUD philosophy.
+  `hud.gd` had its `SPEED` line removed to match (moved here); FPS/PERF/
+  GUN/MSL/CITY are debug or weapon/objective status, not flight dynamics,
+  and stayed on the helmet by the same reasoning that kept kill feed and
+  match stats there.
+
+**`hud_center` (local `y=1.9, z=0.9` in `Ship`'s space) is a first-pass
+placement, unverified in the headset** — seeded near the existing
+`GunMountLeft`/`GunMountRight` position (an already-established
+in-front-of-the-pilot spot) rather than guessed from nothing, but this
+cockpit's actual dashboard/glass geometry has never been measured. Same
+caveat as `ShipHull`'s placement and every other cockpit-relative
+placement in this project: will likely need live-in-VR correction.
+`+Z is forward` in `Ship`'s local space throughout this script (not
+Godot's usual `-Z`), matching `weapon_system.gd`'s own convergence-point
+math — `Ship` carries a 180-degree flip basis to correct its glTF's
+backwards-authored forward direction (see `Player.tscn`'s node comment
+history), and every offset in `flight_hud.gd` follows that same
+convention rather than reintroducing the flip as a bug.
+
+- **Flight path marker** — "shows where your ship will be in the next
+  1000 meters," i.e. the real velocity-vector direction, not the nose
+  direction — meaningfully different information on a flight-assist-off
+  ship (see the flight-model section above), where momentum and heading
+  routinely diverge. Positioned each frame at `hud_center +
+  ship_local_velocity_direction * marker_distance` — `flight_controller.gd`
+  gained a `get_velocity()` getter (previously only `get_speed()`, the
+  scalar magnitude, existed) so this could read the real vector. This is
+  the exact same "fixed apparent distance along a real direction" HUD
+  placement trick `target_lock.gd`'s PIP ring already uses, just anchored
+  to `Ship`'s frame instead of the camera's — anchored differently because
+  it needs to sit fixed on the glass, not track the player's view. Hidden
+  below `marker_min_speed` (2 m/s) rather than showing a jittery direction
+  near-zero velocity.
+- **Crosshair — open ring, not a dot, replacing the sphere.** `Player.tscn`'s
+  `Ship/Crosshair` keeps the exact position `weapon_system.gd` already
+  computes (the real 229m gun-convergence point — no code changes there);
+  only its mesh/material sub-resources changed, `SphereMesh` →
+  `TorusMesh` (inner 0.22 / outer 0.32), restyled to the neon palette
+  below. **Real gotcha hit and fixed**: Godot's `TorusMesh` lies flat with
+  its hole-axis along local Y by default (confirmed by `target_lock.gd`'s
+  own PIP ring needing `BILLBOARD_ENABLED` just to face the camera at
+  all) — without a fix the ring would render edge-on as a sliver from the
+  cockpit. Fixed with a baked 90-degree rotation on the `Crosshair` node's
+  own transform (not billboarding — this needs to keep real depth/parallax
+  like the sphere it replaced, not always face the camera). The open shape
+  is deliberate: designed to be visually lined up over `target_lock.gd`'s
+  existing yellow PIP ring for a lead-computing gunsight read, the same way
+  a real HUD's static reticle and dynamic funnel/pipper work together —
+  no conflict between the two even though one is ship-anchored (real
+  parallax) and the other is visor-anchored (fixed apparent size), since
+  both ultimately render toward the correct real-world direction.
+- **Altitude ladder** — two thin vertical lines flanking the crosshair plus
+  a moving tick, encoding `Ship.global_position.y` directly. No terrain
+  sampling needed: this project already treats world `Y=0` as sea level
+  (motherships/`dome_center` are placed against that same convention), so
+  the ship's own altitude *is* the sea-level-relative figure. Linearly
+  mapped and clamped across `altitude_range` (±3000m first-pass) rather
+  than left unbounded, so an extreme altitude doesn't fling the tick
+  off-frame.
+- **Thrust gauge** — a simple two-part vertical bar (dim track + bright
+  fill scaled 0..1) reading `absf(right_grip_value - left_grip_value)`
+  (both already exposed on `flight_controller.gd`). Deliberately INPUT, not
+  resulting velocity — on a flight-assist-off ship those are genuinely
+  different signals (see the flight-model section above), and speed is
+  already shown separately.
+- **Heading readout** — small addition beyond the literal request, cheap
+  given the data was already on hand. Derived from `Ship`'s actual forward
+  DIRECTION vector (`basis * Vector3(0,0,1)`, then `atan2`), **not**
+  `Basis.get_euler()` — a real bug caught before it shipped: `Ship`'s baked
+  180-degree flip basis would have corrupted an Euler-angle decomposition,
+  reading 180 degrees off. Reading where local +Z actually points in world
+  space sidesteps the decomposition entirely.
+
+**Font — Orbitron**, SIL Open Font License 1.1 (`Assets/Fonts/`, license
+text included), fetched from Google Fonts' variable-font release (one file,
+all weights, selectable via Godot's `FontVariation` if a specific weight is
+ever needed — no separate Regular/Bold files to keep in sync). Applied via
+each `Label3D`'s `font` property, project-wide: both the new `FlightHUD`
+labels and every existing helmet HUD/menu/death-screen label, per direct
+instruction that any text currently on the helmet or screen should match.
+"Neon/electronic" is styling on top of the glyphs, not a font-shape
+property: `modulate` colors pushed **above 1.0** per channel (e.g.
+`Color(0, 2.2, 2.4)`) so the existing Glow post-process (`Town.tscn`'s
+Environment, already enabled, threshold 1.15) actually blooms the text —
+the same technique this project's emissive materials already use via
+`emission_energy_multiplier`, just applied to text instead — plus a dark
+outline for legibility against a bright sky, matching the existing
+`DeathScreen` label convention. Colors that already carried meaning
+(`DeathScreen`'s red, `MainMenu`/`DeathScreen`'s grey hint text) were left
+alone; only the plain-white labels got the neon treatment.
+
+Verified headlessly: `FlightHUD` builds all its child nodes without error
+inside a standalone `Player.tscn` instantiation, the flight path marker
+correctly hides at rest (zero velocity), and the altitude tick's mapped
+position matches the expected clamped value at both an extreme-positive
+and below-sea-level altitude.
+
+**Real bugs caught on the first live pass, all fixed:**
+
+- **Backwards text.** A non-billboarded `Label3D`'s readable front face
+  points along its own local +Z by default. The pilot sits at a lower Z
+  than `hud_center` looking toward +Z — the same direction the label
+  itself faced, un-rotated — so the pilot only ever saw the text's BACK,
+  which renders mirrored. Every existing `Label3D` in this project before
+  `flight_hud.gd` used `billboard = 1`, which sidesteps this entirely by
+  always facing the camera — these are the first non-billboarded labels in
+  the project, so this was a fresh bug, not a regression. Fixed with
+  `label.rotation.y = PI` in `_build_label()` — a real 180-degree rotation,
+  not a mirror, so the text reads correctly rather than just relocating
+  which side looks wrong.
+- **Invisible/edge-on crosshair**, same root cause class as the text bug.
+  `TorusMesh` lies flat with its hole-axis along local Y by default; the
+  first version hand-picked a fixed 90-degree rotation to face it forward,
+  which is exactly the kind of guess that's easy to get backwards. Fixed by
+  billboarding the material instead (`billboard_mode = 1` on
+  `StandardMaterial3D_crosshair`), the same technique `target_lock.gd`'s
+  PIP ring already uses for this identical shape — guaranteed correct from
+  any angle, position/parallax untouched.
+- **Elevation track and thrust gauge fully invisible.** Ordinary depth
+  testing let the cockpit's own dashboard mesh occlude them — they sit
+  close in front of the pilot (unlike the original crosshair, which was
+  always 229m out, past any physical cockpit geometry regardless of depth
+  testing). Fixed with `no_depth_test = true` on every close-in `FlightHUD`
+  element's material — a real HUD combiner reflects light off glass in
+  front of everything in the cockpit, so always-on-top is the physically
+  correct behavior here, not a hack.
+- **Scale and placement, tuned twice against direct feedback**: the flight
+  path marker sits close to the camera (~1.6m) rather than far away like
+  the crosshair (229m), so the same radius that reads as a fine reticle at
+  range read as a huge ring up close — cut to `marker_inner/outer_radius`
+  0.009/0.012 (previously 0.09/0.12, a 10x reduction, per "needs to be
+  about ten percent of the size it currently is") and recolored plain white
+  (`MARKER_WHITE`, not green — real HUDs use a neutral velocity-vector
+  symbol so it isn't mistaken for a faction-tinted or weapon-status color).
+  `hud_center` was raised twice — 1.9 → 2.35 → 2.9 — after two rounds of
+  "too low"/"sitting on the dashboard, half on the dash, half in the
+  glass," and `element_scale` was halved (1.0 → 0.5) after "way too big"
+  covering the whole cluster.
+- **Real, reproducible Godot quirk worth remembering**: running
+  `godot --headless --editor --quit` appears to strip
+  `emission_enabled`/`emission`/`emission_energy_multiplier` from
+  `StandardMaterial3D_crosshair` specifically on resave, even though the
+  identical properties on programmatically-built materials elsewhere
+  (everything in `flight_hud.gd`, built at runtime in GDScript, never
+  written to the `.tscn` at all) are unaffected. Reproduced twice across
+  separate edits. The crosshair still renders — `shading_mode = 0`
+  (unshaded) shows its flat `albedo_color` regardless — it just loses the
+  extra bloom glow on scenes that get resaved this way. Not yet root-caused
+  beyond "this specific static-scene material, this specific property
+  set"; worth a look if it recurs elsewhere.
+
+**Second live pass — a real drift bug, fixed at the source:**
+
+- **Crosshair read as a dot, not a circle.** At 229m out, the original
+  ring (inner 0.22 / outer 0.32) subtended well under a fifth of a degree —
+  invisible as an "open" shape at any plausible VR angular resolution.
+  Sized up roughly 9x (inner 2.0 / outer 3.0), landing around 1.5 degrees
+  of apparent diameter, comfortably legible as a ring rather than a point.
+- **Ladder not centered on the crosshair — root-caused, not just
+  re-tuned.** Reported as "the bottom of [the ladder] is sitting even with
+  the crosshair... the crosshair needs to sit between those two bars."
+  The actual cause: `hud_center.y` had been raised twice (1.9 -> 2.35 ->
+  2.9) to fix the STATIC cluster's own placement, but the crosshair's
+  Y is computed entirely separately, in `weapon_system.gd`, from
+  `GunMountLeft`/`GunMountRight`'s own fixed y=1.9 — the two values were
+  never linked, so every ladder-placement fix silently pulled the ladder
+  further from the crosshair instead of closer. Fixed at the source rather
+  than by hand-copying another number: `flight_hud.gd` now reads
+  `GunMountLeft`/`GunMountRight`'s average Y itself in `_ready()` (a static
+  scene value, available immediately — no dependency on
+  `weapon_system.gd`'s own `_ready()` having already run) and overwrites
+  `hud_center.y` with it, so the two literally cannot drift apart again.
+  Verified headlessly: crosshair Y, gun-mount average Y, and
+  `flight_hud.hud_center.y` all read exactly 1.9 after this fix.
+- **Ladder bars widened 50%** (`ladder_x_offset` 0.16 -> 0.24) for
+  clearance around the now-larger crosshair sitting between them, per
+  direct request.
+
+**Third pass — a screenshot this time, not just a description:**
+
+- **The Y-lock-to-crosshair fix from the second pass was itself wrong**,
+  caught immediately: "that is way too low again, now you drop the
+  elevation into the dashboard... it was almost in the perfect spot, it
+  just needed to go down a couple inches." Root cause: matching two
+  objects' raw local-Y coordinates does not make them appear vertically
+  aligned on screen unless they're at the same DEPTH — the crosshair sits
+  229m out and the ladder sits 0.9m out, so the same Y offset from the
+  camera's real eye height subtends a far bigger apparent angle up close
+  than it does 229m away. The crosshair barely moves on screen across a
+  wide range of Y values for exactly this reason, which is what made the
+  coordinate-matching fix look plausible in code while being visually
+  wrong. Reverted to a plain, directly-tunable `hud_center.y` (2.8 — "2.9
+  was almost perfect, just needed to go down a couple inches") rather than
+  deriving it from anything. **The lesson**: apparent on-screen alignment
+  between elements at different depths has to be tuned by eye against real
+  feedback, not solved with a coordinate trick — the same category of
+  mistake as assuming two things "look aligned" just because a formula
+  says their numbers match.
+- **Crosshair enlarged again** after a screenshot showed it reading as
+  a small mark rather than a clear circle even after the first size pass —
+  `TorusMesh_crosshair` inner/outer radius 2.0/3.0 (up from 0.22/0.32
+  originally, roughly 9x), which at 229m works out to roughly 1.5 degrees
+  of apparent diameter.
+- **Yellow objective arrow removed entirely**, per direct instruction
+  ("get rid of the yellow objective marker") — visible in a supplied
+  screenshot as a distracting wedge floating in the sky. Only the visual
+  `Arrow` `MeshInstance3D` (and its now-unused `CylinderMesh`/
+  `StandardMaterial3D` sub-resources) came out of `Player.tscn`;
+  `enemy_locator.gd` keeps running every frame and still exposes
+  `distance_to_objective`, which `hud.gd`'s `CITY:` line still reads (with
+  the now-stale "follow the yellow arrow" wording dropped from that line).
+
+**Not yet verified**: actual on-glass position/legibility/minimalism in VR
+with all of the above applied — needs another live headset pass, same as
+every other cockpit placement in this project.
 
 ## Visual grade — smoggy, wet, and not cartoony
 

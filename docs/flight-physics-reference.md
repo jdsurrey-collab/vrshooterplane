@@ -25,6 +25,18 @@ feel physically grounded rather than just "roughly right."
 
 ## 2. Atmosphere & the drag equation
 
+**HISTORICAL — no longer live code.** This section documented
+`flight_controller.gd`'s old coasting-drag model: releasing the throttle
+bled speed off under this real quadratic drag curve rather than snapping to
+a stop. That model has been removed — see `docs/omega-flight-model.md`
+("Coasting drag is retired"). Releasing input now commands a goal velocity
+of zero and brakes toward it through the same Switched-Omega controller
+every other axis uses, matching how the AI's throttle already worked and
+matching this ship's own "flight-assist-on, thruster-driven" fiction (drag
+is something a real IFCS *compensates for*, not something the craft coasts
+under). Kept below for its sourced values and worked example, since they're
+accurate reference material even though the code path is gone.
+
 **ISA sea-level air density:** ρ₀ = 1.225 kg/m³ — International Standard
 Atmosphere, sourced from NASA Glenn Research Center's Earth Atmosphere
 Model. `air_density` in `flight_controller.gd` is set to exactly this value.

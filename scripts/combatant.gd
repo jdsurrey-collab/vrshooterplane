@@ -34,6 +34,16 @@ var position: Vector3 = Vector3.ZERO
 var heading: Vector3 = Vector3.FORWARD  # normalized, local -Z equivalent
 var speed: float = 0.0  # current, throttled around base_speed to hold formation
 var base_speed: float = 0.0  # this pilot's natural cruise
+
+## Switched Omega state (see omega_motion.gd / docs/omega-flight-model.md).
+## These persist between frames and are what make this ship's acceleration
+## and turn rate ramp smoothly instead of snapping — the same flight model
+## the player's own ship uses, from the same ShipFlightProfile. Resetting
+## them without resetting the values they drive (or vice versa) leaves a
+## ship accelerating or turning with no reason to, so _respawn_combatant
+## clears both together.
+var speed_accel: float = 0.0  # m/s^2, throttle acceleration
+var turn_rate: float = 0.0  # rad/s, current heading-convergence rate
 var faction: int = Faction.FRIENDLY
 var health: float = 30.0
 var alive: bool = true

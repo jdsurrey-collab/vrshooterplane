@@ -1,0 +1,26 @@
+[gd_resource type="Resource" script_class="ShipFlightProfile" load_steps=2 format=3 uid="uid://belwtd8cxwr52"]
+
+[ext_resource type="Script" uid="uid://c3wmdyr663wu0" path="res://scripts/ship_flight_profile.gd" id="1_shipprofile"]
+
+[resource]
+script = ExtResource("1_shipprofile")
+max_forward_speed = 300.0
+max_reverse_speed = 150.0
+forward_max_accel = 500.0
+forward_accel_time = 0.35
+reverse_thrust_fraction = 0.4
+max_vertical_speed = 100.0
+max_lateral_speed = 100.0
+maneuver_max_accel = 120.0
+maneuver_accel_time = 0.25
+max_pitch_yaw_speed = 0.44
+pitch_yaw_max_accel = 1.2
+pitch_yaw_accel_time = 0.2
+max_roll_speed = 1.5
+roll_max_accel = 4.0
+roll_accel_time = 0.12
+air_brake_fraction = 0.6
+ai_turn_max_rate = 0.44
+ai_turn_max_accel = 1.2
+ai_cruise_fraction_min = 0.75
+ai_cruise_fraction_max = 0.95

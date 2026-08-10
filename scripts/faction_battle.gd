@@ -137,7 +137,6 @@ const GRID_CELL_SIZE := 450.0
 const ENGAGE_RANGE := 800.0  # inside this a pilot will actually shoot
 const MAX_ACQUISITION_RANGE := 3000.0  # targets beyond this aren't acquired at all — see _retarget_if_needed
 const FIRE_CONE := deg_to_rad(14.0)  # must have the target roughly ahead, not abeam, to fire
-const TURN_RATE := 0.9  # rad/s-ish steering response (up from 0.6 — dogfights need more authority)
 const MIN_GROUND_CLEARANCE := 200.0  # meters; pull up if under this, same convention as enemy_ai.gd
 const LOOKAHEAD_TIME := 3.0  # seconds ahead to also check clearance for
 const LOOKAHEAD_STAGGER := 4  # only 1/4 of the population re-runs the lookahead terrain sample per frame
@@ -219,6 +218,18 @@ const ENEMY_BOLT_COLOR := Color(1.0, 0.25, 0.15)
 
 const KILL_FEED_MAX_ENTRIES := 6
 const KILL_FEED_ENTRY_LIFETIME := 8.0
+
+## The SAME performance definition the player's own ship flies by (see
+## flight_controller.gd, scripts/omega_motion.gd and
+## docs/omega-flight-model.md). Every combatant's cruise speed, throttle
+## response and turn rate is derived from this resource, so "the player
+## flies the same ship as the AI" holds in code — retuning
+## standard_fighter.tres retunes the player and all 200 ships together
+## instead of letting the two drift apart, which is exactly what had
+## happened before (the AI cruised at 140-210 m/s against the player's 300,
+## and turned at an unbounded slerp rate with no relation to the player's
+## pitch/yaw limit).
+@export var flight_profile: ShipFlightProfile = preload("res://Assets/ShipProfiles/standard_fighter.tres")
 
 @export var friendly_count: int = 100
 @export var enemy_count: int = 100
@@ -494,7 +505,12 @@ func _spawn_faction(target: Array, count: int, faction: int) -> void:
 	for i in count:
 		var c := Combatant.new()
 		c.faction = faction
-		c.base_speed = randf_range(140.0, 210.0)
+		# Cruise as a FRACTION of the shared profile's top speed, so raising
+		# the ship's performance carries the whole fleet with it rather than
+		# leaving the AI behind at stale absolute numbers.
+		c.base_speed = randf_range(
+				flight_profile.ai_cruise_fraction_min,
+				flight_profile.ai_cruise_fraction_max) * flight_profile.max_forward_speed
 		c.speed = c.base_speed
 		c.accuracy = randf_range(0.55, 0.95)
 		c.health = MAX_HEALTH
@@ -701,10 +717,7 @@ func _update_combatant(c: Combatant, my_index: int, opposing: Array, own_units: 
 		var level_forward := desired_dir if desired_dir.length() > 0.01 else c.heading
 		desired_dir = level_forward.normalized() + Vector3.UP * 1.5
 
-	if desired_dir.length() > 0.01:
-		var new_heading := c.heading.slerp(desired_dir.normalized(), clampf(TURN_RATE * delta, 0.0, 1.0))
-		if new_heading.length() > 0.01:
-			c.heading = new_heading.normalized()
+	_turn_toward(c, desired_dir, delta)
 
 	_update_throttle(c, sq, own_units, has_target, target_pos, delta)
 	c.position += c.heading * c.speed * delta
@@ -728,6 +741,51 @@ func _update_combatant(c: Combatant, my_index: int, opposing: Array, own_units: 
 			and c.position.distance_to(target_pos) <= MISSILE_ENGAGE_RANGE:
 		c.missile_cooldown = randf_range(MISSILE_COOLDOWN_MIN, MISSILE_COOLDOWN_MAX)
 		_fire_missile_at_player(c, target_pos)
+
+
+## Rotates a ship's nose toward `desired_dir` under the SAME bounded turn
+## rate the player's ship obeys (flight_profile.ai_turn_max_rate, which is
+## the profile's real pitch/yaw limit), ramping that rate up and braking it
+## back down through OmegaMotion rather than snapping.
+##
+## This replaced a flat `heading.slerp(desired, TURN_RATE * delta)`. That
+## form has two problems this fixes: its effective angular speed was
+## proportional to how far off the target was (a 180-degree reversal swung
+## faster than a small correction — the opposite of how an airframe
+## behaves), and it had no acceleration at all, so a ship changed from
+## flying straight to turning at full rate within a single frame.
+##
+## Steering is a POSITIONAL problem — "close this angle to zero" — which is
+## why it uses step_position rather than step_velocity: the controller has
+## to invent the whole ramp-up/cruise/brake rate profile itself. The player
+## never needs this because their stick input already IS a rate command.
+func _turn_toward(c: Combatant, desired_dir: Vector3, delta: float) -> void:
+	if desired_dir.length() <= 0.01:
+		# Nothing commanded — bleed any residual turn rate off so the ship
+		# doesn't keep rotating on a stale rate from a previous frame.
+		c.turn_rate = move_toward(c.turn_rate, 0.0, flight_profile.ai_turn_max_accel * delta)
+		return
+
+	var goal_dir := desired_dir.normalized()
+	var angle_off := c.heading.angle_to(goal_dir)
+	if angle_off < 0.0001:
+		c.turn_rate = move_toward(c.turn_rate, 0.0, flight_profile.ai_turn_max_accel * delta)
+		return
+
+	var step := OmegaMotion.step_position(
+			angle_off, c.turn_rate, 0.0,
+			flight_profile.ai_turn_max_rate, flight_profile.ai_turn_max_accel, delta)
+	# step.y is signed toward closing the angle (i.e. negative, since the
+	# error runs from angle_off down to 0); only its magnitude matters here
+	# because the slerp below already carries the direction.
+	c.turn_rate = step.y
+	var swept: float = absf(step.y) * delta
+	# Rotate the heading by AT MOST `swept` radians toward the goal, as a
+	# fraction of the total angle — the same bounded-slerp pattern missile.gd
+	# uses for its own turn-rate limiting.
+	var new_heading := c.heading.slerp(goal_dir, clampf(swept / angle_off, 0.0, 1.0))
+	if new_heading.length() > 0.01:
+		c.heading = new_heading.normalized()
 
 
 ## Pilot-level state machine, layered under the squad's orders. A squad that
@@ -859,7 +917,11 @@ func _update_throttle(c: Combatant, sq: Squad, own_units: Array, has_target: boo
 		if leader.alive:
 			var gap := c.position.distance_to(_formation_station(leader, c.squad_slot))
 			wanted = clampf(leader.speed + gap * FORMATION_SPEED_GAIN, c.base_speed * 0.6, c.base_speed * 1.6)
-	c.speed = move_toward(c.speed, wanted, 90.0 * delta)
+	var step := OmegaMotion.step_velocity(
+			c.speed, c.speed_accel, wanted,
+			flight_profile.forward_max_accel, flight_profile.forward_accel_time, delta)
+	c.speed = step.x
+	c.speed_accel = step.y
 
 
 ## Pushes away from nearby same-faction ships. Without this, formation and
@@ -1021,6 +1083,8 @@ func _respawn_combatant(c: Combatant, sq: Squad) -> void:
 	c.health = MAX_HEALTH
 	c.alive = true
 	c.speed = c.base_speed
+	c.speed_accel = 0.0
+	c.turn_rate = 0.0
 	c.state = Combatant.State.PARKED
 	c.state_timer = 0.0
 	# Mid-match respawns don't queue behind the whole fleet the way the

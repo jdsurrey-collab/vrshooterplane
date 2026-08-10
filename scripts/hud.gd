@@ -1,12 +1,22 @@
 extends Label3D
 
-## Simple cockpit HUD readout: FPS, current speed, live weapon-system status
-## (right controller active, trigger state, fire cooldown, shot count),
-## crash/respawn status, and distance to the city objective (paired with the
-## EnemyLocator arrow) — so issues are visible in-headset instead of only
-## in the editor console. The FPS line exists mainly to tell "the game is
-## actually dropping frames" apart from "the game is fine, something
-## external (OBS, Virtual Desktop encoding) is the bottleneck."
+## Simple cockpit HUD readout: FPS, live weapon-system status (right
+## controller active, trigger state, fire cooldown, shot count), missile
+## lock state, crash/respawn status, and distance to the city objective —
+## so issues are visible in-headset instead of only in the editor console.
+## The FPS line exists mainly to tell "the game is actually dropping
+## frames" apart from "the game is fine, something external (OBS, Virtual
+## Desktop encoding) is the bottleneck."
+##
+## enemy_locator.gd's visible Arrow mesh was removed per direct instruction
+## ("get rid of the yellow objective marker") — the CITY line below still
+## reads its distance_to_objective, which enemy_locator.gd keeps computing
+## every frame regardless of whether anything renders.
+##
+## SPEED moved to flight_hud.gd's ship-anchored glass display — this is
+## debug/system-status information, not flight telemetry, and stays on the
+## helmet along with kill_feed_hud.gd and battle_hud.gd's match stats, per
+## direct instruction.
 ##
 ## PERF line added after a live report of FPS collapsing to ~6 during the
 ## 400-ship Faction Battle — headless testing can confirm simulation logic
@@ -17,7 +27,6 @@ extends Label3D
 ## bolts, and any live ShipExplosion particle/light effects) without
 ## guessing.
 
-var _flight_controller: Node
 var _weapon_system: Node
 var _missile_system: Node
 var _crash_handler: Node
@@ -28,7 +37,6 @@ func _ready() -> void:
 	# Label3D -> XRCamera3D -> Player
 	var camera := get_parent()
 	var player := camera.get_parent()
-	_flight_controller = player.get_node_or_null("FlightController")
 	_weapon_system = player.get_node_or_null("WeaponSystem")
 	_missile_system = player.get_node_or_null("MissileSystem")
 	_crash_handler = player.get_node_or_null("CrashHandler")
@@ -44,10 +52,6 @@ func _process(_delta: float) -> void:
 			Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME),
 			Performance.get_monitor(Performance.OBJECT_COUNT),
 	]
-
-	var speed_text := "SPEED: -- m/s"
-	if _flight_controller:
-		speed_text = "SPEED: %d m/s" % roundi(_flight_controller.get_speed())
 
 	var gun_text := "GUN: no weapon system found"
 	if _weapon_system:
@@ -78,9 +82,9 @@ func _process(_delta: float) -> void:
 
 	var enemy_text := "CITY: --"
 	if _enemy_locator and _enemy_locator.distance_to_objective >= 0.0:
-		enemy_text = "CITY: %d m — follow the yellow arrow" % roundi(_enemy_locator.distance_to_objective)
+		enemy_text = "CITY: %d m" % roundi(_enemy_locator.distance_to_objective)
 
-	var lines := [fps_text, perf_text, speed_text, gun_text, missile_text, enemy_text]
+	var lines := [fps_text, perf_text, gun_text, missile_text, enemy_text]
 	if _crash_handler and _crash_handler.crashed:
 		lines.append("CRASHED — respawning in %ds" % ceili(_crash_handler.respawn_time_remaining))
 

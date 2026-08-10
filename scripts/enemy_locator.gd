@@ -1,11 +1,14 @@
 extends Node3D
 
-## Points toward the city — the contested "dome" objective of the 400-ship
-## faction battle (faction_battle.gd) — instead of a single enemy ship, now
-## that there isn't one. Child of XRCamera3D, so the direction is computed
-## in the camera's LOCAL space each frame — that's what makes the arrow
-## keep pointing at the right real-world direction regardless of which way
-## you're currently looking.
+## Tracks the direction/distance to the city — the contested "dome"
+## objective of the 400-ship faction battle (faction_battle.gd) — instead
+## of a single enemy ship, now that there isn't one. Child of XRCamera3D,
+## so the direction is computed in the camera's LOCAL space each frame.
+##
+## The visible arrow mesh this node used to carry was removed per direct
+## instruction ("get rid of the yellow objective marker") — this node still
+## runs every frame and still exposes `distance_to_objective` for
+## hud.gd's CITY line, it just no longer renders anything itself.
 ##
 ## Exposes `distance_to_objective` for the HUD (renamed from
 ## `distance_to_enemy` — this used to point at the old single wandering

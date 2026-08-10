@@ -9,9 +9,21 @@ extends Node
 ## each mount; the guns are "toed in" so their lines of fire cross at a
 ## chosen distance ("harmonization"), concentrating fire on target instead of
 ## two parallel streams that never meet. See docs/gunnery-reference.md for
-## sourced reference distances. `convergence_distance` drives both the gun
-## mounts' toe-in angle and the crosshair's position, computed once in
-## _ready() so they always agree with each other.
+## sourced reference distances. `convergence_distance` drives the gun
+## mounts' toe-in angle, computed once in _ready().
+##
+## The CROSSHAIR SYMBOL is drawn separately, at `crosshair_distance` — NOT
+## at the real 229m convergence point any more. Direct instruction: "the
+## crosshair should be sitting point nine meters out too. It should be
+## directly on the glass, not out in front of me." This matches a real
+## HUD combiner rather than a literal floating reticle: an actual jet's HUD
+## glass sits at a fixed physical depth close to the pilot regardless of
+## how far a real gunsight would need to project a lead solution, and this
+## project's own `flight_hud.gd` cluster already sits at that same close
+## "glass" depth (its `hud_center.z`). The GUNS' actual aim is unaffected —
+## `_gun_left`/`_gun_right` still toe in toward the real convergence point
+## via `target_world` below, which is pure ballistics math independent of
+## where the crosshair symbol happens to be drawn.
 
 const LASER_BOLT := preload("res://scenes/LaserBolt.tscn")
 
@@ -19,7 +31,8 @@ const LASER_BOLT := preload("res://scenes/LaserBolt.tscn")
 @export var gun_left_path: NodePath = ^"../Ship/GunMountLeft"
 @export var gun_right_path: NodePath = ^"../Ship/GunMountRight"
 @export var crosshair_path: NodePath = ^"../Ship/Crosshair"
-@export var convergence_distance: float = 229.0  # meters (250 yards, RAF WWII standard)
+@export var convergence_distance: float = 229.0  # meters (250 yards, RAF WWII standard) — GUN AIM only
+@export var crosshair_distance: float = 0.9  # meters — where the SYMBOL is drawn, on the glass, not at the real convergence point
 
 ## Set by the options menu while it's open, so config adjustments can't
 ## trigger weapon fire.
@@ -63,9 +76,11 @@ func _ready() -> void:
 
 
 ## Points both gun mounts at a single world-space point straight ahead of
-## the ship at `convergence_distance`, and parks the crosshair there too —
-## `look_at()` handles the toe-in angle correctly regardless of the mounts'
-## existing orientation, since it works from actual world positions.
+## the ship at `convergence_distance` — `look_at()` handles the toe-in angle
+## correctly regardless of the mounts' existing orientation, since it works
+## from actual world positions. The crosshair SYMBOL is parked separately,
+## at `crosshair_distance` (see this file's header) — deliberately not the
+## same point the guns are aimed at.
 func _setup_convergence() -> void:
 	if not _gun_left or not _gun_right:
 		return
@@ -78,7 +93,7 @@ func _setup_convergence() -> void:
 	_gun_right.look_at(target_world, Vector3.UP)
 
 	if _crosshair:
-		_crosshair.position = target_local
+		_crosshair.position = Vector3(mid_local.x, mid_local.y, crosshair_distance)
 
 
 func _physics_process(delta: float) -> void:
