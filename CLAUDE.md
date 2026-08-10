@@ -165,6 +165,34 @@ writes and wires up scenes/scripts directly.
   releasing the throttle at 300 m/s still retains **95.6% of speed after
   10 full seconds**. The AI is unaffected (98/97 ships alive at t=150s in
   a 100v100 regression run).
+  **ROTATION IS VELOCITY CONTROL, translation is acceleration control —
+  and that split is source-specified, not a compromise.** `IFCS3_0.pdf`:
+  *"velocity control is used for coupled and decoupled rotational
+  control"*, while *"acceleration control is used for decoupled mode
+  LINEAR control."* So centering the stick brings the rotation rate back
+  to zero (the ship's RCS holding attitude — the same system the document
+  describes as providing "3-axis stabilization"), while translation stays
+  fully decoupled with no auto-braking. **This was a real bug**: rotation
+  originally ran through `step_acceleration` alongside translation, so
+  releasing the stick left the ship rotating forever. That made the flight
+  path marker mathematically unable to converge — the nose kept drifting
+  away from the velocity vector faster than drag could pull velocity onto
+  it — reported as "I can never get it back into that position no matter
+  how straight I'm going and how much I boost." Residual spin after
+  centering the stick is now measured at exactly 0.000000 rad/s.
+  **Drag is linear + quadratic, not quadratic alone.** Real drag is a sum
+  of both terms, and the linear one is load-bearing here: the quadratic
+  term falls off as speed², so it becomes useless exactly when drift is
+  almost-but-not-quite killed, leaving the marker crawling toward the
+  crosshair forever without arriving. `drag_linear_lateral`/`_vertical`
+  (0.6) close those last degrees; `drag_linear_forward` is deliberately
+  **0.0** — a linear term on the forward axis bleeds speed no matter how
+  slow you're going, which is exactly the auto-braking flight-assist-OFF
+  exists to prevent (measured: 10s coast retention fell from ~96% to ~84%
+  when tried). Net result, measured through the real rotation+translation
+  loop: after a hard 2-second turn under thrust, velocity converges from
+  8.2° off the nose to 2° within 3 seconds and effectively 0 by 5, while
+  forward coasting still retains **95.6% of speed over 10 seconds**.
   **No auto-braking, anywhere, ever — corrected live, twice.** The
   original coasting-drag model (a real quadratic air-drag curve on throttle
   release) was replaced first with an assisted brake to a goal velocity of

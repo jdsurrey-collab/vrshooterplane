@@ -75,8 +75,22 @@ extends Node3D
 @export var element_scale: float = 0.5  # halved after live feedback that the whole cluster read as "way too big"
 
 @export_group("Flight path marker")
-@export var marker_distance: float = 1.6  # how far in front of hud_center, along the real velocity direction
+## The gun crosshair (weapon_system.gd positions it) is this marker's
+## ANCHOR — when velocity is perfectly aligned with the nose, the marker
+## must sit exactly ON the crosshair, so "fly until the marker reaches the
+## crosshair" is a real, achievable instrument reading. See
+## _update_flight_path_marker() for the bug this fixed.
+@export var crosshair_path: NodePath = ^"../Crosshair"
 @export var marker_min_speed: float = 2.0  # below this, direction is noisy/meaningless — hide instead of jittering
+## Caps how far the marker can wander from the crosshair, so extreme drift
+## (or near-sideways flight) parks it at the edge of the display instead of
+## flinging it kilometres off into the scene. At the ~2.1m eye-to-crosshair
+## distance this works out to roughly 25 degrees of visual deviation before
+## it cages — real HUDs cage their flight path marker in the same range.
+## Deliberately NOT tighter: an earlier 0.5 (~13 degrees) pinned the marker
+## motionless through the first few seconds of a hard drift recovery, which
+## is exactly when the pilot most needs to see it moving.
+@export var marker_max_offset: float = 1.0
 ## Sized against how CLOSE this marker sits (only ~1.6m out) compared to the
 ## crosshair it shares the view with (229m out) — the same radius reads as
 ## a fine reticle far away but a huge ring up close. Reported live as "way
@@ -177,25 +191,69 @@ func _process(_delta: float) -> void:
 	_update_flight_path_marker()
 
 
-## Positions the flight path marker along the REAL velocity direction, at a
-## fixed apparent distance from hud_center — same "fixed distance along a
-## real direction" technique target_lock.gd's PIP ring uses, just anchored
-## to the ship's own local frame instead of the camera's, since this marker
-## needs to sit fixed on the glass rather than track the player's view.
+## Places the flight path marker as a real HUD instrument: its offset FROM
+## THE CROSSHAIR is the angular deviation between where the ship is
+## actually travelling and where its nose points. Fly until the marker
+## sits on the crosshair and you are going exactly where you're aiming.
+##
+## ANCHORED TO THE CROSSHAIR, not to hud_center — this was a real bug.
+## The previous version placed the marker at `hud_center + velocity_dir *
+## distance`, which sounds right but meant the marker and the crosshair
+## sat at the same anchor point yet DIFFERENT depths, while the pilot's
+## eye sits off that axis entirely. Measured: with velocity perfectly
+## aligned to the nose, the marker still rendered **6.1 degrees away from
+## the crosshair** — it could never converge, no matter how correct the
+## flight physics underneath were. That alone made the ship feel like it
+## was flying in a vacuum, because the one instrument showing convergence
+## never actually showed it.
+##
+## The offset is a proper gnomonic projection (`tan` via the x/z and y/z
+## ratios), scaled by the real eye-to-crosshair distance, so a given
+## angular deviation displaces the marker by the correct amount on the
+## HUD plane rather than an arbitrary constant.
 func _update_flight_path_marker() -> void:
 	var world_vel: Vector3 = _flight_controller.get_velocity()
-	if world_vel.length() < marker_min_speed:
+	var anchor := get_node_or_null(crosshair_path) as Node3D
+	if world_vel.length() < marker_min_speed or anchor == null:
 		_flight_path_marker.visible = false
 		return
 
+	# Ship-local: +Z forward (see this file's header), +X/+Y the HUD plane.
 	var local_dir: Vector3 = (_ship.global_transform.basis.inverse() * world_vel).normalized()
+	if local_dir.z <= 0.05:
+		# Travelling sideways or backwards relative to the nose — there is
+		# no forward-plane projection, so the marker has no meaningful
+		# on-HUD position.
+		_flight_path_marker.visible = false
+		return
+
+	# Distance from the pilot's eye to the crosshair's plane, along the
+	# ship's forward axis — the correct scale factor for converting an
+	# angular deviation into a displacement on that plane.
+	var eye_local: Vector3 = _ship.global_transform.affine_inverse() * _camera_position()
+	var plane_distance: float = maxf(anchor.position.z - eye_local.z, 0.01)
+
+	var offset := Vector2(
+			(local_dir.x / local_dir.z) * plane_distance,
+			(local_dir.y / local_dir.z) * plane_distance)
+	if offset.length() > marker_max_offset:
+		offset = offset.normalized() * marker_max_offset
+
 	_flight_path_marker.visible = true
-	_flight_path_marker.position = hud_center + local_dir * marker_distance * element_scale
+	_flight_path_marker.position = anchor.position + Vector3(offset.x, offset.y, 0.0)
 	# No rotation update here — the ring's facing is a fixed static rotation
 	# baked in once by _build_ring() (see that function's own comment for
 	# why: TorusMesh lies flat with its normal along local Y, not Z, so it
 	# needs an actual rotation, not billboarding). Only position tracks the
 	# velocity direction each frame.
+
+
+## The pilot's eye in world space. Falls back to the ship's own origin if
+## the camera can't be found, so the marker degrades to a slightly-wrong
+## scale factor rather than erroring out.
+func _camera_position() -> Vector3:
+	var cam := _ship.get_parent().get_node_or_null("XRCamera3D") as Node3D
+	return cam.global_position if cam else _ship.global_position
 
 
 func _build_altitude_ladder() -> void:

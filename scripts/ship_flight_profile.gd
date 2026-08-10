@@ -78,12 +78,32 @@ extends Resource
 ## coast a long time, and this must NOT undo the flight-assist-OFF
 ## behaviour of holding speed when you let off the throttle.
 @export var drag_coefficient_forward: float = 0.00002  # ~1.8 m/s^2 at 300 m/s
-## Lateral/vertical are ~40x forward: broadside is where a fighter's drag
-## actually lives. At 300 m/s of sideways drift this is ~72 m/s^2, bleeding
-## that drift off in a few seconds; at low drift speeds it's gentle
-## (quadratic), so it never feels like a snap-to-center assist.
-@export var drag_coefficient_lateral: float = 0.0008
-@export var drag_coefficient_vertical: float = 0.0008
+## Lateral/vertical are ~250x forward: broadside is where a fighter's drag
+## actually lives. Tuned up twice against measured convergence — from a
+## 40-degree drift while holding thrust, velocity now closes to ~12 degrees
+## off the nose in 2 seconds and ~7 in 4. Being quadratic, it's gentle at
+## low drift speeds, so it never reads as a snap-to-center assist; it just
+## refuses to let you fly sideways indefinitely, which is exactly what an
+## airframe in atmosphere does.
+@export var drag_coefficient_lateral: float = 0.005
+@export var drag_coefficient_vertical: float = 0.005
+
+## LINEAR drag term, added to the velocity-squared term above. Real drag
+## models are a sum of both (a linear/viscous term plus the quadratic
+## pressure term); the quadratic part alone falls off as speed^2, so it
+## becomes nearly useless exactly when drift is almost — but not quite —
+## killed, leaving a long tail where the flight path marker creeps toward
+## the crosshair without ever arriving. The linear term is what actually
+## closes those last few degrees.
+##
+## FORWARD IS DELIBERATELY ZERO. A linear term on the forward axis would
+## bleed speed continuously no matter how slowly you're going, which is
+## precisely the auto-braking that flight-assist OFF exists to prevent —
+## and it measurably wrecked coasting when tried (10s coast retention fell
+## from ~96% to ~84%). Only the drift axes get it.
+@export var drag_linear_forward: float = 0.0
+@export var drag_linear_lateral: float = 0.6
+@export var drag_linear_vertical: float = 0.6
 
 @export_group("Vertical / lateral (maneuvering thrusters)")
 @export var max_vertical_speed: float = 100.0  # m/s

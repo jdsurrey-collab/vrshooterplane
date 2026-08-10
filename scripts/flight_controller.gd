@@ -161,46 +161,58 @@ func _physics_process(delta: float) -> void:
 	_origin.global_position += _linear_velocity * delta
 
 
-## Stick position commands a rotation ACCELERATION, not a rate — centering
-## the stick idles that acceleration to zero and leaves the ship spinning
-## at whatever rate it already had (real tumble/spin persistence) until
-## countered by opposite stick input. The rate itself is still clamped to
-## max_pitch_speed/max_yaw_speed/max_roll_speed — the artificial governor
-## every ship in this game has — but that clamp only ever engages at the
-## ceiling, it never pulls the rate back down on its own. Pitch and yaw
-## are deliberately SEPARATE tunables (not shared, as they used to be) —
-## see ship_flight_profile.gd's "Yaw" group for why.
+## ROTATION IS VELOCITY CONTROL, not acceleration control — the stick
+## commands a rotation RATE, and centering it brings that rate back to
+## zero. This is NOT a contradiction of the flight-assist-OFF rule that
+## governs translation; it is exactly what the source material specifies
+## for both modes:
+##
+##   "velocity control is used for coupled and decoupled rotational
+##    control" — IFCS3_0.pdf
+##
+## Only LINEAR control is decoupled ("acceleration control is used for
+## decoupled mode linear control"). Physically this is the ship's reaction
+## control system holding attitude — the same RCS that IFCS3_0.pdf
+## describes as providing "3-axis stabilization of the ship's attitude."
+##
+## THIS WAS A REAL BUG. An earlier version ran rotation through
+## step_acceleration alongside translation, so releasing the stick left
+## the ship rotating forever at whatever rate it had. That made the flight
+## path marker impossible to converge — the nose kept drifting away from
+## the velocity vector faster than drag could pull velocity onto the nose —
+## reported as "I can never get it back into that position no matter how
+## straight I'm going and how much I boost."
+##
+## Pitch and yaw are deliberately SEPARATE tunables (not shared, as they
+## used to be) — see ship_flight_profile.gd's "Yaw" group for why.
 func _update_rotation(right_stick: Vector2, left_stick: Vector2, delta: float) -> void:
 	var yaw_input := -right_stick.x
 	var pitch_input := -right_stick.y
 	var roll_input := left_stick.x
 	roll_input_value = roll_input
 
-	var yaw := OmegaMotion.step_acceleration(
-			_angular_velocity.y, _angular_accel.y, yaw_input,
-			profile.yaw_max_accel, profile.yaw_accel_time, delta,
-			-profile.max_yaw_speed, profile.max_yaw_speed)
+	var yaw := OmegaMotion.step_velocity(
+			_angular_velocity.y, _angular_accel.y, yaw_input * profile.max_yaw_speed,
+			profile.yaw_max_accel, profile.yaw_accel_time, delta)
 	_angular_velocity.y = yaw.x
 	_angular_accel.y = yaw.y
 
-	# Positive pitch_input/angular_velocity.x is nose-UP (pulling back);
-	# negative is nose-DOWN (pushing over). Nose-down authority is scaled
-	# down to pitch_down_fraction — see ship_flight_profile.gd's "Pitch"
-	# group for the real G-force-tolerance grounding. Same input-scaling
-	# technique already used for reverse thrust: scale the commanded input
-	# rather than branching step_acceleration itself.
-	var pitch_down_scale := 1.0 if pitch_input >= 0.0 else profile.pitch_down_fraction
-	var pitch := OmegaMotion.step_acceleration(
-			_angular_velocity.x, _angular_accel.x, pitch_input * pitch_down_scale,
-			profile.pitch_max_accel, profile.pitch_accel_time, delta,
-			-profile.max_pitch_speed * profile.pitch_down_fraction, profile.max_pitch_speed)
+	# Positive pitch_input is nose-UP (pulling back); negative is nose-DOWN
+	# (pushing over). Nose-down authority is scaled down to
+	# pitch_down_fraction — see ship_flight_profile.gd's "Pitch" group for
+	# the real G-force-tolerance grounding.
+	var pitch_ceiling := profile.max_pitch_speed
+	if pitch_input < 0.0:
+		pitch_ceiling *= profile.pitch_down_fraction
+	var pitch := OmegaMotion.step_velocity(
+			_angular_velocity.x, _angular_accel.x, pitch_input * pitch_ceiling,
+			profile.pitch_max_accel, profile.pitch_accel_time, delta)
 	_angular_velocity.x = pitch.x
 	_angular_accel.x = pitch.y
 
-	var roll := OmegaMotion.step_acceleration(
-			_angular_velocity.z, _angular_accel.z, roll_input,
-			profile.roll_max_accel, profile.roll_accel_time, delta,
-			-profile.max_roll_speed, profile.max_roll_speed)
+	var roll := OmegaMotion.step_velocity(
+			_angular_velocity.z, _angular_accel.z, roll_input * profile.max_roll_speed,
+			profile.roll_max_accel, profile.roll_accel_time, delta)
 	_angular_velocity.z = roll.x
 	_angular_accel.z = roll.y
 
@@ -317,16 +329,28 @@ func _update_translation(right_grip: float, left_grip: float, left_stick: Vector
 ## move_toward floor at zero), so this bleeds drift off without ever
 ## becoming a spring that pulls the ship backwards.
 func _apply_axis_drag(local_velocity: Vector3, delta: float) -> Vector3:
-	local_velocity.x = _drag_axis(local_velocity.x, profile.drag_coefficient_lateral, delta)
-	local_velocity.y = _drag_axis(local_velocity.y, profile.drag_coefficient_vertical, delta)
-	local_velocity.z = _drag_axis(local_velocity.z, profile.drag_coefficient_forward, delta)
+	local_velocity.x = _drag_axis(
+			local_velocity.x, profile.drag_coefficient_lateral, profile.drag_linear_lateral, delta)
+	local_velocity.y = _drag_axis(
+			local_velocity.y, profile.drag_coefficient_vertical, profile.drag_linear_vertical, delta)
+	local_velocity.z = _drag_axis(
+			local_velocity.z, profile.drag_coefficient_forward, profile.drag_linear_forward, delta)
 	return local_velocity
 
 
-func _drag_axis(v: float, coefficient: float, delta: float) -> float:
-	if is_zero_approx(v) or coefficient <= 0.0:
+## Combined linear + quadratic drag: decel = linear*|v| + quadratic*v^2.
+## Real drag is a sum of both, and here the linear term is load-bearing —
+## the quadratic one alone fades as speed^2 and leaves drift asymptotically
+## crawling toward zero instead of actually reaching it. See
+## ship_flight_profile.gd's drag_linear_* for why forward's linear term is
+## zero.
+func _drag_axis(v: float, quadratic: float, linear: float, delta: float) -> float:
+	if is_zero_approx(v):
 		return v
-	var decel := coefficient * v * v  # velocity-squared drag equation
+	var speed := absf(v)
+	var decel := quadratic * speed * speed + linear * speed
+	if decel <= 0.0:
+		return v
 	return move_toward(v, 0.0, decel * delta)
 
 
