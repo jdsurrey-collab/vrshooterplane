@@ -2724,6 +2724,24 @@ request didn't call for.
   `air_superiority` scalar, `ground_flak.gd`'s rooftop infrastructure as a
   plausible seed for real batteries) and a set of open questions a real
   design pass would need to answer first.
+  **Partly superseded on the ground-objective front** — its "destructible
+  batteries" idea became the shipped fuel-tank attack/defend mode (see the
+  Ground objective section above); the bomber, escort, contested-zone and
+  ace ideas are still unbuilt.
+- `docs/ai-archetypes.md` — **design document, not implemented.** The
+  50-archetype AI personality system plus a 1-10 skill scale, both rolled
+  per pilot at match start and deliberately ORTHOGONAL (archetype sets
+  goals, skill sets execution — so a skill-1 Headhunter and a skill-10
+  Headhunter are the same intent at wildly different threat levels).
+  Defines a shared **trait vector** — mostly `faction_battle.gd`'s existing
+  global constants promoted to per-pilot fields — so an archetype is a row
+  of numbers rather than a new branch in `_update_combatant()`, the same
+  preset pattern `standard_fighter.tres` already uses for flight. Includes
+  the bottom-heavy skill distribution (59% at skill 1-3, three aces per
+  fleet), an honest split of which 28 archetypes are buildable on today's
+  systems versus which wait on mechanics that don't exist (AI ground attack,
+  damage attribution, per-pilot kill counts, ship-vs-ship collision, energy
+  modelling), and a suggested build order.
 
 ## Testing workflow
 

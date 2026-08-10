@@ -109,6 +109,7 @@ script = ExtResource("42_killfeed")
 
 [node name="RoleStamp" type="Label3D" parent="XRCamera3D"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -0.45)
+visible = false
 pixel_size = 0.00042
 billboard = 1
 no_depth_test = true
@@ -118,7 +119,6 @@ text = "DEFENDER"
 font = ExtResource("49_orbitron")
 font_size = 64
 outline_size = 14
-visible = false
 script = ExtResource("52_rolestamp")
 
 [node name="EnemyLocator" type="Node3D" parent="XRCamera3D"]

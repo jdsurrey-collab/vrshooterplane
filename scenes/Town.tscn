@@ -12,7 +12,7 @@
 [ext_resource type="Script" uid="uid://cw4dpr1w5cyb6" path="res://scripts/thruster_trails.gd" id="12_thrustertrails"]
 [ext_resource type="Script" path="res://scripts/cloud_top.gd" id="13_cloudtop"]
 [ext_resource type="Script" uid="uid://dex42byg4lhxr" path="res://scripts/ground_flak.gd" id="14_groundflak"]
-[ext_resource type="Script" path="res://scripts/tank_objective.gd" id="15_tankobjective"]
+[ext_resource type="Script" uid="uid://k3g26ysl12mj" path="res://scripts/tank_objective.gd" id="15_tankobjective"]
 [ext_resource type="Script" path="res://scripts/friendly_tags.gd" id="16_friendlytags"]
 
 [sub_resource type="PanoramaSkyMaterial" id="SkyMat_1"]
