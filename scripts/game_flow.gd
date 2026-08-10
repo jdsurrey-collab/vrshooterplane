@@ -60,6 +60,7 @@ var _engine_audio: Node
 var _ship_engine_audio: Node
 var _thruster_trails: Node
 var _friendly_tags: Node
+var _role_stamp: Node
 
 var _confirm_button_was_down: bool = false
 
@@ -76,6 +77,7 @@ func _ready() -> void:
 		_main_menu = _player.get_node_or_null("XRCamera3D/MainMenu")
 		_death_screen = _player.get_node_or_null("XRCamera3D/DeathScreen")
 		_crash_handler = _player.get_node_or_null("CrashHandler")
+		_role_stamp = _player.get_node_or_null("XRCamera3D/RoleStamp")
 		_engine_audio = _player.get_node_or_null("EngineAudio")
 	_battle = get_node_or_null("../FactionBattle")
 	_tanks = get_node_or_null("../TankObjective")
@@ -192,6 +194,11 @@ func _start_match() -> void:
 	# not in _ready(), so there is no fixed layout to memorise.
 	if _tanks:
 		_tanks.start_objective()
+		# Announce which side of the tank fight the player drew. Done here,
+		# AFTER start_objective() has rolled the coin, so the stamp can never
+		# show a stale role from the previous match.
+		if _role_stamp:
+			_role_stamp.play_role(_tanks.player_role_noun())
 
 
 func _enter_dead() -> void:
@@ -212,4 +219,6 @@ func _return_to_menu() -> void:
 		_battle.reset_battle()
 	if _tanks:
 		_tanks.reset_objective()
+	if _role_stamp:
+		_role_stamp.hide_stamp()
 	_enter_menu()

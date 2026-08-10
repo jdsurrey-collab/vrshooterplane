@@ -335,3 +335,13 @@ func player_role_text() -> String:
 	if not active and tanks_remaining <= 0:
 		return ""
 	return "ATTACK" if attacking_faction == Combatant.Faction.FRIENDLY else "DEFEND"
+
+
+## The same thing as a noun, for role_stamp.gd's match-opening announcement
+## ("ATTACKER" / "DEFENDER"). Separate from player_role_text() rather than
+## derived from it because the HUD wants the shortest label that fits on a
+## status line while the stamp wants the word said properly.
+func player_role_noun() -> String:
+	if not active:
+		return ""
+	return "ATTACKER" if attacking_faction == Combatant.Faction.FRIENDLY else "DEFENDER"
