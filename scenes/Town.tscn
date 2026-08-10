@@ -1,4 +1,4 @@
-[gd_scene load_steps=14 format=3 uid="uid://ceaei3xynkod2"]
+[gd_scene load_steps=15 format=3 uid="uid://ceaei3xynkod2"]
 
 [ext_resource type="PackedScene" uid="uid://c2dyoeywkgf30" path="res://scenes/Player.tscn" id="1_player"]
 [ext_resource type="Texture2D" uid="uid://neat1aug36g3" path="res://Assets/Skybox/panorama.tga" id="4_panorama"]

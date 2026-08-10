@@ -1194,9 +1194,9 @@ compensating flip.
   crosses its path.
 - **Smoke trail** (`scenes/MissileTrail.tscn` / `scripts/missile_trail.gd`)
   — at 400 m/s the missile body is out of view almost immediately, so the
-  trail is what actually lets you see and track your own shot. Thick smoke
-  (140 particles, 4.5s lifetime, `smoke_flipbook.png` like the rest of this
-  project's smoke), which at 400 m/s lays down a trail well over a
+  trail is what actually lets you see and track your own shot. Thick white
+  smoke (280 particles, 4.5s lifetime, `smoke_flipbook.png` like the rest of
+  this project's smoke), which at 400 m/s lays down a trail well over a
   kilometre long.
   It is deliberately **not a child of the missile**, for two reasons that
   both matter: the particles emit in world space (`local_coords = false`)
@@ -1206,6 +1206,44 @@ compensating flip.
   it, popping a kilometre of smoke out of the sky in one frame. Instead the
   trail lives at scene level and merely *follows* the missile; when the
   missile dies it stops emitting and dissipates naturally.
+  **Reported as "looks like pictures of smoke, but in pixels" — two real
+  bugs, not a design complaint.** First, `smoke_flipbook.png.import` was
+  committed with `detect_3d/compress_to=1`, which tells Godot to silently
+  re-encode the texture to VRAM block compression (S3TC/BPTC) the instant
+  it detects 3D usage — which happens on every real launch, editor or
+  exported build alike, regardless of what's committed. Block compression
+  is genuinely bad at soft alpha gradients, exactly what a translucent
+  smoke sprite sheet is, so the actual game had been rendering a visibly
+  blockier texture than the committed lossless source the whole time —
+  this had been silently happening on every headless reimport too, and had
+  been (wrongly) treated as harmless import-cache churn and reverted before
+  each commit rather than diagnosed. Fixed for good, not just reverted
+  this time: `compress/mode=0` (Lossless) **and** `detect_3d/compress_to=0`
+  (Disabled) together, so Godot's own auto-detection can't silently
+  re-clobber the choice on a future reimport the way it had been.
+  Second, `particles_anim_loop` was `false` against an `anim_speed` of only
+  0.5-0.9 (i.e., 50-90% of one pass through the 64-frame flipbook over the
+  4.5s lifetime) — meaning most particles finished animating and froze on
+  their last frame for the remainder of their life, which is exactly what
+  "a picture of smoke" describes: a static image hanging in the air rather
+  than moving smoke. Set to loop continuously instead, so a particle is
+  never seen holding a single frame.
+  **Also genuinely denser and whiter**, addressing "thick, volumetric":
+  particle count 140 -> 280 (more overlap along the trail instead of
+  visible gaps between discrete quads), `scale_min`/`_max` and
+  `emission_sphere_radius` both increased for a wider, puffier
+  cross-section, `angle_min`/`_max` randomized 0-360° so overlapping quads
+  don't all show the same billboard orientation (which read as "stamped"
+  copies rather than an organic cloud), and the color ramp brightened
+  toward white throughout its life instead of settling into mid-gray.
+  **True volumetric (raymarched) smoke was deliberately not attempted** —
+  this project already tried and rejected real volumetric fog three times
+  for cost and jitter reasons (see "Volumetric fog is deliberately not
+  used" above); a denser, better-textured, continuously-animating particle
+  trail is the practical equivalent within that same established
+  performance ceiling, and unlike the AI's pooled thruster trails, only
+  one or two missile trails typically exist at once, so the higher particle
+  count here doesn't fight the same concurrent-cost budget.
 - **Terrain and buildings now stop a missile** like they stop everything
   else in this project. Previously a missile chasing a low target, or one
   that had gone ballistic after an overshoot, simply flew on through a
