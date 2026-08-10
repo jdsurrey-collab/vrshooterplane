@@ -1455,6 +1455,68 @@ volume trimmed down: `bass=g=8:f=100:w=0.5,lowpass=f=3200,aecho=0.8:0.7:
 60:0.25,volume=0.7`, saved as `Assets/Audio/missile_alert_1.mp3` /
 `missile_alert_2.mp3`.
 
+## Friendly callsign tags
+
+`scripts/friendly_tags.gd` (`FriendlyTags` under `FactionBattle`) — small
+white callsign labels floating under every FRIENDLY ship within
+`tag_radius` (**1000m**), so you can read who is flying near you.
+
+**Why this is a pool, not a label per ship.** Friendly ships are not nodes —
+they are `Combatant` objects (`RefCounted`, never in the scene tree) drawn
+through a single `MultiMeshInstance3D`, which is the whole reason a 200-ship
+battle is affordable. So there is nothing to parent a `Label3D` to, and
+creating 100 of them would hand back a large part of what that design
+bought. Instead a fixed pool of `tag_count` (18) labels is dynamically
+attached to whichever friendlies are nearest the player — structurally the
+same solution as `ship_engine_audio.gd`'s 12 voices and
+`thruster_trails.gd`'s 10 emitters, reusing the identical
+`get_ships_near()` / `is_ship_alive_by_key()` / `get_ship_position_by_key()`
+API and the same `paused` convention.
+
+Two small additions to `FactionBattle`'s public API rather than
+reimplementing at the call site: `get_ship_label_by_key()` (wrapping the
+existing `_combatant_label()` the kill feed and `target_lock.gd` already
+use, so callsigns cannot drift between the feed and the in-world tags) and
+`is_friendly_key()` (the friendly/enemy key packing is an implementation
+detail callers shouldn't compare against themselves).
+
+Details that matter:
+
+- **Friendlies only, structurally** — `get_ships_near()` returns both
+  factions, so results are filtered through `is_friendly_key()`. The
+  candidate list is requested `CANDIDATE_MULTIPLIER` (6) times longer than
+  the pool, because a furball can easily put more hostiles than friendlies
+  inside 1000m and asking for only 18 nearest-of-any-faction would come back
+  with too few friendlies in exactly the situation where knowing who is
+  around you matters most. Same reasoning `thruster_trails.gd` uses to find
+  afterburning ships.
+- **`fixed_size = true`** — constant on-screen size at any range, so a
+  callsign at 950m is as legible as one at 50m. Without it the text shrinks
+  with distance and is unreadable well before the 1000m cutoff — the same
+  "fixed apparent size" reasoning `target_lock.gd` uses for its
+  visor-anchored readouts.
+- **Text is written once per assignment, not per frame.** Assigning
+  `Label3D.text` re-shapes the string and rebuilds the label's mesh; the
+  callsign only changes when a tag is handed to a different ship, so
+  `_update_tags()` touches position only.
+- **Plain white, deliberately NOT pushed above 1.0** the way this project's
+  other HUD text is. Those are pushed so `Town.tscn`'s Glow pass blooms
+  them, which is right for a big readout but would smear small text at range
+  into an illegible blob. A dark outline carries legibility instead.
+- **Depth testing left ON**, unlike the cockpit HUD's `no_depth_test`
+  elements — a wingman's callsign on the far side of a skyscraper should be
+  hidden by that skyscraper. One-line flip if see-through is wanted.
+- Reassignment runs on a `rescan_interval` (0.4s) timer, not per frame, with
+  `release_hysteresis` (1.2) so ships sitting right at the 1000m boundary
+  don't make tags flicker between callsigns. Positions still update every
+  frame.
+
+Verified headlessly (12/12): pool builds, tags appear over the fleet, only
+FRIENDLY callsigns are ever shown, no duplicates, everything tagged is
+inside range, tags sit below their ship, all release when the player flies
+60km away, reacquire on return, and `paused` clears them for the menu /
+game-over screens.
+
 ## Ground objective — attack/defend over the city's fuel tanks
 
 `scripts/tank_objective.gd` (`TankObjective`, a sibling of `City`/

@@ -1755,6 +1755,23 @@ func get_ship_position_by_key(key: int) -> Vector3:
 	return c.position if c else Vector3.ZERO
 
 
+## Display name for a ship key ("FRIENDLY-042" / "HOSTILE-007"), using the
+## same `_combatant_label()` the kill feed and target_lock.gd already use —
+## exposed rather than reformatted at the call site so callsigns can never
+## drift between the kill feed and friendly_tags.gd's in-world name tags.
+func get_ship_label_by_key(key: int) -> String:
+	if key >= SHIP_KEY_ENEMY_OFFSET:
+		return _combatant_label(Combatant.Faction.ENEMY, key - SHIP_KEY_ENEMY_OFFSET)
+	return _combatant_label(Combatant.Faction.FRIENDLY, key)
+
+
+## True if `key` belongs to the friendly fleet. The packing is an
+## implementation detail (see SHIP_KEY_ENEMY_OFFSET), so callers that only
+## care about one faction shouldn't be comparing against it themselves.
+func is_friendly_key(key: int) -> bool:
+	return key < SHIP_KEY_ENEMY_OFFSET
+
+
 func get_ship_velocity_by_key(key: int) -> Vector3:
 	var c := _ship_for_key(key)
 	return c.heading * c.speed if c else Vector3.ZERO
