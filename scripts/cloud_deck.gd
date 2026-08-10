@@ -53,8 +53,13 @@ extends Node3D
 ## geometry, and at world-map scale a coarse grid is imperceptible.
 @export var subdivisions: int = 96
 
-## Vertical wobble so the deck isn't a dead-flat plane.
-@export var undulation: float = 120.0
+## Vertical wobble so the deck isn't a dead-flat plane. Also drives the
+## per-vertex normals now (see _build_deck_mesh) — raised from an original
+## 120 alongside that change, since a flat-normal deck didn't need much
+## bump height to still look right, but real per-vertex shading needs
+## enough amplitude to actually read as puffy 3D shapes rather than a
+## faint ripple.
+@export var undulation: float = 200.0
 
 @export var deck_color: Color = Color(0.80, 0.82, 0.82)
 ## Peak opacity of the thickest patches; the noise ramp takes it to fully
@@ -111,17 +116,35 @@ func _build_deck_mesh(centre: Vector3, half: float, deck_y: float) -> ArrayMesh:
 	var indices := PackedInt32Array()
 
 	var step := (half * 2.0) / float(subdivisions)
+	# Sample offset for the central-difference normal below. Half a grid
+	# step keeps it matched to the mesh's own resolution rather than an
+	# arbitrary constant, so the normals stay consistent if subdivisions
+	# ever changes.
+	var eps := step * 0.5
 
 	for i in subdivisions + 1:
 		for j in subdivisions + 1:
 			var x := centre.x - half + float(i) * step
 			var z := centre.z - half + float(j) * step
-			verts.append(Vector3(x, deck_y + noise.get_noise_2d(x, z) * undulation, z))
+			var h := noise.get_noise_2d(x, z) * undulation
+			verts.append(Vector3(x, deck_y + h, z))
 			uvs.append(Vector2(x / pattern_scale, z / pattern_scale))
-			# Flat up-facing normals: the deck is lit as a horizontal
-			# surface, so the sun's shadow reads cleanly across it rather
-			# than shading oddly over every undulation.
-			normals.append(Vector3.UP)
+			# REAL per-vertex normals from the noise gradient (central
+			# difference), not a flat Vector3.UP. This used to be
+			# deliberately flat "so the sun's shadow reads cleanly across
+			# it rather than shading oddly over every undulation" — but
+			# that only affects whether OTHER objects' shadows land
+			# cleanly (a shadow-map lookup, independent of the receiver's
+			# own normal), not whether the deck's own bumps catch light.
+			# Real normals are what make the puffs read as actual 3D
+			# shapes with light/dark facets instead of a flat sheet with a
+			# picture painted on it — see DIFFUSE_TOON in _build_material.
+			var h_x1: float = noise.get_noise_2d(x + eps, z) * undulation
+			var h_x0: float = noise.get_noise_2d(x - eps, z) * undulation
+			var h_z1: float = noise.get_noise_2d(x, z + eps) * undulation
+			var h_z0: float = noise.get_noise_2d(x, z - eps) * undulation
+			var normal := Vector3(-(h_x1 - h_x0) / (2.0 * eps), 1.0, -(h_z1 - h_z0) / (2.0 * eps)).normalized()
+			normals.append(normal)
 			colors.append(Color(1.0, 1.0, 1.0, _edge_alpha(x, z, centre, half)))
 
 	var row := subdivisions + 1
@@ -171,6 +194,26 @@ func _build_material() -> StandardMaterial3D:
 	mat.metallic = 0.0
 	# Cloud shouldn't have a specular hotspot.
 	mat.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
+	# CEL-SHADED diffuse — a hard step between lit and shadowed faces
+	# instead of BaseMaterial3D's default smooth Burley falloff. Combined
+	# with the real per-vertex normals above and the stepped alpha ramp in
+	# _build_cloud_texture, this is what actually delivers "cell shaded...
+	# dynamic contrast": the puffs now have real graphic light/dark facets
+	# instead of one uniformly-lit flat sheet. Ambient light still fills the
+	# shadowed side (DIFFUSE_TOON only affects the direct-light term), so
+	# it bands rather than going pure black.
+	mat.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
+	# A faint self-glow keyed off the same density texture — sunlit cloud
+	# tops read as visibly brighter than the open sky around them even when
+	# backlit or far away. Without this the deck has no light source of its
+	# own and can wash out to near-invisible at range, which is what "I
+	# wanna be able to see this bubbly smoke from anywhere" was asking to
+	# fix. Reuses the albedo texture directly rather than building a second
+	# one — same density, same puff shapes, just interpreted as a glow mask.
+	mat.emission_enabled = true
+	mat.emission_texture = mat.albedo_texture
+	mat.emission = Color(0.85, 0.88, 0.92)
+	mat.emission_energy_multiplier = 0.22
 	# Transparent surfaces don't write depth by default; that's correct here,
 	# so towers punching through sort properly against it.
 	return mat
@@ -181,41 +224,58 @@ func _build_material() -> StandardMaterial3D:
 ## what carries the ALPHA — a plain grayscale noise texture is opaque
 ## everywhere and would just tint the deck.
 ##
-## TUNED SOFT ON PURPOSE. The first version (frequency 0.9, 4 octaves, a
-## gradient snapping from 0.0 to 0.12 alpha within the first 38% of the
-## range) read as a "spider web" from above rather than fog — high-frequency
-## fractal noise is naturally made of thin connected ridges, and a
-## high-contrast alpha cutoff turns those ridges into lace instead of soft
-## puffs. Fixed on both ends: the noise itself is lower frequency and fewer
-## octaves (fewer, bigger blobs instead of many fine filaments), and the
-## gradient's floor is raised and the whole ramp widened so there is no
-## sharp edge for a ridge to snap into — density fades in and out gradually
-## instead of tracing the noise's contour lines.
+## TUNED SOFT AGAINST THE SPIDER-WEB BUG. An early version (frequency 0.9, 4
+## octaves, a gradient snapping from 0.0 to 0.12 alpha within the first 38%
+## of the range) read as a "spider web" from above rather than fog —
+## high-frequency fractal noise is naturally made of thin connected ridges,
+## and a high-contrast alpha cutoff turns those ridges into lace instead of
+## soft puffs. Fixed by keeping the BASE frequency low (0.28) — that sets
+## the scale of the fundamental blob shapes and is what actually prevents
+## the lace, independent of octave count.
+##
+## Later raised back to 4 octaves (from an intermediate 2) specifically to
+## add "bubbly" cauliflower-style surface detail per direct request ("more
+## cell shaded... dynamic contrast... I wanna be able to see this bubbly
+## smoke") — more octaves layer smaller bumps ON TOP of the low-frequency
+## base shape without changing that base shape's scale, which is the
+## standard fBm technique for lumpy cumulus-style noise. This is safe
+## against the original bug specifically because the base frequency wasn't
+## raised back up alongside it.
+##
+## THE ALPHA RAMP IS NOW STEPPED, NOT SMOOTH — `GRADIENT_INTERPOLATE_CONSTANT`
+## instead of the default linear/cubic blend. This is the actual "cell
+## shaded" ask: a handful of graphic, clearly-separated density bands
+## (clear sky / wispy edge / mid puff / solid core) rather than a
+## continuous fog-like translucency gradient. Resolution doubled to 1024 to
+## cut the blocky/"pixelated" look the previous 512px texture had once
+## viewed up close against this deck's ~3400m tile scale.
 func _build_cloud_texture() -> NoiseTexture2D:
 	var noise := FastNoiseLite.new()
 	noise.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
 	noise.frequency = 0.28
-	noise.fractal_octaves = 2
-	noise.fractal_gain = 0.35
+	noise.fractal_octaves = 4
+	noise.fractal_gain = 0.4
 
 	var ramp := Gradient.new()
-	ramp.offsets = PackedFloat32Array([0.0, 0.30, 0.55, 0.80, 1.0])
+	ramp.interpolation_mode = Gradient.GRADIENT_INTERPOLATE_CONSTANT
+	ramp.offsets = PackedFloat32Array([0.0, 0.42, 0.55, 0.7, 0.85])
 	ramp.colors = PackedColorArray([
 		Color(1.0, 1.0, 1.0, 0.0),
-		Color(1.0, 1.0, 1.0, 0.32),
+		Color(1.0, 1.0, 1.0, 0.28),
 		Color(1.0, 1.0, 1.0, 0.55),
-		Color(1.0, 1.0, 1.0, 0.8),
+		Color(1.0, 1.0, 1.0, 0.82),
 		Color(1.0, 1.0, 1.0, 1.0),
 	])
 
 	var tex := NoiseTexture2D.new()
-	tex.width = 512
-	tex.height = 512
+	tex.width = 1024
+	tex.height = 1024
 	tex.seamless = true
 	tex.noise = noise
 	tex.color_ramp = ramp
-	# Softens the sampled result further, which is what actually kills the
-	# fine web tendrils that survive even at a lower base frequency.
+	# Mipmaps are what keep the hard step edges from aliasing/shimmering at
+	# a distance — they still blend smoothly across mip levels even though
+	# the base texture itself is stepped, same as filtered pixel art.
 	tex.generate_mipmaps = true
 	return tex
 
