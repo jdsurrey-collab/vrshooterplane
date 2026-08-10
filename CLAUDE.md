@@ -759,14 +759,48 @@ frame, integrating the accumulated delta — mathematically identical, but it
 cuts the per-frame terrain sampling that counting every ship in the dome
 requires. See Performance below.
 
-### The dome
+### The contested column (formerly "the dome")
 
-Implemented as a cylinder, not a literal hemisphere (it's invisible, so
-only the gameplay volume needs to be right, not a rendered shape):
-horizontal distance from `dome_center` (read from
-`CityGenerator.city_center`, `(6000, 0, 0)`) within `dome_radius` (8000m —
-comfortably covers the city's own ~7637m corner-to-corner footprint) and
-altitude above terrain within `dome_ceiling` (3500m).
+Always was a cylinder rather than a literal hemisphere — it's invisible, so
+only the gameplay volume needs to be right, not a rendered shape. It is now
+**unbounded vertically**: a column running from the ground straight up
+through the cloud deck and on into the skybox. Holding air superiority means
+holding the sky over the city at *any* altitude, which is what the term
+should mean.
+
+- **Horizontally**: distance from `dome_center` (read live from
+  `CityGenerator.city_center`, `(6000, 0, 0)`, so the two can never drift)
+  within `dome_radius` (8000m). **Verified against the real city**: the
+  furthest building EDGE is 7480m from centre, giving **520m of margin with
+  0 buildings outside**, and 0 towers reaching the old ceiling (tallest is
+  1854m).
+- **Vertically**: unbounded. `dome_ceiling` still exists as an export where
+  **0 or less means no lid (the default)**; any positive value re-imposes a
+  hard ceiling that many metres above terrain.
+
+**The old 3500m ceiling had a genuinely odd side effect**: the cloud band
+sits at 3200-3800m, so the scoring boundary was *inside the weather* —
+climbing up through the cloud deck quietly dropped you out of scoring, with
+nothing to indicate it. Removing the lid fixes that by construction.
+
+**`ai_objective_ceiling` (2450m) is now a separate export**, and that split
+was required rather than cosmetic. Squad objective altitudes were previously
+derived from `dome_ceiling * 0.7`, so removing the scoring lid would have
+sent the entire fleet climbing toward the stratosphere. The new value
+preserves the exact altitude band the AI already fought in (3500 x 0.7).
+How high the contested volume reaches and how high the fleet chooses to
+operate are separate questions; coupling them was an accident of the
+original implementation.
+
+Small performance side effect: with no lid, `_is_in_dome()` no longer
+samples terrain height, and `_count_in_dome()` runs it over every living
+ship on each AS tick — so removing the ceiling also removes ~200 terrain
+samples per scoring update.
+
+Verified: counts at 10m through 140,000m altitude over the city, still
+rejects anything outside the radius at any altitude (500m / 20km / 90km),
+a positive `dome_ceiling` correctly restores a lid, AI objectives stay in
+their 320-2448m combat band, and AS still accrues with the player 25km up.
 
 ### Bolts — two separate systems
 

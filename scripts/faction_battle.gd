@@ -50,8 +50,11 @@ extends Node3D
 ##     `accuracy` and the range. This is the "threatening but not unfair"
 ##     knob.
 ##
-## AIR SUPERIORITY — an invisible cylindrical "dome" over the city
-## (city_center, dome_radius horizontally, dome_ceiling above terrain).
+## AIR SUPERIORITY — an invisible cylindrical column over the city
+## (city_center, dome_radius horizontally, and by default UNBOUNDED
+## vertically — it runs from the ground straight up through the cloud deck
+## into the skybox, so holding the sky over the city means holding it at any
+## altitude. See dome_ceiling to put a lid back on).
 ## Every physics frame, each side's count of living ships currently inside
 ## the dome (the player counts as one friendly) nets against the other:
 ## air_superiority += (friendly_in_dome - enemy_in_dome) * delta * the
@@ -247,7 +250,32 @@ const KILL_FEED_ENTRY_LIFETIME := 8.0
 @export var friendly_count: int = 100
 @export var enemy_count: int = 100
 @export var dome_radius: float = 8000.0  # covers the city's ~7637m corner-to-corner footprint
-@export var dome_ceiling: float = 3500.0  # above terrain
+
+## Lid on the contested volume, in metres above terrain.
+##
+## **0 or less means NO lid (the default)** — the contested airspace is an
+## unbounded cylinder running from the ground straight up through the cloud
+## deck and on into the skybox, so holding air superiority means holding the
+## column over the city at ANY altitude rather than only up to an arbitrary
+## line. That is what "air superiority" should mean, and the previous 3500m
+## ceiling had the odd side effect of putting the boundary *inside* the cloud
+## band (3200-3800m), so climbing through the weather quietly dropped you out
+## of scoring.
+##
+## A positive value re-imposes a hard ceiling at that height above terrain.
+##
+## Note this is deliberately NOT the altitude the AI flies at — see
+## `ai_objective_ceiling`. How high the contested volume reaches and how high
+## the fleet chooses to operate are separate questions, and coupling them was
+## an accident of the original implementation.
+@export var dome_ceiling: float = 0.0
+
+## Ceiling on where squads pick their in-dome objectives, in metres above
+## terrain. Previously derived from `dome_ceiling * 0.7`, which meant
+## removing the scoring lid would have scattered the whole fleet toward the
+## stratosphere; this preserves the exact altitude band the AI already fought
+## in (3500 * 0.7) as its own independent value.
+@export var ai_objective_ceiling: float = 2450.0
 @export var match_duration: float = 600.0  # 10 minutes
 @export var aggro_radius_player: float = 2500.0
 @export var max_ambient_bolts: int = 320  # raised with the slower bolts — they live longer on screen
@@ -1094,7 +1122,10 @@ func _random_point_in_dome() -> Vector3:
 	var x := dome_center.x + cos(angle) * dist
 	var z := dome_center.z + sin(angle) * dist
 	var ground: float = _terrain.get_height_at(x, z) if _terrain else 0.0
-	var altitude := randf_range(SPAWN_ALT_MIN, dome_ceiling * 0.7)
+	# Bounded by ai_objective_ceiling, NOT by dome_ceiling — the contested
+	# volume is unbounded upward, but the fleet should still fight at combat
+	# altitudes over the city rather than climbing forever.
+	var altitude := randf_range(SPAWN_ALT_MIN, ai_objective_ceiling)
 	return Vector3(x, ground + altitude, z)
 
 
@@ -1630,6 +1661,12 @@ func _is_in_dome(pos: Vector3) -> bool:
 	var horiz := Vector2(pos.x - dome_center.x, pos.z - dome_center.z).length()
 	if horiz > dome_radius:
 		return false
+	# Unbounded column (the default) — see dome_ceiling. This also skips a
+	# terrain sample per check, and _count_in_dome() runs this over every
+	# living ship on the AS tick, so removing the lid is a small performance
+	# win as well as the intended gameplay change.
+	if dome_ceiling <= 0.0:
+		return true
 	var ground: float = _terrain.get_height_at(pos.x, pos.z) if _terrain else 0.0
 	return (pos.y - ground) <= dome_ceiling
 
