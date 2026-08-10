@@ -1790,17 +1790,179 @@ a defending player could hand the match to the other side.
 half matters as much as the count, since which side of the tank fight the
 player is on is rerolled every match and can't be assumed.
 
-### Known gap — the AI does not attack tanks yet
+### AI ground attack — the first PERSONALITY trait
 
-**The single most important open item on this feature.** Only the player can
-currently destroy tanks. Since roles are randomised, that means roughly half
-of all matches assign the player to DEFEND against an attacker that never
-attacks, and the objective sits inert. Closing this needs a real addition to
-`faction_battle.gd`'s targeting: `Combatant` today can target only "an
-opposing ship" or "the player", and would need a third target type plus a
-ground-attack approach state. Until then the ground tier is effectively
-player-versus-clock. Deliberately left for its own pass rather than bolted
-on, but it should be the next thing done here.
+Closes what was for several sessions the biggest open item on this feature:
+only the player could destroy tanks, so roughly half of all matches assigned
+the player to DEFEND against an attacker that never attacked and the
+objective sat inert.
+
+The framing is deliberate and comes straight from the request: *"This is part
+of the personality trait... some of the pilots might be more inclined to do
+this. I don't want that to be the main focus of every AI in the game is to
+blow up tankers. They should be mostly involved in dogfighting and defending
+or helping other AI."* So this is **not** a new global behaviour — it's a
+minority disposition, and the overwhelming majority of the fleet is untouched.
+
+#### The trait, and why it's uniform
+
+`Combatant.ground_attack_affinity` (0..1) is the first real personality trait
+in this project — the seed of `docs/ai-archetypes.md`'s trait vector, which
+will eventually **set** this per archetype instead of rolling it.
+
+Rolled uniformly, which is enough because roles are handed out by **ranking**
+rather than by testing each pilot against a threshold — the trait only has to
+order the squads, so the distribution's shape doesn't matter and an archetype
+can later write any value into it without requantifying anything. Setting
+`strike_squad_fraction` to 0 turns AI ground attack off entirely without
+touching another number.
+
+**Ranking instead of thresholding was a measured fix, not a preference.** The
+first version tested each squad leader against `1.0 - fraction`
+independently, which is a binomial draw — and at ~31 squads that has real
+spread. Two runs produced **3 strike squads in one match and 10 in another**,
+a 3x swing in ground pressure that the player can neither see nor diagnose,
+with the low end having almost no ground war at all — precisely the failure
+this feature exists to fix. Ranking makes the exported fraction mean exactly
+what it says every match, while leaving *which* squads draw the role fully
+random.
+
+#### The trait is per-pilot; the doctrine decision is per-squad
+
+A squad's role is fixed from its **leader's** affinity (`Squad.Role`), for two
+reasons that both matter:
+
+- A lone wingman peeling off to bomb a tank while its flight dogfights would
+  break the formation system and read as a bug, not as personality.
+- Deliberately the LEADER's, **not the max across members** — taking the max
+  would make a 5-ship squad roughly five times likelier to draw a ground role
+  than a lone pilot, and squad size has nothing to do with doctrine.
+
+Roles are assigned in `FactionBattle.assign_ground_roles()`, called from
+`game_flow.gd._start_match()` **after** `TankObjective.start_objective()` has
+flipped the attacker/defender coin. That ordering is required, not
+incidental: a squad's ground role depends on which side its faction drew this
+match, and that is rerolled every match while squads are built once in
+`_ready()`.
+
+- **`STRIKE_ROLE`** (attacking faction only, `strike_squad_fraction` 0.18 —
+  ~6 flights, ~15 ships of 100). Flies at live tanks and strafes them.
+- **`TANK_GUARD`** (defending faction only, `tank_guard_squad_fraction` 0.28).
+  **No new state machine at all** — it fights exactly like any other squad,
+  it just draws its patrol objectives from the airspace around its own tanks
+  instead of random dome points, so it happens to already be loitering where
+  an attacker has to come. Deliberately a larger fraction than STRIKE, since
+  a defender near a tank is still a fully normal fighter and costs the air
+  war much less than committing a flight to a ground run does. Picks a
+  **random** live tank rather than the nearest — nearest would send every
+  guard to whichever tank sits closest to their mothership, which is the same
+  single-point clustering bug `_make_rally_point()` already had to be fixed
+  for once.
+
+#### Strike doctrine: a committed striker does not dogfight
+
+`Squad.State.STRIKE` and `Combatant.State.GROUND_ATTACK`. While a squad is
+striking, its pilots drop any air target and never acquire another
+(`_update_combatant` skips `_retarget_if_needed` outright, which also makes
+the doctrine slightly *cheaper* than the behaviour it replaces).
+
+That's a real design choice, not a simplification: a loaded strike aircraft
+that stops to dogfight isn't pressing an attack, and making strikers
+genuinely vulnerable is precisely what gives the DEFENDING side something to
+do. Without it, defending the tanks would mean intercepting ships that fight
+back exactly as well as any other fighter, and the attack/defend split would
+carry no real difference in play. A striker's outs are the ordinary ones:
+squad morale (the existing half-the-squad-lost rule) and its own health.
+
+The squad's ground target is also evaluated **before** the ordinary squad
+state machine, which is the whole feature — a strike flight has to cross 22km
+of contested air to reach the city, and if an air engagement could take
+priority on the way in it would be absorbed into a dogfight and never arrive.
+RETREAT/REGROUP are excluded, so morale still overrides doctrine.
+
+A run reuses **`BREAK_OFF`** to end the pass rather than inventing a separate
+pull-off state, so a strafing run has the same recognisable rhythm the
+dogfight already has: close, shoot, fly through and past, come back around.
+
+#### Two real bugs found by measurement, not reasoning
+
+The first implementation destroyed **0 of 20 tanks across a full 600-second
+match** despite pilots correctly entering `GROUND_ATTACK` at t=4s. Rather
+than re-tune, the sim was instrumented to separate "never gets close" from
+"gets close but never aims" — it was decisively the latter: **5952 samples
+inside firing range, 7 of them nose-on.** Two independent causes:
+
+- **The steering aim point and the gun aim point were different.** The
+  approach steered at a point 300m ABOVE the tank (to keep the run clear of
+  the ground) while the fire cone was measured to the tank itself — so at
+  break range the nose was ~35° off the thing it was shooting at, against a
+  12° cone. Fixed by deleting the offset entirely: a striker now steers at
+  **exactly** the point it shoots at, so "nose on the thing I am firing at"
+  is true by construction and the fire cone is the only alignment tuning
+  that exists.
+- **Ground avoidance was fighting every attack dive.** `_needs_pull_up()`'s
+  LOOKAHEAD probes 3 seconds (~750m at cruise) along the nose, which *any*
+  descent at a ground target trips — and a pull-up overrides steering
+  entirely, so strikers were being levelled out on every frame they tried to
+  aim down. A striker is deliberately descending at a target it has chosen,
+  so the cruise rule is simply the wrong rule for it: `GROUND_ATTACK` now
+  skips the lookahead and keeps only the immediate clearance check, at
+  `GROUND_ATTACK_MIN_CLEARANCE` (90m) instead of `MIN_GROUND_CLEARANCE`
+  (200m). The lookahead is what had to go — not ground avoidance itself,
+  which is still what saves the ship.
+
+After both: **446 of 610 in-range samples nose-on**, first tank down at
+t=52.9s.
+
+#### Damage and pacing
+
+AI fire reaches tanks through the pooled ambient-bolt system, not a new one:
+`_check_ambient_bolt_hit()` tests `TankObjective.check_hit()` (the same swept
+segment the player's weapons use) **before** its ship test, matching the
+ordering `laser_bolt.gd`/`missile.gd` already use — a fuel tank is a far
+larger body sitting underneath the fight, so a bolt inside one should
+detonate there rather than carry on to whatever was flying overhead.
+
+Two gates keep that free. `TankObjective.max_tank_top_y` is an **exact**
+rejection (tanks grow upward from the terrain, so nothing above the tallest
+one's collision volume can be intersecting), and combat happens thousands of
+metres up — so almost every bolt is rejected on one float compare.
+`can_be_damaged_by()` then drops every bolt the defending side fired before
+the swept test runs at all.
+
+#### The pacing dial, and why it ended up ABOVE a ship's bolt damage
+
+`ai_tank_damage` (**8.0**) is higher than `BOLT_DAMAGE` (10 → per hit it's
+comparable), which is the opposite of the first guess. The reason is not that
+a striker's guns are special — it's that **a striker gets very few rounds
+away per sortie**, and the dial has to convert measured shots-on-target into
+a sane number of tanks per match. How well the AI *shoots* is already covered
+per pilot by `accuracy`; this is a separate question.
+
+The measurements that forced it, all across 420-second matches at 100v100:
+
+| `ai_tank_damage` | fire range | damage dealt | tanks destroyed |
+|---|---|---|---|
+| 3.0 | 950m | **12** | **0 / 20** |
+| 6.0 | 1400m | 234 | 2 / 20 |
+| 8.0 | 1400m | 300 | **5 / 20** |
+
+At the original settings the entire attacking fleet dealt **12 total damage
+in seven minutes** — one fifth of a single tank.
+
+**Strike sorties are dominated by transit, not by combat.** Of 2655 striker
+ship-seconds spent in `GROUND_ATTACK`, only **18.6 were inside firing range —
+0.7%**. A flight crosses 22km from its mothership for a firing window that
+was 1.7 seconds long, and dies often enough (125-193 striker deaths per
+match, since strikers don't defend themselves) to restart that transit
+repeatedly. Widening the window was worth far more than improving the aim.
+
+Final measured behaviour, both attack directions: **2-5 tanks destroyed per
+420s**, first kill at t=60-153s, roles always assigned to the correct side,
+and the match never auto-won. Nicely, the two runs also showed real coupling
+between the tiers — the run where the attacker was losing the air war
+(AS -83) landed 2 tanks, while the one holding air parity landed 5. Ground
+progress depends on the air war without either being hardcoded to the other.
 
 Verified headlessly end to end (19/19): placement clear and spread, layout
 and roles both genuinely rerolling, the attacker/defender gate working in
@@ -1808,6 +1970,23 @@ both directions, swept hit detection hitting and missing correctly, a kill
 condemning nearby buildings, scoring signed toward the attacker, buildings
 actually descending and then vanishing, and clearing all 20 ending the match
 with the attacker declared winner.
+
+### Still open on the ground tier
+
+- **Strikers are conspicuously fragile.** 125-193 striker deaths per 420s
+  match is a direct consequence of the "a committed striker does not
+  dogfight" doctrine meeting this map's 22km spawn distance — every death
+  costs ~8s of respawn plus a ~90s transit back. It works, and it is what
+  gives the defender something to do, but if strike flights read as
+  suicidal in the headset the lever is a short self-defence acquisition
+  range while in `STRIKE` (they'd turn and fight only something right on
+  top of them), which was considered and deliberately deferred rather than
+  guessed at.
+- None of this is confirmed in VR. In particular, whether a strafing run
+  actually READS as one from the cockpit — the pass geometry, the dive
+  angle, and whether the tank detonation is visible from the attacker's own
+  break-off — is exactly the kind of thing headless measurement cannot
+  answer.
 
 ## Ground flak — cosmetic anti-aircraft fire from the city
 

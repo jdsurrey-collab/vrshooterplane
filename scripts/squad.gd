@@ -23,7 +23,24 @@ enum State {
 	ENGAGE,   # at least one member has a live target
 	RETREAT,  # broke off after losses — running for the rally point
 	REGROUP,  # re-forming at the rally point before advancing again
+	STRIKE,   # committed to a ground target — see `role` / STRIKE below
 }
+
+## What this squad is FOR, fixed at build time from its leader's
+## `ground_attack_affinity` (combatant.gd) and never re-derived — a squad that
+## flipped doctrine mid-run because its lead was shot down would be unreadable.
+##
+## FIGHTER is the overwhelming majority and is the pre-existing behaviour,
+## completely unchanged. The other two are the minority who care about
+## tank_objective.gd's fuel tanks, and which one a squad can hold depends on
+## which side of the attack/defend coin its faction landed on:
+##
+## STRIKE_ROLE — attacking faction only. Flies at live tanks and strafes them.
+## TANK_GUARD — defending faction only. NOT a new state machine: it fights
+##   exactly like a FIGHTER, it just draws its patrol objectives from the
+##   airspace over its own tanks instead of random points in the dome, so it
+##   happens to be loitering where attackers have to come.
+enum Role { FIGHTER, STRIKE_ROLE, TANK_GUARD }
 
 var faction: int = Combatant.Faction.FRIENDLY
 
@@ -58,3 +75,10 @@ var spawn_center: Vector3 = Vector3.ZERO
 ## it instead of each independently chasing whatever is nearest to them.
 var focus_target: int = -1
 var focus_is_player: bool = false
+
+var role: int = Role.FIGHTER
+
+## Index into tank_objective.gd's tank array while this squad is running a
+## strike, or -1. Re-picked when the current tank dies; the squad falls back
+## to ordinary FIGHTER behaviour once none are left.
+var strike_target: int = -1

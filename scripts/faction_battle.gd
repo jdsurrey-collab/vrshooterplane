@@ -207,6 +207,54 @@ const SQUAD_RETREAT_TIME := 14.0
 const SQUAD_REGROUP_TIME := 10.0
 
 ## Separation — the actual fix for "the AI clusters together in huge packs".
+# --- Ground attack (STRIKE squads vs tank_objective.gd's fuel tanks) --------
+
+## A strike pilot steers at EXACTLY the point it shoots at (the tank's body
+## centre), so "nose on the thing I am firing at" is true by construction and
+## GROUND_ATTACK_FIRE_CONE below is the only alignment tuning there is.
+##
+## The first version instead steered at a point 300m ABOVE the tank, on the
+## reasoning that a shallow approach would stay clear of the ground. It made
+## the weapon unusable: the gun cone is measured to the tank, so at break
+## range the nose was ~35 degrees off the thing it was shooting at, and the
+## AI destroyed 0 of 20 tanks across a full 600-second match.
+
+## Distance to the tank at which the pass ends and the pilot pulls off. Well
+## outside GROUND_ATTACK_FIRE_RANGE so every run gets a real firing window,
+## and far enough out to turn: at ~250 m/s against ai_turn_max_rate this is
+## about two seconds of warning, which is ample for the shallow approach the
+## turn-rate limit produces naturally.
+const GROUND_ATTACK_BREAK_RANGE := 520.0
+
+## Ground clearance floor for a pilot actually making a strafing run, against
+## MIN_GROUND_CLEARANCE (200m) for everyone else. A striker is deliberately
+## descending at a ground target; a cruise safety margin is the wrong rule for
+## it. See _needs_pull_up().
+const GROUND_ATTACK_MIN_CLEARANCE := 90.0
+
+## Far longer than ENGAGE_RANGE (800m) because a tank is a ~100m STATIONARY
+## target rather than a jinking fighter — a striker can open up much earlier
+## and still be shooting at something it can actually hit.
+##
+## Sized against the measured bottleneck rather than picked for feel. A strike
+## flight crosses 22km from its mothership to reach the city, and at 950m this
+## bought a ~1.7-second firing window at the end of it: of 2655 striker
+## ship-seconds spent in GROUND_ATTACK across a 420-second match, only 18.6
+## were inside firing range — 0.7%. The approach, not the aim, was the whole
+## problem.
+##
+## Capped by the bolt itself: BOLT_SPEED (520) x BOLT_LIFETIME (3.0) = 1560m,
+## so anything beyond that would expire in flight and silently never arrive.
+const GROUND_ATTACK_FIRE_RANGE := 1400.0
+const GROUND_ATTACK_FIRE_CONE := deg_to_rad(12.0)
+
+## How close a TANK_GUARD patrols to the tank it is watching over. Wide enough
+## that guards aren't stacked on the tank itself, tight enough that an
+## attacker running in has to come through them.
+const TANK_GUARD_PATROL_RADIUS := 1100.0
+const TANK_GUARD_PATROL_ALT_MIN := 400.0
+const TANK_GUARD_PATROL_ALT_MAX := 1600.0
+
 const SEPARATION_RADIUS := 130.0
 const SEPARATION_WEIGHT := 2.2
 const MAX_SEPARATION_NEIGHBORS := 6
@@ -295,6 +343,41 @@ const KILL_FEED_ENTRY_LIFETIME := 8.0
 ## always the case).
 @export var player_target_bias: float = 0.55
 
+@export_group("Ground objective doctrine")
+## What fraction of the ATTACKING faction's squads fly ground strikes against
+## tank_objective.gd's fuel tanks instead of dogfighting. Deliberately a small
+## minority — "I don't want that to be the main focus of every AI in the game
+## is to blow up tankers. They should be mostly involved in dogfighting and
+## defending." At the default ~33 squads a side that is roughly 6 strike
+## flights, ~15 ships out of 100.
+##
+## Because `Combatant.ground_attack_affinity` is rolled uniformly on 0..1,
+## this value IS the threshold's percentile — set it to 0.0 to switch AI
+## ground attack off entirely without touching any other number.
+@export_range(0.0, 1.0, 0.01) var strike_squad_fraction: float = 0.18
+
+## The defending counterpart: what fraction of the DEFENDING faction's squads
+## patrol over their own tanks rather than roaming the dome. Higher than the
+## strike fraction on purpose — a defender loitering near a tank is still a
+## fully normal fighter that will engage anything it meets, so it costs the
+## air war much less than committing a flight to a ground run does.
+@export_range(0.0, 1.0, 0.01) var tank_guard_squad_fraction: float = 0.28
+
+## Damage one AI bolt does to a fuel tank, against BOLT_DAMAGE (10) for a
+## ship. HIGHER than a ship hit, which is the opposite of the first guess and
+## the opposite of how it reads — the reason is that a striker gets very few
+## shots away per sortie, not that its guns are special.
+##
+## Measured: a strike flight crosses 22km each way, so even after widening
+## GROUND_ATTACK_FIRE_RANGE a pilot lands only a handful of rounds per pass,
+## and it dies often enough (strikers do not defend themselves) to restart
+## that transit repeatedly. At 3.0 the whole attacking fleet dealt 12 total
+## damage in 420 seconds — one fifth of a single tank. This is the dial that
+## turns measured shots-on-target into a sane number of tanks per match; it
+## is not a difficulty knob for how well the AI shoots, which is already
+## covered per pilot by `accuracy`.
+@export var ai_tank_damage: float = 8.0
+
 @export_group("Effect budget")
 @export var max_concurrent_explosions: int = 14
 @export var explosion_light_range: float = 4000.0  # past this, the kill fireball spawns without its OmniLight3D
@@ -354,6 +437,11 @@ var _enemy_spawn_center: Vector3
 
 var _terrain: Node
 var _player: Node3D
+## tank_objective.gd, if the ground objective is in the scene at all. Every
+## use is null-guarded — the mass battle predates the ground objective and
+## must still run without it (headless sims instantiate it, but a stripped
+## test scene may not).
+var _tank_objective: Node
 
 var _friendly_mmi: MultiMeshInstance3D
 var _enemy_mmi: MultiMeshInstance3D
@@ -371,6 +459,7 @@ func _ready() -> void:
 	randomize()
 	_terrain = get_node_or_null("../Terrain")
 	_player = get_tree().current_scene.get_node_or_null("Player")
+	_tank_objective = get_node_or_null("../TankObjective")
 
 	var city := get_node_or_null("../City")
 	if city and "city_center" in city:
@@ -572,6 +661,11 @@ func _spawn_faction(target: Array, count: int, faction: int) -> void:
 				flight_profile.ai_cruise_fraction_max) * flight_profile.max_forward_speed
 		c.speed = c.base_speed
 		c.accuracy = randf_range(0.55, 0.95)
+		# Uniform on purpose — see Combatant.ground_attack_affinity. A uniform
+		# roll is its own percentile, so strike_squad_fraction /
+		# tank_guard_squad_fraction below are exact proportions rather than
+		# thresholds that need requantifying if the curve is ever changed.
+		c.ground_attack_affinity = randf()
 		c.health = MAX_HEALTH
 		c.alive = true
 		target.append(c)
@@ -631,9 +725,131 @@ func _reset_squad(sq: Squad) -> void:
 	sq.losses = 0
 	sq.focus_target = -1
 	sq.focus_is_player = false
-	sq.objective = _random_point_in_dome()
+	sq.role = Squad.Role.FIGHTER
+	sq.strike_target = -1
+	sq.objective = _squad_next_objective(sq)
 	sq.rally_point = _make_rally_point(sq.spawn_center)
 	sq.leader = sq.members[0] if not sq.members.is_empty() else -1
+
+
+# ---------------------------------------------------------------------------
+# Ground doctrine — which squads care about tank_objective.gd's fuel tanks
+# ---------------------------------------------------------------------------
+
+## Called by game_flow.gd at match start, immediately AFTER
+## TankObjective.start_objective() has flipped the attacker/defender coin —
+## which is the whole reason this can't live in _build_squads(): a squad's
+## ground role depends on which side its faction drew this match, and that is
+## rerolled every match while squads are built once in _ready().
+##
+## Only a minority of squads get a ground role at all. Everything else keeps
+## the pre-existing pure-dogfight behaviour untouched.
+func assign_ground_roles() -> void:
+	var attacker := -1
+	if _tank_objective and _tank_objective.active:
+		attacker = _tank_objective.attacking_faction
+	_assign_roles_for(_friendly_squads, _friendlies, Combatant.Faction.FRIENDLY, attacker)
+	_assign_roles_for(_enemy_squads, _enemies, Combatant.Faction.ENEMY, attacker)
+
+
+## Ranks a faction's squads by their LEADER's ground_attack_affinity and gives
+## the role to the top N, where N is the exported fraction of the squad count.
+##
+## Deliberately the LEADER's trait, not the max across members: taking the max
+## would make a 5-ship squad roughly five times likelier to draw a ground role
+## than a lone pilot, and squad size has nothing to do with doctrine. The lead
+## decides where the flight goes, which is already true of every other
+## steering decision in this file.
+##
+## RANKING rather than testing each leader against a threshold independently.
+## Both honour the trait identically, but an independent per-squad test is a
+## binomial draw, and at ~31 squads that has real spread: two measured runs
+## produced 3 strike squads in one match and 10 in another — a 3x swing in
+## ground pressure that the player can neither see nor diagnose, and a match
+## at the low end has almost no ground war at all, which is the exact failure
+## this whole feature exists to fix. Ranking makes strike_squad_fraction mean
+## precisely what it says in every match, while leaving WHICH squads draw the
+## role fully random.
+func _assign_roles_for(squads: Array[Squad], units: Array, faction: int, attacker: int) -> void:
+	for sq in squads:
+		sq.role = Squad.Role.FIGHTER
+		sq.strike_target = -1
+	if attacker < 0:
+		return
+
+	var is_attacker := faction == attacker
+	var fraction: float = strike_squad_fraction if is_attacker else tank_guard_squad_fraction
+	var role: int = Squad.Role.STRIKE_ROLE if is_attacker else Squad.Role.TANK_GUARD
+	if fraction <= 0.0:
+		return
+
+	var ranked: Array[Squad] = []
+	for sq in squads:
+		if sq.leader >= 0 and sq.leader < units.size():
+			ranked.append(sq)
+	ranked.sort_custom(func(a: Squad, b: Squad) -> bool:
+			return (units[a.leader] as Combatant).ground_attack_affinity \
+					> (units[b.leader] as Combatant).ground_attack_affinity)
+
+	var n: int = mini(int(round(float(ranked.size()) * fraction)), ranked.size())
+	for i in n:
+		ranked[i].role = role
+
+
+## True while this squad is actually committed to a live ground target.
+func _is_striking(sq: Squad) -> bool:
+	return sq.state == Squad.State.STRIKE and sq.strike_target >= 0
+
+
+## Where a strike flight steers — the same point _try_fire_ground() shoots at,
+## deliberately. See GROUND_ATTACK_BREAK_RANGE's comment for what happened
+## when these two were allowed to differ.
+func _strike_aim_point(sq: Squad) -> Vector3:
+	if _tank_objective == null or sq.strike_target < 0:
+		return Vector3.ZERO
+	return _tank_objective.get_tank_aim_point(sq.strike_target)
+
+
+## Keeps the squad's current tank if it's still standing, otherwise picks the
+## nearest live one. Returns false when there is no ground target to be had —
+## no objective in the scene, this faction isn't the attacker, or every tank
+## is already destroyed — at which point the squad reverts to a fighter.
+func _acquire_strike_target(sq: Squad, from: Vector3) -> bool:
+	if _tank_objective == null or not _tank_objective.active:
+		sq.strike_target = -1
+		return false
+	if _tank_objective.attacking_faction != sq.faction:
+		sq.strike_target = -1
+		return false
+	if _tank_objective.is_tank_alive(sq.strike_target):
+		return true
+	sq.strike_target = _tank_objective.get_nearest_live_tank(from)
+	return sq.strike_target >= 0
+
+
+## The squad's next patrol point. Identical to the old
+## `_random_point_in_dome()` for everyone except a TANK_GUARD, which instead
+## loiters in the airspace around one of its own tanks — no new state machine,
+## it still fights exactly like any other squad, it just happens to already be
+## where an attacker has to come.
+##
+## A RANDOM live tank rather than the nearest: guards picking nearest would
+## all converge on whichever tank sits closest to their mothership, which is
+## the same single-point clustering bug _make_rally_point() had to be fixed
+## for once already.
+func _squad_next_objective(sq: Squad) -> Vector3:
+	if sq.role == Squad.Role.TANK_GUARD and _tank_objective and _tank_objective.active \
+			and _tank_objective.attacking_faction != sq.faction:
+		var idx: int = _tank_objective.get_random_live_tank()
+		if idx >= 0:
+			var t: Vector3 = _tank_objective.get_tank_position(idx)
+			var angle := randf() * TAU
+			var r := randf_range(TANK_GUARD_PATROL_RADIUS * 0.3, TANK_GUARD_PATROL_RADIUS)
+			return Vector3(
+					t.x + cos(angle) * r,
+					t.y + randf_range(TANK_GUARD_PATROL_ALT_MIN, TANK_GUARD_PATROL_ALT_MAX),
+					t.z + sin(angle) * r)
+	return _random_point_in_dome()
 
 
 # ---------------------------------------------------------------------------
@@ -661,10 +877,30 @@ func _update_squad(sq: Squad, units: Array, delta: float) -> void:
 	sq.focus_target = leader.target_index
 	sq.focus_is_player = leader.targeting_player
 
+	# STRIKE doctrine is evaluated BEFORE the ordinary state machine, and that
+	# ordering is the whole feature: a strike flight has to cross 22km of
+	# contested air to reach the city, and if an air engagement could take
+	# priority on the way in it would be absorbed into a dogfight and never
+	# arrive. Its ground target outranks anything in the sky.
+	#
+	# RETREAT/REGROUP are excluded — morale still overrides doctrine, so a
+	# strike flight that has been mauled still runs for its rally point.
+	if sq.role == Squad.Role.STRIKE_ROLE \
+			and sq.state != Squad.State.RETREAT and sq.state != Squad.State.REGROUP:
+		if _acquire_strike_target(sq, leader.position):
+			sq.state = Squad.State.STRIKE
+			sq.objective = _strike_aim_point(sq)
+		elif sq.state == Squad.State.STRIKE:
+			# Every tank is down (or the objective ended) — nothing left to
+			# strike, so this flight spends the rest of the match as an
+			# ordinary fighter squad.
+			sq.state = Squad.State.ADVANCE
+			sq.objective = _squad_next_objective(sq)
+
 	match sq.state:
 		Squad.State.ADVANCE:
 			if leader.position.distance_to(sq.objective) < 600.0:
-				sq.objective = _random_point_in_dome()
+				sq.objective = _squad_next_objective(sq)
 			if sq.focus_target >= 0 or sq.focus_is_player:
 				sq.state = Squad.State.ENGAGE
 		Squad.State.ENGAGE:
@@ -673,6 +909,14 @@ func _update_squad(sq: Squad, units: Array, delta: float) -> void:
 				sq.state_timer = SQUAD_RETREAT_TIME
 			elif sq.focus_target < 0 and not sq.focus_is_player:
 				sq.state = Squad.State.ADVANCE
+		Squad.State.STRIKE:
+			# The only way out other than running out of tanks (handled above)
+			# is the same morale rule every other squad obeys. A strike flight
+			# does not defend itself (see _update_combatant), so this is what
+			# stops one grinding itself to nothing on a defended target.
+			if sq.losses >= _squad_break_threshold(sq):
+				sq.state = Squad.State.RETREAT
+				sq.state_timer = SQUAD_RETREAT_TIME
 		Squad.State.RETREAT:
 			if sq.state_timer <= 0.0:
 				sq.state = Squad.State.REGROUP
@@ -680,7 +924,7 @@ func _update_squad(sq: Squad, units: Array, delta: float) -> void:
 		Squad.State.REGROUP:
 			if sq.state_timer <= 0.0:
 				sq.losses = 0
-				sq.objective = _random_point_in_dome()
+				sq.objective = _squad_next_objective(sq)
 				sq.state = Squad.State.ADVANCE
 
 
@@ -748,7 +992,27 @@ func _update_combatant(c: Combatant, my_index: int, opposing: Array, own_units: 
 	# Sampled once and reused by both the ground-avoidance test and the
 	# terrain/building crash test below — they used to sample independently.
 	var ground_here: float = _terrain.get_height_at(c.position.x, c.position.z) if _terrain else 0.0
-	_retarget_if_needed(c, my_index, opposing, sq, can_target_player)
+
+	# STRIKE DOCTRINE: a committed striker does not dogfight at all. It drops
+	# any air target and never acquires another until the run is over.
+	#
+	# This is deliberate rather than a simplification. A loaded strike aircraft
+	# that stops to dogfight isn't pressing an attack, and making strikers
+	# genuinely vulnerable is precisely what gives the DEFENDING side something
+	# to do — without it, defending the tanks would mean intercepting ships
+	# that fight back exactly as well as any other fighter, and the attack /
+	# defend split would carry no real difference in play. Their outs are the
+	# ordinary ones: squad morale and their own health.
+	#
+	# Also removes the retarget scan (and its _aliens_on_player accounting)
+	# entirely for these pilots, so the doctrine is slightly cheaper, not
+	# dearer, than the behaviour it replaces.
+	var on_strike := _is_striking(sq)
+	if on_strike:
+		c.target_index = -1
+		c.targeting_player = false
+	else:
+		_retarget_if_needed(c, my_index, opposing, sq, can_target_player)
 
 	var has_target := false
 	var target_pos := Vector3.ZERO
@@ -786,7 +1050,10 @@ func _update_combatant(c: Combatant, my_index: int, opposing: Array, own_units: 
 		return
 
 	c.fire_cooldown -= delta
-	if has_target and c.state != Combatant.State.RETREAT and c.state != Combatant.State.LAUNCHING \
+	if c.state == Combatant.State.GROUND_ATTACK:
+		if c.reaction_timer <= 0.0 and c.fire_cooldown <= 0.0:
+			_try_fire_ground(c, my_index, sq)
+	elif has_target and c.state != Combatant.State.RETREAT and c.state != Combatant.State.LAUNCHING \
 			and c.reaction_timer <= 0.0 and c.fire_cooldown <= 0.0:
 		_try_fire(c, my_index, target_pos, target_vel)
 
@@ -880,6 +1147,25 @@ func _update_pilot_state(c: Combatant, sq: Squad, has_target: bool, target_pos: 
 			return
 		c.state = Combatant.State.PURSUE
 
+	# Strike run. Reuses BREAK_OFF to end the pass rather than inventing a
+	# separate pull-off state, so a strafing run has the same recognisable
+	# rhythm as an attack run on a ship: close, shoot, fly through and past,
+	# come back around. Sits above the `not has_target` early-out below
+	# because a striker has no air target BY CONSTRUCTION (see
+	# _update_combatant) and would otherwise be dropped straight to FORMATION.
+	if _is_striking(sq):
+		if c.state != Combatant.State.GROUND_ATTACK:
+			c.state = Combatant.State.GROUND_ATTACK
+		elif c.position.distance_to(_strike_aim_point(sq)) < GROUND_ATTACK_BREAK_RANGE:
+			c.state = Combatant.State.BREAK_OFF
+			c.state_timer = randf_range(BREAK_OFF_TIME_MIN, BREAK_OFF_TIME_MAX)
+		return
+
+	# The squad's ground target died, or the objective ended, while this pilot
+	# was mid-run — hand it back to the air war.
+	if c.state == Combatant.State.GROUND_ATTACK:
+		c.state = Combatant.State.FORMATION
+
 	if not has_target:
 		c.state = Combatant.State.FORMATION
 		return
@@ -915,6 +1201,11 @@ func _steering_direction(c: Combatant, sq: Squad, own_units: Array, has_target: 
 			# and up so the pass separates cleanly instead of driving straight
 			# through the target's position.
 			return c.heading * 3.0 + Vector3.UP * 0.6 + c.heading.cross(Vector3.UP) * 0.8
+
+		Combatant.State.GROUND_ATTACK:
+			if _is_striking(sq):
+				return _strike_aim_point(sq) - c.position
+			return _formation_or_objective(c, sq, own_units)
 
 		Combatant.State.PURSUE:
 			if has_target:
@@ -1138,6 +1429,23 @@ func _random_point_in_dome() -> Vector3:
 func _needs_pull_up(c: Combatant, my_index: int, ground_here: float) -> bool:
 	if not _terrain:
 		return false
+
+	# A striker is DELIBERATELY descending at a ground target it has chosen,
+	# so the cruise avoidance rule cannot apply to it unchanged — and this was
+	# a real, measured bug, not a precaution. The LOOKAHEAD probes 3 seconds
+	# (~750m at cruise) along the nose, which ANY attack dive trips; a pull-up
+	# then overrides steering entirely, so strikers were being levelled out on
+	# every frame they tried to aim down and could never get their nose onto a
+	# tank. Measured before this exemption: 5952 samples inside firing range
+	# across a 300-second match, only 7 of them nose-on, and 0 of 20 tanks
+	# destroyed in a full 600-second match.
+	#
+	# The IMMEDIATE clearance check still applies — that's the one that
+	# actually saves a ship's life — just at the lower floor a strafing run
+	# needs. The lookahead is what has to go, not ground avoidance itself.
+	if c.state == Combatant.State.GROUND_ATTACK:
+		return c.position.y - ground_here < GROUND_ATTACK_MIN_CLEARANCE
+
 	# Immediate clearance is checked every frame — this is the one that
 	# actually saves a ship's life.
 	if c.position.y - ground_here < MIN_GROUND_CLEARANCE:
@@ -1311,6 +1619,33 @@ func _try_fire(c: Combatant, my_index: int, target_pos: Vector3, target_vel: Vec
 		_spawn_ambient_bolt(c, my_index, c.faction, aim)
 
 
+## A strike pilot shooting at its squad's fuel tank. Separate from _try_fire()
+## rather than folded into it because almost none of that function applies: a
+## tank is stationary, so there is no intercept solution to solve (_lead_point
+## would return the target's own position anyway, just after doing the
+## quadratic), and it's a ~100m body rather than a fighter, so it gets its own
+## longer range and tighter cone.
+##
+## The pilot's accuracy still displaces the shot exactly as it does against a
+## ship — a poor pilot still sprays at range — so the AI's ground kill rate
+## naturally carries the same skill spread as its air combat.
+func _try_fire_ground(c: Combatant, my_index: int, sq: Squad) -> void:
+	if _tank_objective == null or sq.strike_target < 0:
+		return
+	var aim: Vector3 = _tank_objective.get_tank_aim_point(sq.strike_target)
+	var to_aim := aim - c.position
+	var range_to_target := to_aim.length()
+	if range_to_target > GROUND_ATTACK_FIRE_RANGE or range_to_target < 0.01:
+		return
+	if c.heading.angle_to(to_aim / range_to_target) > GROUND_ATTACK_FIRE_CONE:
+		return
+
+	c.aim_jitter = Vector3(randf() - 0.5, randf() - 0.5, randf() - 0.5).normalized()
+	var shot := aim + c.aim_jitter * ((1.0 - c.accuracy) * range_to_target * AIM_ERROR_SCALE)
+	c.fire_cooldown = randf_range(0.35, 0.9)
+	_spawn_ambient_bolt(c, my_index, c.faction, shot)
+
+
 ## True intercept solution, displaced by this pilot's own inaccuracy. The
 ## error grows with range, so a distant AI sprays and a close one is
 ## genuinely dangerous — the standard way to make combat AI feel skilled
@@ -1462,6 +1797,28 @@ func _check_bolt_environment(pos: Vector3) -> bool:
 ## was pure garbage churn in the hottest loop in the system.
 func _check_ambient_bolt_hit(b: Dictionary, prev_pos: Vector3, new_pos: Vector3) -> bool:
 	var owner_faction: int = b["faction"]
+
+	# Ground objective first, matching the ordering laser_bolt.gd/missile.gd
+	# already use: a fuel tank is a far larger body than a fighter and sits
+	# underneath the fight, so a bolt inside one should detonate there rather
+	# than carry on to whatever was flying overhead.
+	#
+	# The altitude test is an EXACT rejection, not an approximation — tanks
+	# grow upward from the terrain and max_tank_top_y is the top of the
+	# tallest one's collision volume, so nothing above it can be intersecting.
+	# Combat happens thousands of metres up, so this rejects the overwhelming
+	# majority of bolts for the price of one float compare, and
+	# can_be_damaged_by() then drops every bolt the DEFENDING side fired
+	# before the swept test ever runs.
+	if _tank_objective and _tank_objective.active \
+			and minf(prev_pos.y, new_pos.y) <= _tank_objective.max_tank_top_y \
+			and _tank_objective.can_be_damaged_by(owner_faction):
+		var tank_idx: int = _tank_objective.check_hit(prev_pos, new_pos)
+		if tank_idx >= 0:
+			_tank_objective.apply_damage(tank_idx, ai_tank_damage,
+					"destroyed by %s" % _combatant_label(owner_faction, b["shooter_index"]))
+			return true
+
 	var opposing: Array = _enemies if owner_faction == Combatant.Faction.FRIENDLY else _friendlies
 	var grid: Dictionary = _enemy_grid if owner_faction == Combatant.Faction.FRIENDLY else _friendly_grid
 

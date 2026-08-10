@@ -194,6 +194,11 @@ func _start_match() -> void:
 	# not in _ready(), so there is no fixed layout to memorise.
 	if _tanks:
 		_tanks.start_objective()
+		# Which squads fly ground strikes and which guard the tanks depends on
+		# which side their faction just drew, so roles are assigned here rather
+		# than when the squads were built in FactionBattle._ready().
+		if _battle:
+			_battle.assign_ground_roles()
 		# Announce which side of the tank fight the player drew. Done here,
 		# AFTER start_objective() has rolled the coin, so the stamp can never
 		# show a stale role from the previous match.

@@ -107,6 +107,16 @@ var attacking_faction: int = 0
 var tanks_remaining: int = 0
 var active: bool = false
 
+## Highest point any tank reaches, in absolute world Y — recomputed whenever
+## the layout is rolled. This is a free, EXACT rejection gate for the mass
+## battle's ambient-bolt-vs-tank test: tanks sit on the terrain and grow
+## upward, so a bolt above this cannot possibly be intersecting one and the
+## whole swept check is skipped. Combat here almost always happens thousands
+## of metres up, so that rejects the overwhelming majority of bolts for the
+## price of one float compare. -INF until a layout exists, which correctly
+## rejects everything.
+var max_tank_top_y: float = -INF
+
 # Per tank: {"pos": Vector3, "alive": bool, "health": float}
 var _tanks: Array[Dictionary] = []
 var _mmi: MultiMeshInstance3D
@@ -148,6 +158,7 @@ func reset_objective() -> void:
 	active = false
 	_tanks.clear()
 	tanks_remaining = 0
+	max_tank_top_y = -INF
 	if _mmi:
 		_mmi.multimesh.visible_instance_count = 0
 
@@ -235,6 +246,13 @@ func _scatter_tanks() -> void:
 			"health": tank_health,
 		})
 
+	# Top of the tallest tank's COLLISION volume (not its visual mesh) — the
+	# gate has to match what check_hit() can actually register, or a bolt could
+	# be rejected on altitude while still being inside the sphere it tests.
+	max_tank_top_y = -INF
+	for t in _tanks:
+		max_tank_top_y = maxf(max_tank_top_y, (t["pos"] as Vector3).y + _tank_radius * 1.5)
+
 	if _tanks.size() < tank_count:
 		push_warning("TankObjective: placed only %d/%d tanks in %d attempts"
 				% [_tanks.size(), tank_count, attempts])
@@ -273,10 +291,7 @@ func check_hit(from: Vector3, to: Vector3) -> int:
 		var t: Dictionary = _tanks[i]
 		if not t["alive"]:
 			continue
-		var pos: Vector3 = t["pos"]
-		# Tanks sit ON the ground and the mesh grows upward from its base, so
-		# test against the middle of the body rather than its foot.
-		var body_center := pos + Vector3(0.0, _tank_radius * 0.5, 0.0)
+		var body_center := _body_center(t["pos"])
 		var closest: Vector3
 		if seg_len_sq <= 0.0:
 			closest = from
@@ -288,6 +303,13 @@ func check_hit(from: Vector3, to: Vector3) -> int:
 	return -1
 
 
+## Tanks sit ON the ground and the mesh grows upward from its base, so both
+## the hit test and the AI's aim point work off the middle of the body rather
+## than its foot. Shared so the two can't drift apart.
+func _body_center(pos: Vector3) -> Vector3:
+	return pos + Vector3(0.0, _tank_radius * 0.5, 0.0)
+
+
 ## Tanks belong to the DEFENDER, so only the attacking faction gets credit
 ## for blowing them up. Without this, a defending player could clear their
 ## own objective and hand the match to the other side.
@@ -297,6 +319,53 @@ func can_be_damaged_by(faction: int) -> bool:
 
 func get_tank_position(index: int) -> Vector3:
 	return _tanks[index]["pos"] if index >= 0 and index < _tanks.size() else Vector3.ZERO
+
+
+# ---------------------------------------------------------------------------
+# AI interface — faction_battle.gd's STRIKE / TANK_GUARD squads
+# ---------------------------------------------------------------------------
+
+func is_tank_alive(index: int) -> bool:
+	return active and index >= 0 and index < _tanks.size() and _tanks[index]["alive"]
+
+
+## Where a strike pilot actually aims and shoots — the body centre, so bolts
+## converge on the tank rather than its footprint.
+func get_tank_aim_point(index: int) -> Vector3:
+	if index < 0 or index >= _tanks.size():
+		return Vector3.ZERO
+	return _body_center(_tanks[index]["pos"])
+
+
+## Nearest living tank to `from`, or -1. Linear over at most `tank_count` (20)
+## entries, and only ever called when a squad needs a NEW ground target — a
+## handful of times a match, not per frame — so a spatial structure would be
+## more bookkeeping than it saves.
+func get_nearest_live_tank(from: Vector3) -> int:
+	var best := -1
+	var best_dist := INF
+	for i in _tanks.size():
+		if not _tanks[i]["alive"]:
+			continue
+		var d: float = from.distance_squared_to(_tanks[i]["pos"])
+		if d < best_dist:
+			best_dist = d
+			best = i
+	return best
+
+
+## A random living tank, or -1. Used for TANK_GUARD patrol objectives rather
+## than "nearest": guards picking nearest would all converge on whichever tank
+## happens to be closest to the mothership, which is the same single-point
+## clustering bug _make_rally_point() already had to be fixed for.
+func get_random_live_tank() -> int:
+	if tanks_remaining <= 0:
+		return -1
+	var live: Array[int] = []
+	for i in _tanks.size():
+		if _tanks[i]["alive"]:
+			live.append(i)
+	return live[randi() % live.size()] if not live.is_empty() else -1
 
 
 func apply_damage(index: int, amount: float, cause: String = "destroyed by PLAYER") -> void:

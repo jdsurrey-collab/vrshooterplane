@@ -28,7 +28,12 @@ enum Faction { FRIENDLY, ENEMY }
 ##   target before turning back, rather than gluing itself to its tail.
 ##   This is what makes fights read as real dogfight passes.
 ## RETREAT — disengaging entirely (own damage, or squad losses).
-enum State { PARKED, LAUNCHING, FORMATION, PURSUE, BREAK_OFF, RETREAT }
+## GROUND_ATTACK — running in on a fuel tank (tank_objective.gd) instead of
+##   a ship. Only pilots in a STRIKE squad ever enter this; see
+##   `ground_attack_affinity` below and faction_battle.gd's strike doctrine.
+##   Deliberately reuses BREAK_OFF to end the pass, so a strafing run reads
+##   with the same rhythm as a dogfight pass.
+enum State { PARKED, LAUNCHING, FORMATION, PURSUE, BREAK_OFF, RETREAT, GROUND_ATTACK }
 
 var position: Vector3 = Vector3.ZERO
 var heading: Vector3 = Vector3.FORWARD  # normalized, local -Z equivalent
@@ -96,6 +101,24 @@ var accuracy: float = 0.8
 ## Random unit vector, re-rolled per shot, scaled by (1 - accuracy) and
 ## range into the actual aim error.
 var aim_jitter: Vector3 = Vector3.ZERO
+
+## 0..1 appetite for the GROUND objective (tank_objective.gd's fuel tanks) as
+## opposed to dogfighting. The first real PERSONALITY trait in this project —
+## the seed of docs/ai-archetypes.md's trait vector, which will eventually set
+## this per archetype rather than rolling it.
+##
+## Rolled UNIFORMLY in faction_battle.gd, and that's load-bearing: a uniform
+## 0..1 is its own percentile, so an exported "what fraction of the fleet
+## cares about the ground war" knob maps onto a threshold exactly, with no
+## quantile math and no drift if the distribution is ever retuned.
+##
+## Only a pilot who is a SQUAD LEADER ever acts on this — it sets that
+## squad's doctrine for the match (see squad.gd's `role`). A wingman's own
+## value is carried but dormant until it inherits the lead, which is
+## deliberate: a single wingman peeling off to bomb a tank while the rest of
+## its flight dogfights would break formation and read as a bug rather than
+## as personality.
+var ground_attack_affinity: float = 0.0
 
 ## Last result of the ground-avoidance LOOKAHEAD test. That test costs a
 ## terrain sample, and faction_battle.gd only re-runs it on a stagger (see
