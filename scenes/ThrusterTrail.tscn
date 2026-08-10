@@ -1,0 +1,49 @@
+[gd_scene load_steps=6 format=3]
+
+[ext_resource type="Texture2D" path="res://Assets/Textures/smoke_flipbook.png" id="1_smokeflipbook"]
+
+[sub_resource type="QuadMesh" id="QuadMesh_thrustertrail"]
+size = Vector2(7, 7)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_thrustertrail"]
+transparency = 1
+shading_mode = 0
+vertex_color_use_as_albedo = true
+albedo_color = Color(0.78, 0.79, 0.84, 1)
+albedo_texture = ExtResource("1_smokeflipbook")
+billboard_mode = 1
+particles_anim_h_frames = 8
+particles_anim_v_frames = 8
+particles_anim_loop = false
+
+[sub_resource type="Gradient" id="Gradient_thrustertrail"]
+offsets = PackedFloat32Array(0, 0.08, 0.55, 1)
+colors = PackedColorArray(1, 0.86, 0.62, 0.9, 0.86, 0.86, 0.88, 0.62, 0.6, 0.6, 0.64, 0.34, 0.5, 0.5, 0.55, 0)
+
+[sub_resource type="ParticleProcessMaterial" id="ParticleProcessMaterial_thrustertrail"]
+direction = Vector3(0, 0, 1)
+spread = 4.0
+initial_velocity_min = 1.0
+initial_velocity_max = 6.0
+gravity = Vector3(0, 1.0, 0)
+damping_min = 0.5
+damping_max = 1.5
+scale_min = 1.2
+scale_max = 3.2
+color_ramp = SubResource("Gradient_thrustertrail")
+emission_shape = 1
+emission_sphere_radius = 0.8
+anim_speed_min = 0.4
+anim_speed_max = 0.8
+anim_offset_min = 0.0
+anim_offset_max = 0.4
+
+[node name="ThrusterTrail" type="GPUParticles3D"]
+material_override = SubResource("StandardMaterial3D_thrustertrail")
+emitting = false
+amount = 80
+lifetime = 5.0
+local_coords = false
+visibility_aabb = AABB(-2000, -2000, -2000, 4000, 4000, 4000)
+process_material = SubResource("ParticleProcessMaterial_thrustertrail")
+draw_pass_1 = SubResource("QuadMesh_thrustertrail")

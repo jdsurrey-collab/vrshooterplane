@@ -78,6 +78,17 @@ extends Node
 @export_group("Input")
 @export var stick_deadzone: float = 0.15
 
+@export_group("Thruster trail")
+## The player's own engine plume (scenes/ThrusterTrail.tscn, instanced under
+## Ship so it sits at the exhaust). Emits only while the main drive is
+## actually being pushed — this is "when you're pushing the thrusters
+## down", not a permanent smoke stack. Its particles are world-space
+## (`local_coords = false`), so the trail stays where it was laid down
+## instead of dragging along behind the ship.
+@export var thruster_trail_path: NodePath = ^"../Ship/ThrusterTrail"
+## Grip pressure below this doesn't count as running the thrusters.
+@export var thruster_trail_threshold: float = 0.12
+
 ## Set by the options menu while it's open, so adjusting settings doesn't
 ## fight with live flight input.
 var paused: bool = false
@@ -121,20 +132,26 @@ var vertical_input_value: float = 0.0
 var _afterburner_fuel: float = 0.0
 var afterburner_active: bool = false  # readable by engine_audio.gd/flight_hud.gd
 
+var _thruster_trail: GPUParticles3D
+
 
 func _ready() -> void:
 	_origin = get_parent()
 	_left_controller = _origin.get_node_or_null("LeftHand")
 	_right_controller = _origin.get_node_or_null("RightHand")
 	_afterburner_fuel = profile.afterburner_max_duration
+	_thruster_trail = get_node_or_null(thruster_trail_path) as GPUParticles3D
 
 
 func _physics_process(delta: float) -> void:
-	if paused:
-		return
-	if not _left_controller or not _right_controller:
-		return
-	if not _left_controller.get_is_active() or not _right_controller.get_is_active():
+	# Every early-out below has to stop the plume, not just skip the flight
+	# update — otherwise the trail keeps smoking off a frozen ship through
+	# the menu, the crash sequence and the death screen, since `emitting`
+	# is sticky state rather than something re-evaluated per frame.
+	if paused or not _left_controller or not _right_controller \
+			or not _left_controller.get_is_active() or not _right_controller.get_is_active():
+		if _thruster_trail:
+			_thruster_trail.emitting = false
 		return
 
 	var right_stick: Vector2 = _apply_deadzone(_right_controller.get_vector2("primary"))
@@ -145,6 +162,12 @@ func _physics_process(delta: float) -> void:
 	left_grip_value = left_grip
 
 	_update_afterburner(delta)
+
+	# Plume runs off the MAIN DRIVE only — the right grip. Reverse (left
+	# grip) fires the much weaker retro system, and the air brake below is
+	# deceleration, not thrust; neither should lay down an exhaust trail.
+	if _thruster_trail:
+		_thruster_trail.emitting = right_grip > thruster_trail_threshold
 
 	if _right_controller.is_button_pressed("ax_button"):
 		# Air brake overrides every other control input entirely — see

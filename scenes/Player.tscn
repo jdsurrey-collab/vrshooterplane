@@ -42,6 +42,7 @@
 [ext_resource type="Script" path="res://scripts/death_screen.gd" id="47_deathscreen"]
 [ext_resource type="Script" uid="uid://bxg783bfypqqk" path="res://scripts/flight_hud.gd" id="48_flighthud"]
 [ext_resource type="FontFile" uid="uid://l3cfm2xy05pd" path="res://Assets/Fonts/Orbitron-Variable.ttf" id="49_orbitron"]
+[ext_resource type="PackedScene" path="res://scenes/ThrusterTrail.tscn" id="50_thrustertrail"]
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_fade"]
 render_priority = -1
@@ -321,6 +322,9 @@ surface_material_override/0 = SubResource("StandardMaterial3D_crosshair")
 
 [node name="FlightHUD" type="Node3D" parent="Ship"]
 script = ExtResource("48_flighthud")
+
+[node name="ThrusterTrail" parent="Ship" instance=ExtResource("50_thrustertrail")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.6, -7)
 
 [node name="WeaponSystem" type="Node" parent="."]
 script = ExtResource("14_weapons")

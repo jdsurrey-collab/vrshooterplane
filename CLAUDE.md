@@ -1835,6 +1835,59 @@ Made affordable rather than merely enabled:
 - Measured result: **the shadow pass renders ~50,000 triangles instead of
   ~574,000.**
 
+## Thruster trails
+
+Long, persistent engine exhaust smoke laid down whenever thrusters are
+running — the player's and the AI's alike. `scenes/ThrusterTrail.tscn` is
+the shared emitter (the same `smoke_flipbook.png` the rest of this
+project's smoke uses, 80 particles, 5s lifetime — at 300 m/s that's a
+~1500m plume). Like `missile_trail.gd`'s trail it emits in **world space**
+(`local_coords = false`), which is what makes it a trail that stays where
+it was laid down rather than a puff dragged along behind the ship.
+
+- **The player's** is a single instance parented under `Ship` at the
+  exhaust, toggled by `flight_controller.gd` from the right grip only.
+  Reverse (left grip) fires the much weaker retro system and the air brake
+  is deceleration, not thrust — neither lays a plume. Parenting under
+  `Ship` means it tracks the nozzle for free while `local_coords = false`
+  still leaves the smoke behind. Every early-out in `_physics_process`
+  (paused, no controllers) explicitly stops emission, because `emitting`
+  is sticky state — without that the trail keeps smoking off a frozen ship
+  through the menu, crash sequence and death screen.
+- **The AI's is a POOLED set** (`scripts/thruster_trails.gd`,
+  `ThrusterTrails` under `FactionBattle`), structurally near-identical to
+  `ship_engine_audio.gd` and reusing its exact `FactionBattle` API
+  (`get_ships_near()`/`is_ship_alive_by_key()`/`get_ship_position_by_key()`/
+  `get_ship_velocity_by_key()`) and its `paused` convention. `trail_count`
+  (10) emitters are handed to whichever ships are nearest the player.
+
+**Why pooled, and why this is the riskiest visual in the project.** Smoke
+is large transparent quads, and transparent overdraw is the single most
+expensive thing on a VR renderer — every pixel shaded twice, once per eye,
+and stacked smoke quads shade the same pixel repeatedly. With an
+unresolved frame-rate collapse already open (see Known gaps) and GPU-side
+suspicion, 200 unbudgeted particle systems was never an option.
+`trail_count` is THE cost dial here; raise it only against a measured
+frame budget.
+
+**Reassignment is safe here in a way the audio pool's isn't** — worth
+knowing before copying this pattern again. Because particles are
+world-space, moving an emitter to a different ship leaves the old trail
+hanging in the sky to dissipate on its own and just starts laying new
+smoke elsewhere. There's no equivalent of the audio pool's voice-steal
+"pop", so none of its gain-ramp machinery is needed; the hysteresis is
+purely to stop churn between ships sitting at the radius boundary.
+
+**Known limitation, stated plainly:** ships beyond `trail_radius` (3500m)
+have no trail at all, and a plume is visible from much further away than
+that — so a distant furball reads emptier than a near one. That's a
+deliberate cost trade. Covering every ship would need a MultiMesh-based
+trail rather than `GPUParticles3D`, a substantially bigger piece of work.
+
+Verified headlessly: player emits under main-drive thrust only and stops
+on release and on pause; all 10 pooled emitters claim ships and emit once
+the player is flying with the fleet, and none are claimed while paused.
+
 ## Proximity engine audio
 
 Every AI ship has a sphere of influence: fly close enough and you hear its

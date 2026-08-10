@@ -57,6 +57,7 @@ var _death_screen: Node
 var _crash_handler: Node
 var _engine_audio: Node
 var _ship_engine_audio: Node
+var _thruster_trails: Node
 
 var _confirm_button_was_down: bool = false
 
@@ -78,6 +79,7 @@ func _ready() -> void:
 	_terrain = get_node_or_null("../Terrain")
 	if _battle:
 		_ship_engine_audio = _battle.get_node_or_null("ShipEngineAudio")
+		_thruster_trails = _battle.get_node_or_null("ThrusterTrails")
 
 	_enter_menu()
 
@@ -142,6 +144,8 @@ func _set_player_paused(value: bool) -> void:
 		_engine_audio.paused = value
 	if _ship_engine_audio:
 		_ship_engine_audio.paused = value
+	if _thruster_trails:
+		_thruster_trails.paused = value
 
 
 ## The player starts on the friendly mothership's flight deck alongside the
