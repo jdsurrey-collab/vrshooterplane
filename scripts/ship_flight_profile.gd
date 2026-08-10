@@ -117,6 +117,25 @@ extends Resource
 ## buttons that are pushed for movement," per direct instruction.
 @export var air_brake_fraction: float = 0.6
 
+@export_group("Afterburner")
+## Right controller's B ("by_button" — completely unused elsewhere in this
+## project, same hand as the air brake). Raises the forward speed CEILING
+## by this much while held and fuel remains — it does NOT auto-thrust the
+## ship; the pilot still has to hold the right grip to actually use the
+## extra headroom, keeping this consistent with flight-assist OFF (see
+## flight_controller.gd) rather than becoming a second kind of assist.
+## "Push that to get a boost... increases your speed by 200 m/s."
+@export var afterburner_speed_bonus: float = 200.0  # m/s, added to max_forward_speed
+## A limited resource, not unlimited — "you can only afterburn for...
+## just ten seconds." Drains at 1 second of fuel per second held; refills
+## over afterburner_recharge_time while not held. Real afterburners don't
+## recharge at all (you land and refuel), but a standard rechargeable
+## boost meter is the expected convention for this kind of arcade
+## dogfighting move — not otherwise specified, so this is a first-pass
+## default like everything else in this profile.
+@export var afterburner_max_duration: float = 10.0  # seconds
+@export var afterburner_recharge_time: float = 16.0  # seconds to refill from empty
+
 @export_group("AI-only")
 ## Heading convergence for AI ships, which re-point their nose
 ## omnidirectionally toward a steering target rather than rolling into a

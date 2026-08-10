@@ -107,6 +107,23 @@ writes and wires up scenes/scripts directly.
   stacked on this game's already-arcade acceleration scale. Carried over
   into the shared profile; see `docs/flight-physics-reference.md` for the
   F-16/roll grounding.
+  **Afterburner — right controller's B (`by_button`, previously unused).**
+  Holding it raises the forward speed CEILING by
+  `afterburner_speed_bonus` (200 m/s, 300 -> 500) for as long as fuel
+  lasts (`afterburner_max_duration`, 10s), recharging over
+  `afterburner_recharge_time` (16s, first-pass, not otherwise specified)
+  while not held. Does NOT auto-thrust — the pilot still has to hold the
+  right grip to actually use the extra headroom, keeping it consistent
+  with flight-assist OFF rather than becoming a second kind of assist,
+  the same reasoning already applied to reverse thrust and the air brake.
+  `flight_hud.gd` gained a second vertical gauge (`BoostTrack`/
+  `BoostFill`, hot red-orange, distinct from the thrust gauge's amber)
+  showing remaining fuel, positioned further right of the existing thrust
+  gauge. A real bug was caught and fixed while touching this code:
+  `_apply_air_brake()` still referenced `profile.pitch_yaw_max_accel`,
+  deleted by the earlier pitch/yaw split — would have thrown at runtime
+  the moment anyone actually held the air brake button, never caught by
+  the headless parse gate.
   **No auto-braking, anywhere, ever — corrected live, twice.** The
   original coasting-drag model (a real quadratic air-drag curve on throttle
   release) was replaced first with an assisted brake to a goal velocity of

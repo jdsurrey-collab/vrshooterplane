@@ -95,8 +95,16 @@ extends Node3D
 @export_group("Thrust gauge")
 @export var gauge_height: float = 0.3
 
+@export_group("Boost gauge")
+@export var boost_gauge_x_offset: float = 0.42  # further right than the thrust gauge, same height
+
 const NEON_CYAN := Color(0.0, 2.4, 2.6)  # pushed above 1.0 so the Environment's Glow pass actually blooms it
 const NEON_AMBER := Color(2.6, 1.4, 0.0)
+## Hot red-orange, distinct from the thrust gauge's amber — this is a
+## REMAINING-FUEL readout (drains as you hold the afterburner), a
+## different kind of information from thrust's live input level, so it
+## gets its own color rather than reusing NEON_AMBER.
+const NEON_BOOST := Color(2.6, 0.4, 0.1)
 ## Plain white, not tinted — the flight path marker's own color, per direct
 ## request. Real HUDs use a neutral velocity-vector symbol precisely so it
 ## reads as "true direction of travel" rather than being mistaken for
@@ -111,6 +119,7 @@ var _heading_label: Label3D
 var _altitude_label: Label3D
 var _altitude_tick: MeshInstance3D
 var _thrust_fill: MeshInstance3D
+var _boost_fill: MeshInstance3D
 var _flight_path_marker: Node3D
 var _font: Font
 
@@ -122,6 +131,7 @@ func _ready() -> void:
 
 	_build_altitude_ladder()
 	_build_thrust_gauge()
+	_build_boost_gauge()
 	_flight_path_marker = _build_ring("FlightPathMarker", marker_inner_radius, marker_outer_radius, MARKER_WHITE)
 	_speed_label = _build_label("SpeedLabel", hud_center + Vector3(-0.30, 0.16, 0.0) * element_scale, HORIZONTAL_ALIGNMENT_LEFT)
 	_heading_label = _build_label("HeadingLabel", hud_center + Vector3(0.0, 0.24, 0.0) * element_scale, HORIZONTAL_ALIGNMENT_CENTER)
@@ -158,6 +168,12 @@ func _process(_delta: float) -> void:
 		_thrust_fill.scale.y = h
 		_thrust_fill.position.y = (hud_center.y - gauge_height * element_scale * 0.5) + h * 0.5
 
+	if _boost_fill:
+		var fuel: float = clampf(_flight_controller.get_afterburner_fuel_fraction(), 0.0, 1.0)
+		var bh: float = maxf(gauge_height * element_scale * fuel, 0.001)
+		_boost_fill.scale.y = bh
+		_boost_fill.position.y = (hud_center.y - gauge_height * element_scale * 0.5) + bh * 0.5
+
 	_update_flight_path_marker()
 
 
@@ -175,12 +191,11 @@ func _update_flight_path_marker() -> void:
 	var local_dir: Vector3 = (_ship.global_transform.basis.inverse() * world_vel).normalized()
 	_flight_path_marker.visible = true
 	_flight_path_marker.position = hud_center + local_dir * marker_distance * element_scale
-	# No manual look_at() here — the ring's OWN material is billboarded (see
-	# _build_ring()), which is what a single-mesh ring should use instead of
-	# a hand-computed facing basis: guaranteed correct from any viewing
-	# angle, and it's the exact technique target_lock.gd's PIP ring already
-	# uses for the identical shape. A wrong hand-rotated guess is exactly
-	# what made the gun crosshair invisible (edge-on) before this fix.
+	# No rotation update here — the ring's facing is a fixed static rotation
+	# baked in once by _build_ring() (see that function's own comment for
+	# why: TorusMesh lies flat with its normal along local Y, not Z, so it
+	# needs an actual rotation, not billboarding). Only position tracks the
+	# velocity direction each frame.
 
 
 func _build_altitude_ladder() -> void:
@@ -224,6 +239,35 @@ func _build_thrust_gauge() -> void:
 	_thrust_fill.position = hud_center + Vector3(0.30, -gauge_height * 0.5, 0.0) * element_scale
 	_thrust_fill.scale.y = 0.001
 	add_child(_thrust_fill)
+
+
+## Same structure as _build_thrust_gauge() (dim track + bright fill scaled
+## 0..1 per frame), reading afterburner fuel REMAINING instead of live
+## thrust input — a different signal (drains while held, recharges while
+## not), so it's a separate gauge rather than reusing the thrust one.
+func _build_boost_gauge() -> void:
+	var track := MeshInstance3D.new()
+	track.name = "BoostTrack"
+	var track_mesh := BoxMesh.new()
+	track_mesh.size = Vector3(0.03, gauge_height, 0.006) * element_scale
+	track.mesh = track_mesh
+	var track_mat := _neon_material(NEON_BOOST)
+	track_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	track_mat.albedo_color.a = 0.25
+	track_mat.emission_energy_multiplier = 0.6
+	track.material_override = track_mat
+	track.position = hud_center + Vector3(boost_gauge_x_offset, 0.0, 0.0) * element_scale
+	add_child(track)
+
+	_boost_fill = MeshInstance3D.new()
+	_boost_fill.name = "BoostFill"
+	var fill_mesh := BoxMesh.new()
+	fill_mesh.size = Vector3(0.026, 1.0, 0.007) * element_scale  # Y scaled per-frame, not baked into the mesh
+	_boost_fill.mesh = fill_mesh
+	_boost_fill.material_override = _neon_material(NEON_BOOST)
+	_boost_fill.position = hud_center + Vector3(boost_gauge_x_offset, -gauge_height * 0.5, 0.0) * element_scale
+	_boost_fill.scale.y = 0.001
+	add_child(_boost_fill)
 
 
 func _build_line(node_name: String, local_pos: Vector3, length: float, color: Color) -> MeshInstance3D:

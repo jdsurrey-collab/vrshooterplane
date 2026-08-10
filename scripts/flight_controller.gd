@@ -22,6 +22,13 @@ extends Node
 ##                  OFF (see below). Holding it overrides every other input
 ##                  and decelerates all six axes toward zero at
 ##                  ShipFlightProfile.air_brake_fraction of forward_max_accel.
+## Right B button:   afterburner — hold to raise the forward speed ceiling by
+##                  ShipFlightProfile.afterburner_speed_bonus (200 m/s) for as
+##                  long as fuel lasts (afterburner_max_duration, 10s),
+##                  recharging over afterburner_recharge_time while not held.
+##                  Does NOT auto-thrust — the pilot still has to hold the
+##                  right grip to use the extra headroom, same flight-assist-
+##                  OFF philosophy as everything else here.
 ##
 ## Attached to a child of the player's XROrigin3D; moves/rotates its parent
 ## directly each physics frame.
@@ -106,11 +113,17 @@ var left_grip_value: float = 0.0
 var roll_input_value: float = 0.0
 var vertical_input_value: float = 0.0
 
+## Afterburner fuel, in seconds remaining (0..profile.afterburner_max_duration).
+## Starts full. See _update_afterburner() and this file's header.
+var _afterburner_fuel: float = 0.0
+var afterburner_active: bool = false  # readable by engine_audio.gd/flight_hud.gd
+
 
 func _ready() -> void:
 	_origin = get_parent()
 	_left_controller = _origin.get_node_or_null("LeftHand")
 	_right_controller = _origin.get_node_or_null("RightHand")
+	_afterburner_fuel = profile.afterburner_max_duration
 
 
 func _physics_process(delta: float) -> void:
@@ -127,6 +140,8 @@ func _physics_process(delta: float) -> void:
 	var left_grip: float = _left_controller.get_float("grip")
 	right_grip_value = right_grip
 	left_grip_value = left_grip
+
+	_update_afterburner(delta)
 
 	if _right_controller.is_button_pressed("ax_button"):
 		# Air brake overrides every other control input entirely — see
@@ -187,6 +202,27 @@ func _update_rotation(right_stick: Vector2, left_stick: Vector2, delta: float) -
 	_angular_accel.z = roll.y
 
 
+## Drains/recharges afterburner fuel and sets `afterburner_active` — the
+## actual speed-ceiling bump is applied in _update_translation(). Runs
+## unconditionally (even under air brake) since it's a resource meter, not
+## a movement input; holding both simultaneously just drains fuel for no
+## effect, not worth special-casing.
+func _update_afterburner(delta: float) -> void:
+	var held := _right_controller.is_button_pressed("by_button")
+	if held and _afterburner_fuel > 0.0:
+		afterburner_active = true
+		_afterburner_fuel = maxf(0.0, _afterburner_fuel - delta)
+	else:
+		afterburner_active = false
+		var recharge_rate := profile.afterburner_max_duration / maxf(profile.afterburner_recharge_time, 0.001)
+		_afterburner_fuel = minf(profile.afterburner_max_duration, _afterburner_fuel + recharge_rate * delta)
+
+
+## 0..1 remaining fuel fraction, for flight_hud.gd's gauge.
+func get_afterburner_fuel_fraction() -> float:
+	return _afterburner_fuel / maxf(profile.afterburner_max_duration, 0.001)
+
+
 func _update_translation(right_grip: float, left_grip: float, left_stick: Vector2, delta: float) -> void:
 	var basis := _origin.global_transform.basis
 	var forward_input := right_grip - left_grip
@@ -211,10 +247,17 @@ func _update_translation(right_grip: float, left_grip: float, left_stick: Vector
 	# different max_accel keeps this a one-line change at the call site
 	# instead of needing a second branch through step_acceleration.
 	var reverse_scale := 1.0 if forward_input >= 0.0 else profile.reverse_thrust_fraction
+	# Afterburner raises the forward CEILING only — it doesn't touch reverse,
+	# and it doesn't auto-thrust; the pilot still has to be holding the
+	# right grip to actually reach the extra headroom. See
+	# _update_afterburner() and this file's header.
+	var forward_ceiling := profile.max_forward_speed
+	if afterburner_active:
+		forward_ceiling += profile.afterburner_speed_bonus
 	var forward := OmegaMotion.step_acceleration(
 			local_velocity.z, local_accel.z, -forward_input * reverse_scale,
 			profile.forward_max_accel, profile.forward_accel_time, delta,
-			-profile.max_forward_speed, profile.max_reverse_speed)
+			-forward_ceiling, profile.max_reverse_speed)
 	local_velocity.z = forward.x
 	local_accel.z = forward.y
 
@@ -269,8 +312,8 @@ func _apply_air_brake(delta: float) -> void:
 	_linear_velocity = _linear_velocity.move_toward(Vector3.ZERO, linear_decel * delta)
 	_linear_accel = Vector3.ZERO
 
-	_angular_velocity.x = move_toward(_angular_velocity.x, 0.0, profile.pitch_yaw_max_accel * delta)
-	_angular_velocity.y = move_toward(_angular_velocity.y, 0.0, profile.pitch_yaw_max_accel * delta)
+	_angular_velocity.x = move_toward(_angular_velocity.x, 0.0, profile.pitch_max_accel * delta)
+	_angular_velocity.y = move_toward(_angular_velocity.y, 0.0, profile.yaw_max_accel * delta)
 	_angular_velocity.z = move_toward(_angular_velocity.z, 0.0, profile.roll_max_accel * delta)
 	_angular_accel = Vector3.ZERO
 
