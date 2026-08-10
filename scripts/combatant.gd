@@ -44,6 +44,19 @@ var base_speed: float = 0.0  # this pilot's natural cruise
 ## clears both together.
 var speed_accel: float = 0.0  # m/s^2, throttle acceleration
 var turn_rate: float = 0.0  # rad/s, current heading-convergence rate
+
+## Afterburner, the AI's counterpart to the player's B button. Lit in
+## bursts when a pilot has a real reason to surge — running down a target
+## or fleeing — never as a permanent state, so a boost still reads as a
+## deliberate act rather than a constant. `afterburner_time` counts down
+## the current burn; `afterburner_cooldown` gates the next one. Both are
+## also what thruster_trails.gd reads to decide who gets a smoke plume.
+var afterburner_time: float = 0.0
+var afterburner_cooldown: float = 0.0
+
+## True only while a burn is actually running — cheaper for callers than
+## re-deriving it from the two timers, and unambiguous about intent.
+var afterburner_active: bool = false
 var faction: int = Faction.FRIENDLY
 var health: float = 30.0
 var alive: bool = true

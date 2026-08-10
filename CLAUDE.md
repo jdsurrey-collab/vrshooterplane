@@ -1837,29 +1837,62 @@ Made affordable rather than merely enabled:
 
 ## Thruster trails
 
-Long, persistent engine exhaust smoke laid down whenever thrusters are
-running — the player's and the AI's alike. `scenes/ThrusterTrail.tscn` is
-the shared emitter (the same `smoke_flipbook.png` the rest of this
-project's smoke uses, 80 particles, 5s lifetime — at 300 m/s that's a
-~1500m plume). Like `missile_trail.gd`'s trail it emits in **world space**
+Long, persistent engine exhaust smoke — **afterburner-only, for the player
+and the AI alike**, not ordinary thrust. `scenes/ThrusterTrail.tscn` is the
+shared emitter (the same `smoke_flipbook.png` the rest of this project's
+smoke uses, 80 particles, 5s lifetime — at 300 m/s that's a ~1500m plume).
+Like `missile_trail.gd`'s trail it emits in **world space**
 (`local_coords = false`), which is what makes it a trail that stays where
 it was laid down rather than a puff dragged along behind the ship.
 
+**Scope correction, direct from playtest feedback**: the first version
+gated the trail on any main-drive thrust (right grip) for both the player
+and all 200 AI ships. Corrected: "No. I only wanted smoke to appear when
+boostering at... or afterburns with b button." Both sides now gate strictly
+on the afterburner flag, not the throttle:
+
 - **The player's** is a single instance parented under `Ship` at the
-  exhaust, toggled by `flight_controller.gd` from the right grip only.
-  Reverse (left grip) fires the much weaker retro system and the air brake
-  is deceleration, not thrust — neither lays a plume. Parenting under
-  `Ship` means it tracks the nozzle for free while `local_coords = false`
-  still leaves the smoke behind. Every early-out in `_physics_process`
-  (paused, no controllers) explicitly stops emission, because `emitting`
-  is sticky state — without that the trail keeps smoking off a frozen ship
-  through the menu, crash sequence and death screen.
-- **The AI's is a POOLED set** (`scripts/thruster_trails.gd`,
-  `ThrusterTrails` under `FactionBattle`), structurally near-identical to
+  exhaust; `flight_controller.gd` sets `_thruster_trail.emitting =
+  afterburner_active` (the same flag the B-button afterburner system
+  itself drives — see above), not a grip-magnitude threshold. Parenting
+  under `Ship` means it tracks the nozzle for free while
+  `local_coords = false` still leaves the smoke behind. Every early-out in
+  `_physics_process` (paused, no controllers) explicitly stops emission,
+  because `emitting` is sticky state — without that the trail keeps
+  smoking off a frozen ship through the menu, crash sequence and death
+  screen.
+- **The AI had no afterburner concept at all before this**, so giving its
+  trails the same gate meant giving the AI a real afterburner first.
+  `combatant.gd` gained `afterburner_time`/`afterburner_cooldown`/
+  `afterburner_active` (mirroring the player's fields) and
+  `faction_battle.gd._update_ai_afterburner()` runs a burst/cooldown state
+  machine per pilot: burns for `AB_BURN_MIN`-`AB_BURN_MAX` (1.6-3.4s), then
+  cools down for `AB_COOLDOWN_MIN`-`AB_COOLDOWN_MAX` (6-14s) before it can
+  fire again. A pilot only *wants* to burn for a real tactical reason —
+  retreating, closing a pursuit past `AB_PURSUE_MIN_RANGE` (600m), or
+  closing on its squad's objective past `AB_ADVANCE_MIN_RANGE` (2500m) —
+  never as a permanent state, matching the player's own B-button being a
+  deliberate act rather than a constant. `_update_throttle()` adds
+  `flight_profile.afterburner_speed_bonus` to the pilot's target cruise
+  speed while `afterburner_active`, so the burst is a real speed boost, not
+  just a visual. `_respawn_combatant()` resets all three fields (staggered
+  cooldown on respawn, same reasoning as the player's fuel starting full).
+- **The AI's trail pool** (`scripts/thruster_trails.gd`, `ThrusterTrails`
+  under `FactionBattle`), structurally near-identical to
   `ship_engine_audio.gd` and reusing its exact `FactionBattle` API
   (`get_ships_near()`/`is_ship_alive_by_key()`/`get_ship_position_by_key()`/
-  `get_ship_velocity_by_key()`) and its `paused` convention. `trail_count`
-  (10) emitters are handed to whichever ships are nearest the player.
+  `get_ship_velocity_by_key()`) and its `paused` convention, plus the new
+  `is_ship_afterburning_by_key()`. `trail_count` (10) emitters are handed
+  to whichever *burning* ships are nearest the player — both
+  `_reassign_trails()`'s claim/release logic and `_update_trails()`'s
+  per-frame emit check filter on `is_ship_afterburning_by_key()`, so an
+  emitter attached to a ship whose burn ends releases immediately rather
+  than idling on a cruising ship. Because only a fraction of nearby ships
+  are burning at any instant (a burst lasts a couple of seconds against a
+  6-14s cooldown), `_reassign_trails()` asks `get_ships_near()` for a wide
+  candidate list (`trail_count * CANDIDATE_MULTIPLIER`, 80) rather than
+  just `trail_count` — asking for only 10 nearest-any-ship candidates would
+  routinely return zero burning ones even with dozens burning fleet-wide.
 
 **Why pooled, and why this is the riskiest visual in the project.** Smoke
 is large transparent quads, and transparent overdraw is the single most
@@ -1868,7 +1901,12 @@ and stacked smoke quads shade the same pixel repeatedly. With an
 unresolved frame-rate collapse already open (see Known gaps) and GPU-side
 suspicion, 200 unbudgeted particle systems was never an option.
 `trail_count` is THE cost dial here; raise it only against a measured
-frame budget.
+frame budget. Gating on the afterburner rather than ordinary thrust is
+also a cost win on top of being the correct behavior — AI ships are under
+power essentially all the time, so a throttle-gated trail meant nearly
+every nearby ship smoking permanently, the worst case for overdraw; an
+afterburner burns for only a couple of seconds every several seconds per
+ship.
 
 **Reassignment is safe here in a way the audio pool's isn't** — worth
 knowing before copying this pattern again. Because particles are
@@ -1884,9 +1922,28 @@ that — so a distant furball reads emptier than a near one. That's a
 deliberate cost trade. Covering every ship would need a MultiMesh-based
 trail rather than `GPUParticles3D`, a substantially bigger piece of work.
 
-Verified headlessly: player emits under main-drive thrust only and stops
-on release and on pause; all 10 pooled emitters claim ships and emit once
-the player is flying with the fleet, and none are claimed while paused.
+**A real test-harness gotcha, worth remembering for any future headless
+sim**: an early verification run of the afterburner-only gating showed
+0 claimed emitters despite 40+ ships burning simultaneously fleet-wide —
+looked exactly like a broken claim/reassignment path. The actual cause was
+the test script calling `FactionBattle.start_battle()` directly, bypassing
+`game_flow.gd`'s own MENU->PLAYING state machine entirely; `game_flow.gd`
+stayed in `State.MENU` for the whole run and kept calling
+`_set_player_paused(true)` every frame, which sets `ThrusterTrails.paused
+= true` right along with the player's own systems (see Game Flow below) —
+so the pool's `_process()` returned early and never ran
+`_reassign_trails()` at all. Not a game bug: fixed by starting the match
+through `GameFlow._start_match()` in the test, the same real entry point
+the game itself uses, after which the pool correctly claimed emitters
+(verified: 91 correctly-lit emitter-samples over a 4s window, 0 false
+positives on non-burning ships).
+
+Verified headlessly end to end: the player's trail follows
+`afterburner_active` exactly (not grip magnitude) and stops on pause; the
+AI afterburner bursts in a healthy fraction (~40/197 ships at once, not
+all-or-nothing) with real burn/cooldown pacing; the pooled emitters attach
+only to currently-burning ships, release the instant a burn ends, and
+never light for a non-burning ship or while paused.
 
 ## Proximity engine audio
 

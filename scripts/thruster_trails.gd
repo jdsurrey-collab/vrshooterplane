@@ -1,7 +1,12 @@
 extends Node3D
 
-## Engine smoke trails for the AI ships — the long, persistent exhaust plume
-## a ship lays down while its thrusters are running.
+## AFTERBURNER smoke trails for the AI ships — the long, persistent plume a
+## ship lays down while its burner is lit. Deliberately NOT tied to
+## ordinary thrust: AI ships are under power essentially all the time, so
+## gating on throttle meant every nearby ship permanently smoking, which
+## is both wrong (a plume should mark a boost) and the worst possible case
+## for the overdraw cost below. Mirrors the player's own trail, which is
+## gated on the same afterburner rather than on the throttle.
 ##
 ## POOLED EMITTERS, not one per ship — the identical reasoning (and very
 ## nearly the identical structure) as ship_engine_audio.gd, which already
@@ -34,6 +39,12 @@ extends Node3D
 
 const TRAIL_SCENE := preload("res://scenes/ThrusterTrail.tscn")
 
+## How many nearby ships to consider per free emitter. Only a fraction are
+## burning at any moment (a burst lasts a couple of seconds against a
+## 6-14s cooldown), so the candidate list has to be well wider than the
+## pool or free emitters would routinely find nothing to attach to.
+const CANDIDATE_MULTIPLIER := 8
+
 ## How many ships can be trailing at once. THE primary cost dial for this
 ## whole feature — raise it only against a measured frame budget.
 @export var trail_count: int = 10
@@ -43,8 +54,9 @@ const TRAIL_SCENE := preload("res://scenes/ThrusterTrail.tscn")
 ## letting go, so ships loitering near the boundary don't cause churn.
 @export var release_hysteresis: float = 1.25
 @export var rescan_interval: float = 0.35
-## Ships slower than this aren't under meaningful thrust — parked on the
-## mothership deck, mostly — so they get no plume.
+## Below this the ship isn't really moving (parked on the deck), so it gets
+## no plume regardless of anything else — a burner lit on a stationary ship
+## would just smoke in place.
 @export var min_speed: float = 20.0
 ## How far behind the ship's own origin the plume starts, so it reads as
 ## coming out of the exhaust rather than the middle of the hull.
@@ -100,8 +112,18 @@ func _process(delta: float) -> void:
 	_update_trails()
 
 
-## Releases emitters whose ship died or drifted out of range, then hands
-## free emitters to the nearest unclaimed ships.
+## Releases emitters whose ship died, stopped burning, or drifted out of
+## range, then hands free emitters to nearby ships that ARE burning.
+##
+## Claiming is filtered on the afterburner, not just proximity — with only
+## `trail_count` emitters against potentially dozens of nearby ships,
+## assigning them to the nearest ships regardless would park emitters on
+## cruising ships doing nothing while an actually-boosting ship a little
+## further out went untrailed. A burn only lasts a couple of seconds, so
+## emitters need to follow the burns, not the neighbourhood.
+##
+## `get_ships_near` is asked for a generous multiple of `trail_count`
+## because most of what it returns won't be burning at any given moment.
 func _reassign_trails() -> void:
 	var listener: Vector3 = _player.global_position
 	var release_range := trail_radius * release_hysteresis
@@ -112,14 +134,15 @@ func _reassign_trails() -> void:
 		if key < 0:
 			continue
 		if not _battle.is_ship_alive_by_key(key) \
+				or not _battle.is_ship_afterburning_by_key(key) \
 				or listener.distance_to(_battle.get_ship_position_by_key(key)) > release_range:
 			t["key"] = -1
 			continue
 		claimed[key] = true
 
-	var nearby: Array = _battle.get_ships_near(listener, trail_radius, trail_count)
+	var nearby: Array = _battle.get_ships_near(listener, trail_radius, trail_count * CANDIDATE_MULTIPLIER)
 	for key in nearby:
-		if claimed.has(key):
+		if claimed.has(key) or not _battle.is_ship_afterburning_by_key(key):
 			continue
 		var slot: Dictionary = _free_trail()
 		if slot.is_empty():
@@ -141,6 +164,13 @@ func _update_trails() -> void:
 		var key: int = t["key"]
 
 		if key < 0 or not _battle.is_ship_alive_by_key(key):
+			node.emitting = false
+			continue
+
+		# AFTERBURNER ONLY — a plume marks a boost, not ordinary flight.
+		# Matches the player's own trail, which is gated on the same
+		# afterburner flag rather than on throttle.
+		if not _battle.is_ship_afterburning_by_key(key):
 			node.emitting = false
 			continue
 

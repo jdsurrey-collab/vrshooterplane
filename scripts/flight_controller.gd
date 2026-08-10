@@ -78,16 +78,16 @@ extends Node
 @export_group("Input")
 @export var stick_deadzone: float = 0.15
 
-@export_group("Thruster trail")
-## The player's own engine plume (scenes/ThrusterTrail.tscn, instanced under
-## Ship so it sits at the exhaust). Emits only while the main drive is
-## actually being pushed — this is "when you're pushing the thrusters
-## down", not a permanent smoke stack. Its particles are world-space
-## (`local_coords = false`), so the trail stays where it was laid down
-## instead of dragging along behind the ship.
+@export_group("Afterburner trail")
+## The player's own boost plume (scenes/ThrusterTrail.tscn, instanced under
+## Ship so it sits at the exhaust). Emits ONLY while the afterburner is
+## lit — not on ordinary throttle. An earlier version ran it off the main
+## drive's grip, which meant a permanent smoke stack any time you were
+## flying at all; the trail is meant to mark a boost, so it's tied to the
+## same `afterburner_active` the B button drives. Its particles are
+## world-space (`local_coords = false`), so the trail stays where it was
+## laid down instead of dragging along behind the ship.
 @export var thruster_trail_path: NodePath = ^"../Ship/ThrusterTrail"
-## Grip pressure below this doesn't count as running the thrusters.
-@export var thruster_trail_threshold: float = 0.12
 
 ## Set by the options menu while it's open, so adjusting settings doesn't
 ## fight with live flight input.
@@ -163,11 +163,12 @@ func _physics_process(delta: float) -> void:
 
 	_update_afterburner(delta)
 
-	# Plume runs off the MAIN DRIVE only — the right grip. Reverse (left
-	# grip) fires the much weaker retro system, and the air brake below is
-	# deceleration, not thrust; neither should lay down an exhaust trail.
+	# Plume marks the AFTERBURNER, nothing else — not ordinary throttle,
+	# not reverse, not the air brake. `_update_afterburner()` above has
+	# already resolved whether the burner is lit this frame (button held
+	# AND fuel remaining), so this is just mirroring that one flag.
 	if _thruster_trail:
-		_thruster_trail.emitting = right_grip > thruster_trail_threshold
+		_thruster_trail.emitting = afterburner_active
 
 	if _right_controller.is_button_pressed("ax_button"):
 		# Air brake overrides every other control input entirely — see

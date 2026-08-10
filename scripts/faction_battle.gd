@@ -137,6 +137,19 @@ const GRID_CELL_SIZE := 450.0
 const ENGAGE_RANGE := 800.0  # inside this a pilot will actually shoot
 const MAX_ACQUISITION_RANGE := 3000.0  # targets beyond this aren't acquired at all — see _retarget_if_needed
 const FIRE_CONE := deg_to_rad(14.0)  # must have the target roughly ahead, not abeam, to fire
+
+## AI afterburner burst/cooldown envelope — see _update_ai_afterburner().
+## Randomised per burn so a squad doesn't light up in lockstep, the same
+## reasoning as the staggered missile cooldowns.
+const AB_BURN_MIN := 1.6
+const AB_BURN_MAX := 3.4
+const AB_COOLDOWN_MIN := 6.0
+const AB_COOLDOWN_MAX := 14.0
+## Below this range to target, more speed just overshoots — no burn.
+const AB_PURSUE_MIN_RANGE := 600.0
+## Still this far from the squad objective with nothing to fight — worth
+## burning to close the gap.
+const AB_ADVANCE_MIN_RANGE := 2500.0
 const MIN_GROUND_CLEARANCE := 200.0  # meters; pull up if under this, same convention as enemy_ai.gd
 const LOOKAHEAD_TIME := 3.0  # seconds ahead to also check clearance for
 const LOOKAHEAD_STAGGER := 4  # only 1/4 of the population re-runs the lookahead terrain sample per frame
@@ -917,11 +930,57 @@ func _update_throttle(c: Combatant, sq: Squad, own_units: Array, has_target: boo
 		if leader.alive:
 			var gap := c.position.distance_to(_formation_station(leader, c.squad_slot))
 			wanted = clampf(leader.speed + gap * FORMATION_SPEED_GAIN, c.base_speed * 0.6, c.base_speed * 1.6)
+
+	_update_ai_afterburner(c, sq, has_target, target_pos, delta)
+	if c.afterburner_active:
+		wanted += flight_profile.afterburner_speed_bonus
+
 	var step := OmegaMotion.step_velocity(
 			c.speed, c.speed_accel, wanted,
 			flight_profile.forward_max_accel, flight_profile.forward_accel_time, delta)
 	c.speed = step.x
 	c.speed_accel = step.y
+
+
+## The AI's counterpart to the player's B button — same
+## `afterburner_speed_bonus` from the same shared ShipFlightProfile, so a
+## boosting alien surges exactly as hard as a boosting player.
+##
+## Lit in BURSTS with a cooldown, never held permanently: a boost that's
+## always on isn't a boost, it's just a higher cruise speed, and it would
+## also mean every nearby ship permanently smoking (thruster_trails.gd
+## reads this flag). A pilot only burns when there's a real reason —
+## closing on a target that's still some distance off, or running away —
+## which is also exactly when a plume reads as meaningful to the player.
+func _update_ai_afterburner(c: Combatant, sq: Squad, has_target: bool, target_pos: Vector3, delta: float) -> void:
+	if c.afterburner_active:
+		c.afterburner_time -= delta
+		if c.afterburner_time <= 0.0:
+			c.afterburner_active = false
+			c.afterburner_cooldown = randf_range(AB_COOLDOWN_MIN, AB_COOLDOWN_MAX)
+		return
+
+	c.afterburner_cooldown -= delta
+	if c.afterburner_cooldown > 0.0:
+		return
+
+	# Chasing something still far enough away that closing the gap matters,
+	# or disengaging outright. Not used inside knife-fight range, where
+	# more speed just overshoots the target.
+	var wants_burn := c.state == Combatant.State.RETREAT
+	if not wants_burn and has_target and c.state == Combatant.State.PURSUE:
+		wants_burn = c.position.distance_to(target_pos) > AB_PURSUE_MIN_RANGE
+	# Still crossing the map toward the objective with nothing to fight —
+	# the natural time to use a burner, and it covers the long opening
+	# transit (the fleets start 44km apart, see the Motherships section in
+	# CLAUDE.md) where there'd otherwise be no burns and no trails at all.
+	if not wants_burn and not has_target and sq != null:
+		wants_burn = c.position.distance_to(sq.objective) > AB_ADVANCE_MIN_RANGE
+	if not wants_burn:
+		return
+
+	c.afterburner_active = true
+	c.afterburner_time = randf_range(AB_BURN_MIN, AB_BURN_MAX)
 
 
 ## Pushes away from nearby same-faction ships. Without this, formation and
@@ -1085,6 +1144,9 @@ func _respawn_combatant(c: Combatant, sq: Squad) -> void:
 	c.speed = c.base_speed
 	c.speed_accel = 0.0
 	c.turn_rate = 0.0
+	c.afterburner_active = false
+	c.afterburner_time = 0.0
+	c.afterburner_cooldown = randf_range(0.0, AB_COOLDOWN_MAX)
 	c.state = Combatant.State.PARKED
 	c.state_timer = 0.0
 	# Mid-match respawns don't queue behind the whole fleet the way the
@@ -1644,6 +1706,14 @@ func get_ship_position_by_key(key: int) -> Vector3:
 func get_ship_velocity_by_key(key: int) -> Vector3:
 	var c := _ship_for_key(key)
 	return c.heading * c.speed if c else Vector3.ZERO
+
+
+## Whether this ship's afterburner is currently lit — read by
+## thruster_trails.gd to decide who gets a smoke plume, matching the
+## player's own afterburner-only trail.
+func is_ship_afterburning_by_key(key: int) -> bool:
+	var c := _ship_for_key(key)
+	return c != null and c.alive and c.afterburner_active
 
 
 ## Where the player starts the match and respawns: parked on the friendly
