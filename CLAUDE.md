@@ -1762,6 +1762,78 @@ volumetric layer above the fog purely for shadows (costs the same as a
 thick one, for the reason above); ground-relative cloud placement (too low
 over low terrain, city-footprint-only coverage).
 
+### Cloud top layer — the "looking down from above" view (`cloud_top.gd`)
+
+`CloudDeck` above is tuned entirely for the **underside** view: baked-once
+toon-shaded puffs, real shadows crossing it, cheap because nothing
+recomputes per frame. Direct follow-up request after seeing it: "I'd like
+to be able to see these kind of clouds when looking down" once the player
+climbs above the deck — with a specific reference shader supplied,
+[godotshaders.com's "Cloud Material"](https://godotshaders.com/shader/cloud-material/)
+(MIT licensed). `Assets/Shaders/cloud_top.gdshader` adapts it rather than
+using it verbatim, and `CloudTop` (a `Node3D` sibling of `CloudDeck` in
+`Town.tscn`, built by `scripts/cloud_top.gd`) is a genuinely separate mesh
+and material from `CloudDeck`, not a reskin of it — the two views want
+opposite trade-offs. This is real-time, per-frame vertex-displaced FBM
+noise (a `PlaneMesh`, `subdivisions` kept equal to `CloudDeck`'s own vertex
+count as the cost dial), which is what makes a convincing "sea of clouds"
+you fly over — a baked, flat texture like `CloudDeck`'s would look static
+and 2D stared at head-on from directly above. Positioned at the **top** of
+the band (`cloud_base_y + cloud_thickness`, not `CloudDeck`'s midpoint),
+and — unlike `CloudDeck`, which is deliberately double-sided — left at a
+`PlaneMesh`'s default single-sided front face (+Y), so it's invisible from
+below/inside the band where `CloudDeck` already owns the visual, and only
+appears once you've actually climbed above it.
+
+**Two real adaptations the source shader needed, not stylistic
+preferences:**
+
+- **World-scale noise input.** The source samples
+  `fbm(VERTEX.xz * 4.0, TIME)` — correct for a small demo plane a few
+  meters across, where `VERTEX.xz` is already a small number. This
+  project's world runs ~100x a normal Godot scene (see History), so a
+  plane covering the whole map has `VERTEX.xz` in the tens of thousands of
+  meters; multiplying that directly by a small constant feeds the noise
+  function enormous coordinates, which reads as fine uncorrelated static
+  instead of cloud-sized lobes — the same underlying mistake as
+  `CloudDeck`'s own "spider web" bug (noise sampled at too high an
+  effective frequency for the world scale it's applied to), just arrived
+  at from a different direction. Fixed with an exposed `noise_scale`
+  uniform (`cloud_top.gd`'s `puff_wavelength`, in real meters, converted
+  to `1.0 / puff_wavelength`) instead of the hardcoded literal.
+- **The height-based color/opacity blend now branches on the RAW fbm
+  value, not the scaled `VERTEX.y`.** The source compares displaced
+  `VERTEX.y` itself against a small constant (`0.3`) — which only works
+  because its own `height_scale` is small enough that `VERTEX.y` stays in
+  roughly the same 0..1 range as the raw noise. Here `height_scale` is
+  genuinely large (180m, real world units, so the puffs are visible from a
+  realistic flying distance) — comparing scaled `VERTEX.y` against `0.3`
+  with that `height_scale` would make every vertex trip the "tall" branch
+  identically, collapsing all the color/opacity variation the shader is
+  built around. Decoupled by branching on the pre-scale `height` value
+  instead.
+
+A third, minor fix: the source has a real typo in its own upper-color
+comparison (`color2.b == color2.b`, always true, comparing a value to
+itself, should be `soft_color.b == color2.b`) — harmless in practice since
+the first two channels already agree by construction, but corrected rather
+than carried forward silently. A soft edge fade toward the mesh's own
+boundary was also added (matching `CloudDeck`'s "don't terminate in a hard
+rectangle against the sky" reasoning), computed from local `VERTEX`
+position against an exported `half_size` rather than vertex color, since
+this is a plain `PlaneMesh`, not `CloudDeck`'s hand-built `ArrayMesh`.
+
+Verified headlessly: builds without error, `Shader` resource loads (no
+compile-time parse failure), positioned exactly at the band's top (not the
+deck's midpoint), sized to the same map coverage as `CloudDeck`, shader
+parameters (`noise_scale`, `half_size`, `texture_albedo`) all resolve to
+the expected values, and `cast_shadow` is off (same reasoning as
+`CloudDeck` — a cloud layer shouldn't cast a hard shadow over the whole
+world below it). Cannot be verified headlessly: whether the animated
+undulation, colors, and puff scale actually read as "clouds" from a real
+flying altitude in the headset — first-pass values like every other visual
+tuning in this project.
+
 ### Overcast lighting under the deck
 
 `atmosphere.gd` also dims and cools the sun and ambient light for the whole

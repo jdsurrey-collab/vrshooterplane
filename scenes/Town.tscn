@@ -10,6 +10,7 @@
 [ext_resource type="Script" uid="uid://b60p1qhinfufc" path="res://scripts/atmosphere.gd" id="10_atmosphere"]
 [ext_resource type="Script" uid="uid://c5vu8gg2v8p2t" path="res://scripts/cloud_deck.gd" id="11_clouddeck"]
 [ext_resource type="Script" uid="uid://cw4dpr1w5cyb6" path="res://scripts/thruster_trails.gd" id="12_thrustertrails"]
+[ext_resource type="Script" path="res://scripts/cloud_top.gd" id="13_cloudtop"]
 
 [sub_resource type="PanoramaSkyMaterial" id="SkyMat_1"]
 panorama = ExtResource("4_panorama")
@@ -85,6 +86,9 @@ spawn_position_xz = Vector2(-16000, 0)
 
 [node name="CloudDeck" type="Node3D" parent="."]
 script = ExtResource("11_clouddeck")
+
+[node name="CloudTop" type="Node3D" parent="."]
+script = ExtResource("13_cloudtop")
 
 [node name="City" type="Node3D" parent="."]
 script = ExtResource("7_citygen")
