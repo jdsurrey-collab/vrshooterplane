@@ -1,4 +1,4 @@
-[gd_scene load_steps=15 format=3 uid="uid://ceaei3xynkod2"]
+[gd_scene load_steps=16 format=3 uid="uid://ceaei3xynkod2"]
 
 [ext_resource type="PackedScene" uid="uid://c2dyoeywkgf30" path="res://scenes/Player.tscn" id="1_player"]
 [ext_resource type="Texture2D" uid="uid://neat1aug36g3" path="res://Assets/Skybox/panorama.tga" id="4_panorama"]
@@ -11,6 +11,7 @@
 [ext_resource type="Script" uid="uid://c5vu8gg2v8p2t" path="res://scripts/cloud_deck.gd" id="11_clouddeck"]
 [ext_resource type="Script" uid="uid://cw4dpr1w5cyb6" path="res://scripts/thruster_trails.gd" id="12_thrustertrails"]
 [ext_resource type="Script" path="res://scripts/cloud_top.gd" id="13_cloudtop"]
+[ext_resource type="Script" path="res://scripts/ground_flak.gd" id="14_groundflak"]
 
 [sub_resource type="PanoramaSkyMaterial" id="SkyMat_1"]
 panorama = ExtResource("4_panorama")
@@ -92,6 +93,9 @@ script = ExtResource("13_cloudtop")
 
 [node name="City" type="Node3D" parent="."]
 script = ExtResource("7_citygen")
+
+[node name="GroundFlak" type="Node3D" parent="."]
+script = ExtResource("14_groundflak")
 
 [node name="FactionBattle" type="Node3D" parent="."]
 script = ExtResource("6_factionbattle")

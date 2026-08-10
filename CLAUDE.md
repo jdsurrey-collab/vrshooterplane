@@ -1423,6 +1423,122 @@ volume trimmed down: `bass=g=8:f=100:w=0.5,lowpass=f=3200,aecho=0.8:0.7:
 60:0.25,volume=0.7`, saved as `Assets/Audio/missile_alert_1.mp3` /
 `missile_alert_2.mp3`.
 
+## Ground flak — cosmetic anti-aircraft fire from the city
+
+`scripts/ground_flak.gd` (`GroundFlak` node, sibling of `City`/
+`FactionBattle` in `Town.tscn`) — purely cosmetic ground-to-air fire,
+launched from real landmark-tower rooftops. Direct request: "neutral
+firepower... anti aircraft... blue and purple laser light... maybe some SM
+two style missiles... won't do any damage... just for show cosmetics... the
+more action packed it looks, the cooler." Followed immediately by a second,
+more specific request: "flak explosion... mortar shells that shoot above
+the cloud line and explode into... a persistent fog of dark cloud just like
+World War Two flak did."
+
+**NO DAMAGE, NO FACTION, NO COLLISION — deliberately, and load-bearing for
+cost.** This is spectacle, not gameplay, so it skips every cost the real
+ambient-bolt system in `faction_battle.gd` pays for hit detection (the
+spatial grid, the swept-segment check against every combatant). Nothing
+here can hit the player or any AI ship; nothing here is checked against
+anything. That's what makes three concurrent sub-systems affordable on top
+of the already-expensive mass battle.
+
+**Launch points are real landmark-tower rooftops, not arbitrary points.**
+`city_generator.gd` gained `landmark_rooftops: Array[Vector3]`, populated
+in `_generate_buildings()` only for the supertall landmark pool (not the
+~1400-building regular majority) — measured at **110 towers** across the
+city in a headless run. `_pick_launch_point()` picks a random one within
+`spawn_range` (9000m) of the player, retrying up to 6 times before giving
+up for that spawn attempt — cheap insurance against wasting a whole cycle
+when the player happens to be far from the nearest few candidates.
+
+### Three independent sub-systems
+
+- **Tracer bolts** — the routine background fire, fast and thin
+  (`BOLT_SPEED` 650 m/s, `BOLT_LIFETIME` 3.5s), spawning every
+  0.05-0.16s while under `MAX_BOLTS` (90). Pure data (position/velocity/
+  age), rendered through one `MultiMeshInstance3D` exactly like
+  `faction_battle.gd`'s own ambient bolts, reusing that same tapered-
+  cylinder visual language. Colored by randomly blending two neon
+  endpoints — a blue and a purple, both pushed above 1.0 per channel so
+  `Town.tscn`'s Glow pass actually blooms them, the same convention this
+  project's other emissive elements use — via `MultiMesh.use_colors`, so
+  each bolt gets real per-instance variety rather than one flat tint.
+- **SAM missiles** — a rarer, bigger event (every 2.5-6s while under
+  `MAX_MISSILES`, 5). Real (but simple) `Node`s, since only a handful
+  exist at once — `scripts/flak_missile.gd` reuses `missile.gd`'s visual
+  language (the same body/exhaust mesh style, the same `MissileTrail.tscn`
+  smoke) but carries none of its homing/damage/flare logic: no target, no
+  collision check against anything. Flies in a roughly-vertical line with
+  a brief post-launch straightening slerp toward `Vector3.UP` over its
+  first 2.5s (mimicking a real SAM's pitch program, since there's no
+  target to guide toward), then self-destructs after `lifetime` (6s).
+- **Flak shells + bursts** — the WWII-flak-field look. Shells are
+  mortar-style projectiles (`SHELL_SPEED` 380 m/s, pooled data like the
+  tracer bolts, their own small `MultiMeshInstance3D`, a flat warm-white
+  tracer color rather than random-tinted so they read as visually
+  distinct from the blue/purple AA fire around them) that arc up past a
+  randomized target altitude (`SHELL_BURST_ALTITUDE_MIN/MAX`,
+  3700-4700m) straddling the cloud deck's own top
+  (`atmosphere.cloud_base_y + cloud_thickness`, 3800m by default) —
+  "shoot above the cloud line." On reaching that altitude a shell is
+  removed and spawns a `FlakBurst` (`scenes/FlakBurst.tscn` /
+  `scripts/flak_burst.gd`): a brief bright flash (a quick particle pop
+  plus an `OmniLight3D` that dims out over `LIGHT_FADE_TIME`, 0.4s — not
+  an instant cutoff, the same convention `flare.gd`'s own light already
+  uses) and a genuinely **persistent dark smoke puff** — `lifetime` 20s,
+  far longer than every other effect in this project, which are all
+  deliberately short-lived to avoid piling up. That's the entire point
+  here: a real WWII bomber-raid photo has dozens of dark puffs hanging in
+  the sky at once, so this is the one effect in this project explicitly
+  designed to accumulate rather than clean up quickly. Budgeted at
+  `MAX_BURSTS` (10) concurrent — a shell that detonates while the pool is
+  full just doesn't spawn a burst that cycle, the same "pool full, skip
+  it" convention `faction_battle.gd`'s own ambient bolts already use.
+
+### A real bug caught during verification, not a hypothetical
+
+An early version's `_pick_launch_point()` always returned "not found" —
+`city_generator.gd` had gained the `landmark_rooftops` array declaration
+but the actual `.append()` call inside `_generate_buildings()` had been
+left out, so every sub-system silently spawned nothing at all. A headless
+scripted run caught this immediately (`landmark_rooftops count: 0`,
+every concurrent-count at 0) before it could ship as a feature that
+silently did nothing in the headset. Fixed by actually populating the
+array where `is_landmark` and `scale_vec` are already computed.
+
+### Orientation — a real, if inconsequential, lesson about picking the
+### right up-vector convention
+
+`faction_battle.gd`'s existing pattern for orienting a "flying" transform
+is a conditional switch — `Vector3.FORWARD if absf(dir.dot(Vector3.UP)) >
+0.99 else Vector3.UP` — needed there because a ship's heading can point
+*anywhere*, including straight up during a dive or pull-up, so the up
+reference has to adapt. This was copied into `ground_flak.gd`/
+`flak_missile.gd` initially, and produced a wall of "Target and up vectors
+are colinear" warnings in headless testing. Root-caused via direct
+instrumentation (temporary debug prints at all three `Basis.looking_at()`
+call sites) that the warnings were **not actually coming from any of
+this code** — every direction this system ever produces is already a
+tight cone around `Vector3.UP` (see `_cone_direction`), so the conditional
+switch was solving a problem that can't occur here, and the trigger is
+most likely a Godot billboard-particle rendering edge case specific to
+headless/no-camera test conditions combined with near-vertical particle
+motion — a genuinely new usage pattern in this project, since every
+existing missile/trail effect flies roughly horizontal. Simplified to an
+unconditional `up_ref = Vector3.FORWARD` throughout (always safe here,
+since `dir` can never be close to `FORWARD` when it's always near
+vertical) — the warnings persisted in headless testing regardless, ruled
+out as a real functional bug (every spawn/budget/behavior check still
+passes), and left as a headless-testing curiosity worth a look if it ever
+turns out to correspond to something visible in the actual headset.
+
+Verified headlessly end to end: 110 landmark rooftops found, all three
+sub-systems spawn and stay within their budgets over a 30-second run
+(bolts, shells, missiles, and — the specific thing being tested for the
+"persistent fog" request — bursts genuinely accumulating up to their cap
+rather than each one cleaning itself up before the next arrives).
+
 ## Flight HUD — projected on the ship's own glass, not the helmet
 
 Two genuinely different HUD layers now exist in this game, and the

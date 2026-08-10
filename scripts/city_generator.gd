@@ -122,6 +122,16 @@ const LANDMARK_BUILDINGS := [
 @export var building_roughness: float = 0.5
 @export var road_roughness: float = 0.28  # wet asphalt is the shiniest thing down there
 
+## World-space rooftop points for every LANDMARK building placed — read by
+## ground_flak.gd as launch points for its cosmetic anti-aircraft fire, so
+## flak bolts and SAM missiles appear to originate from real towers instead
+## of arbitrary scattered points. Only landmarks are included (not the
+## regular-building majority): the supertall towers read as plausible flak-
+## battery positions from a flying altitude, and there are still ~100+ of
+## them across the city (landmark_chance * filled blocks) — plenty of
+## variety without tracking every one of ~1400 buildings.
+var landmark_rooftops: Array[Vector3] = []
+
 var _terrain: Node
 
 
@@ -224,6 +234,10 @@ func _generate_buildings() -> void:
 			# Y-only stretch — see height_multiplier.
 			var s := randf_range(scale_min, scale_max)
 			var scale_vec := Vector3(s, s * height_multiplier, s)
+
+			if is_landmark:
+				var top_y := ground_height + (local_aabb.position.y + local_aabb.size.y) * scale_vec.y
+				landmark_rooftops.append(Vector3(x, top_y, z))
 
 			# R * S, matching how Node3D composes a transform (scale applied
 			# in local space, then rotated). Basis.scaled() would left-
