@@ -4,7 +4,7 @@
 [ext_resource type="Texture2D" path="res://Assets/Textures/smoke_flipbook.png" id="2_smokeflipbook"]
 
 [sub_resource type="QuadMesh" id="QuadMesh_trail"]
-size = Vector2(16, 16)
+size = Vector2(11, 11)
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_trail"]
 transparency = 1
@@ -31,8 +31,8 @@ damping_min = 0.5
 damping_max = 1.5
 angle_min = 0.0
 angle_max = 360.0
-scale_min = 3.0
-scale_max = 7.5
+scale_min = 2.5
+scale_max = 6.0
 color_ramp = SubResource("Gradient_trail")
 emission_shape = 1
 emission_sphere_radius = 2.0
@@ -44,7 +44,7 @@ anim_offset_max = 0.4
 [node name="MissileTrail" type="GPUParticles3D"]
 material_override = SubResource("StandardMaterial3D_trail")
 emitting = true
-amount = 280
+amount = 100
 lifetime = 4.5
 local_coords = false
 visibility_aabb = AABB(-1200, -1200, -1200, 2400, 2400, 2400)

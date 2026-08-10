@@ -23,7 +23,10 @@ func _ready() -> void:
 
 
 func _process(_delta: float) -> void:
-	var is_tracked := get_tree().get_nodes_in_group("player_seeking_missiles").size() > 0
+	# get_node_count_in_group(), not get_nodes_in_group().size() — the latter
+	# builds and throws away a whole Array of node references every frame
+	# just to read its length, for a group that is empty almost all the time.
+	var is_tracked := get_tree().get_node_count_in_group("player_seeking_missiles") > 0
 
 	if is_tracked and not _was_tracked:
 		if _sound_a:

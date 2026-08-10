@@ -20,6 +20,17 @@ const TRAIL := preload("res://scenes/MissileTrail.tscn")
 @export var speed: float = 260.0
 @export var lifetime: float = 6.0
 
+## Particle count for this missile's trail, overriding MissileTrail.tscn's
+## own default before add_child(). Up to MAX_MISSILES (5) of these are in
+## the air at once, so they are the biggest concurrent multiplier on the
+## single most fillrate-expensive effect in the game (see missile_trail.gd's
+## FILLRATE BUDGET note). A cosmetic background launch several kilometres
+## away over the city does not need the same smoke density as the player's
+## own weapon fired from the cockpit, so it runs at roughly half — which
+## bounds the flak system's whole contribution rather than letting five
+## full-price trails stack.
+@export var trail_particle_amount: int = 45
+
 var _direction: Vector3 = Vector3.UP
 var _age: float = 0.0
 
@@ -58,5 +69,9 @@ func _physics_process(delta: float) -> void:
 func _spawn_trail() -> void:
 	var trail := TRAIL.instantiate()
 	trail.follow = self
+	# Assigned BEFORE add_child(), per this project's standing rule that
+	# add_child() runs _ready() immediately — see missile.gd / this file's
+	# own header for the bug that established it.
+	trail.amount = trail_particle_amount
 	get_tree().current_scene.add_child(trail)
 	trail.global_position = global_position

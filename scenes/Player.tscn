@@ -1,4 +1,4 @@
-[gd_scene load_steps=49 format=3 uid="uid://c2dyoeywkgf30"]
+[gd_scene load_steps=50 format=3 uid="uid://c2dyoeywkgf30"]
 
 [ext_resource type="PackedScene" uid="uid://diyu06cw06syv" path="res://addons/godot-xr-tools/player/player_body.tscn" id="1_body"]
 [ext_resource type="PackedScene" uid="uid://clc5dre31iskm" path="res://addons/godot-xr-tools/xr/start_xr.tscn" id="4_startxr"]
@@ -13,6 +13,7 @@
 [ext_resource type="Script" uid="uid://bcvmubldgpvsc" path="res://scripts/engine_audio.gd" id="17_engineaudio"]
 [ext_resource type="AudioStream" uid="uid://ciho47dk6rsch" path="res://Assets/Audio/accelerate.ogg" id="18_accelsound"]
 [ext_resource type="AudioStream" uid="uid://bd55cru0b42kr" path="res://Assets/Audio/thrust.ogg" id="19_thrustsound"]
+[ext_resource type="AudioStream" path="res://Assets/Audio/afterburner.ogg" id="51_afterburnersound"]
 [ext_resource type="Script" uid="uid://dkol66j00vro4" path="res://scripts/crash_handler.gd" id="20_crash"]
 [ext_resource type="Script" uid="uid://d1dwdpcemclto" path="res://scripts/enemy_locator.gd" id="21_locator"]
 [ext_resource type="AudioStream" uid="uid://b4qd34rq26q74" path="res://Assets/Audio/laser.mp3" id="22_lasersound"]
@@ -356,6 +357,9 @@ stream = ExtResource("18_accelsound")
 
 [node name="ThrustPlayer" type="AudioStreamPlayer" parent="EngineAudio"]
 stream = ExtResource("19_thrustsound")
+
+[node name="AfterburnerPlayer" type="AudioStreamPlayer" parent="EngineAudio"]
+stream = ExtResource("51_afterburnersound")
 
 [node name="PlayerDamage" type="Node" parent="."]
 script = ExtResource("31_playerdamage")

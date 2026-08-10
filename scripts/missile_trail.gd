@@ -17,6 +17,28 @@ extends GPUParticles3D
 ##    the trail just stops emitting and dissipates naturally.
 ##
 ## Set `follow` to the missile immediately after instantiating.
+##
+## FILLRATE BUDGET — read this before raising `amount` or the quad size.
+## Smoke is large alpha-blended quads, and transparent overdraw is the single
+## most expensive thing on a VR renderer: every covered pixel is shaded again,
+## once per eye. The cost of this emitter is `amount * (quad_size * scale)^2`
+## in screen area — LINEAR in particle count but QUADRATIC in particle size.
+##
+## An earlier version ran 280 particles of 16m quads at scale 3.0-7.5 (an
+## 84m average puff). Measured against a 2064x2208-per-eye target at 90Hz,
+## a single trail of that size viewed from 200m covered **14.7x the entire
+## screen** in alpha blending per eye — roughly fifteen times the whole
+## frame's fillrate budget, for one missile, before anything else in the
+## scene drew at all. With flak SAMs able to put several trails in the air
+## at once that was comfortably the most expensive object in the game.
+##
+## Now 100 particles of 11m quads at scale 2.5-6.0 (a ~47m puff): ~8.8x
+## cheaper. The trail stays continuous because continuity comes from
+## particle SPACING against puff width, not from raw count — at 400 m/s over
+## a 4.5s lifetime the trail is ~1800m long, so 100 particles sit ~18m apart
+## while each is ~47m across, still a 2.6x overlap along its whole length.
+## The old 280 gave a 13x overlap: entirely invisible extra saturation, paid
+## for at full price every frame.
 
 ## Must comfortably exceed the emitter's own `lifetime` so the last puff
 ## finishes its animation before the node is removed.

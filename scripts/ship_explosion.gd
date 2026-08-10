@@ -20,6 +20,20 @@ extends Node3D
 ## it must be assigned BEFORE add_child(), since add_child() runs _ready()
 ## immediately — see faction_battle.gd's header for the bug that taught this
 ## project that lesson the hard way.
+##
+## OMNI_RANGE: 700m, cut hard from an original 6000m (energy 60 -> 22 to
+## compensate for the much shorter falloff, so the near-field fireball still
+## reads about as bright). Forward+ is a CLUSTERED renderer: a light is
+## binned into every cluster of the view frustum its radius touches, and
+## every fragment in those clusters then evaluates it. A 6km radius from
+## anywhere near the fighting covers essentially the WHOLE frustum, so each
+## one of these was effectively a full-screen light — with up to
+## `max_concurrent_explosions` (14) live at once, over a city of 1400+
+## buildings, in stereo. The range was never sanity-checked against what it
+## bought: omni attenuation means a 6000m radius contributes almost nothing
+## visible past a few hundred meters anyway, so nearly all of that cost was
+## being paid for light too dim to see. This is the change CLAUDE.md's own
+## performance notes had already flagged as "the first thing to try".
 
 const LIFETIME := 14.0
 const LIGHT_FADE_DURATION := 0.6

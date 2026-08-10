@@ -60,7 +60,7 @@ surface_material_override/0 = SubResource("StandardMaterial3D_crater")
 [node name="Smoke" type="GPUParticles3D" parent="."]
 position = Vector3(0, 1, 0)
 material_override = SubResource("StandardMaterial3D_smoke")
-amount = 1200
+amount = 420
 lifetime = 60.0
 visibility_aabb = AABB(-300, -5, -300, 600, 700, 600)
 process_material = SubResource("ParticleProcessMaterial_smoke")

@@ -1,12 +1,19 @@
 extends Node
 
-## Two looping engine layers, both always playing but faded by volume/pitch
+## Three looping engine layers, all always playing but faded by volume/pitch
 ## based on flight input:
 ##
 ## - Accelerate (main drive): tied to the right grip (forward thrust). Gets
 ##   louder AND deeper (lower pitch) the harder you push it.
 ## - Thrust (maneuvering RCS): tied to roll, elevation/vertical strafe, and
 ##   reverse grip — anything that isn't the main drive.
+## - Afterburner: tied to flight_controller.gd's `afterburner_active` (the
+##   right B button), NOT to any throttle axis. This is the same flag that
+##   gates the ship's thruster smoke trail, so the burner's sound, its
+##   plume, and its actual speed bonus all switch together off one piece of
+##   state rather than three approximations of "is the player boosting".
+##   It rides ON TOP of the accelerate layer rather than replacing it — the
+##   main drive is still running during a burn, so both should be audible.
 ##
 ## `paused` (set by game_flow.gd alongside flight_controller.gd/
 ## weapon_system.gd, same convention) pulls both layers' TARGET volume down
@@ -40,6 +47,17 @@ extends Node
 @export var thrust_min_pitch: float = 0.9
 @export var thrust_max_pitch: float = 1.2
 
+## Afterburner layer. Off is a real floor rather than SILENT_DB so the fade
+## has somewhere to travel from and the burner "catches" audibly instead of
+## crawling up out of -80dB; 44dB below its own peak is inaudible in a
+## cockpit that already has two engine layers running.
+@export var afterburner_min_volume_db: float = -46.0
+@export var afterburner_max_volume_db: float = -2.0
+## Deliberately faster than `response_speed`: a burner lights and cuts much
+## more sharply than a main drive spools, and the B button is an instant
+## on/off rather than an analogue axis.
+@export var afterburner_response_speed: float = 11.0
+
 @export var response_speed: float = 6.0  # how fast volume/pitch chase their target
 
 const SILENT_DB := -80.0
@@ -50,6 +68,7 @@ var paused: bool = false
 var _flight_controller: Node
 var _accelerate_player: AudioStreamPlayer
 var _thrust_player: AudioStreamPlayer
+var _afterburner_player: AudioStreamPlayer
 
 
 func _ready() -> void:
@@ -57,8 +76,9 @@ func _ready() -> void:
 	_flight_controller = player.get_node_or_null("FlightController")
 	_accelerate_player = get_node_or_null("AcceleratePlayer")
 	_thrust_player = get_node_or_null("ThrustPlayer")
+	_afterburner_player = get_node_or_null("AfterburnerPlayer")
 
-	for stream_player in [_accelerate_player, _thrust_player]:
+	for stream_player in [_accelerate_player, _thrust_player, _afterburner_player]:
 		if stream_player and stream_player.stream:
 			stream_player.stream.loop = true
 			stream_player.volume_db = -80.0
@@ -79,6 +99,8 @@ func _process(delta: float) -> void:
 			_accelerate_player.play()
 		if _thrust_player and not _thrust_player.playing:
 			_thrust_player.play()
+		if _afterburner_player and not _afterburner_player.playing:
+			_afterburner_player.play()
 
 	# Paused screens (menu/death/game-over) fade both layers to silence
 	# rather than snapping — the lerp below already exists for input
@@ -107,3 +129,16 @@ func _process(delta: float) -> void:
 			target_pitch = lerpf(thrust_min_pitch, thrust_max_pitch, maneuvering)
 		_thrust_player.volume_db = lerpf(_thrust_player.volume_db, target_volume, response_speed * delta)
 		_thrust_player.pitch_scale = lerpf(_thrust_player.pitch_scale, target_pitch, response_speed * delta)
+
+	if _afterburner_player:
+		# Volume only, no pitch ride: this is already a recording of a
+		# booster at full chat (the sustained tail of the source file, with
+		# its 17s of buildup trimmed off), so bending its pitch would fight
+		# the recording rather than add to it. Paused screens drop it to
+		# SILENT_DB like the other two layers.
+		var target_volume := SILENT_DB
+		if not paused:
+			target_volume = afterburner_max_volume_db if _flight_controller.afterburner_active \
+					else afterburner_min_volume_db
+		_afterburner_player.volume_db = lerpf(
+				_afterburner_player.volume_db, target_volume, afterburner_response_speed * delta)

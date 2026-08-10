@@ -14,6 +14,44 @@ const DEBRIS_COUNT_MAX := 8
 const DEBRIS_SCATTER_MIN := 4.0  # meters from impact point
 const DEBRIS_SCATTER_MAX := 25.0
 
+## How many crash sites may exist at once. Crash markers are deliberately
+## PERMANENT (see crash_effect.gd) — they never dissipate — so without a cap
+## their cost is cumulative and monotonic for the whole session: every crash
+## adds a looping smoke column plus ~8 wreck meshes that are re-simulated
+## and re-drawn on every frame from then on, forever. Bounding the count
+## keeps the "visible trail of where you've died" idea intact while giving
+## it a fixed ceiling, the same budgeted-pool convention this project already
+## applies to kill fireballs (max_concurrent_explosions), battle audio
+## (max_battle_sounds), thruster trails (trail_count) and flak bursts.
+const MAX_CRASH_SITES := 5
+
+## Live crash sites, oldest first. Each entry is the Array of nodes that
+## make up one site (its smoke column plus every debris piece), so recycling
+## the oldest removes the whole site together rather than leaving orphaned
+## wreckage standing around a column that has been freed.
+static var _crash_sites: Array[Array] = []
+
+
+## Frees the oldest crash sites until at most `MAX_CRASH_SITES - 1` remain,
+## making room for one about to be spawned. Also drops any entry whose nodes
+## have already been freed by something else (a scene reload, say), so the
+## static list can't accumulate stale records across a session.
+static func _retire_oldest_sites() -> void:
+	for i in range(_crash_sites.size() - 1, -1, -1):
+		var still_live := false
+		for n in _crash_sites[i]:
+			if is_instance_valid(n):
+				still_live = true
+				break
+		if not still_live:
+			_crash_sites.remove_at(i)
+
+	while _crash_sites.size() >= MAX_CRASH_SITES:
+		for n in _crash_sites[0]:
+			if is_instance_valid(n):
+				n.queue_free()
+		_crash_sites.remove_at(0)
+
 
 ## Spawns the smoke/main-crater effect (permanent — never cleans itself up,
 ## see crash_effect.gd) plus scattered wreckage chunks, each in their own
@@ -38,9 +76,15 @@ static func spawn(scene_root: Node, terrain: Node, impact: Vector3) -> void:
 	var ground_y: float = terrain.get_height_at(impact.x, impact.z) if terrain else impact.y
 	var ground_impact := Vector3(impact.x, ground_y, impact.z)
 
+	# Make room before adding, so the live-site count is a true ceiling
+	# rather than a ceiling plus one.
+	_retire_oldest_sites()
+	var site: Array = []
+
 	var effect := CRASH_EFFECT.instantiate()
 	scene_root.add_child(effect)
 	effect.global_position = ground_impact
+	site.append(effect)
 
 	var count := randi_range(DEBRIS_COUNT_MIN, DEBRIS_COUNT_MAX)
 	for i in count:
@@ -51,6 +95,7 @@ static func spawn(scene_root: Node, terrain: Node, impact: Vector3) -> void:
 
 		var piece := DEBRIS_PIECE.instantiate()
 		scene_root.add_child(piece)
+		site.append(piece)
 		piece.global_position = Vector3(x, impact.y, z)
 		piece.rotation.y = randf() * TAU
 		piece.terrain = terrain
@@ -63,6 +108,8 @@ static func spawn(scene_root: Node, terrain: Node, impact: Vector3) -> void:
 			var s := randf_range(0.6, 1.6)
 			chunk.scale = Vector3(s, s, s)
 			chunk.position.y = s * 0.5  # rest roughly on the ground, not half-buried
+
+	_crash_sites.append(site)
 
 
 ## Small, self-cleaning explosion/crater/smoke for a single laser hit —

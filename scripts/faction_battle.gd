@@ -425,6 +425,22 @@ func reset_battle() -> void:
 # Setup
 # ---------------------------------------------------------------------------
 
+## Explicit bounds for every MultiMesh this manager drives, generously sized
+## to cover the whole playable volume (the terrain is 100km across and the
+## motherships sit 22km either side of the city).
+##
+## Why set it at all: writing an instance transform marks a MultiMesh's AABB
+## dirty, and a dirty MultiMesh with no custom_aabb has its bounds
+## RECOMPUTED by walking every instance it owns. This manager rewrites all
+## ~520 instance transforms (100 + 100 ships, up to 320 bolts) every single
+## frame, so that recompute ran every frame too — pure overhead, since the
+## result was only ever used to decide whether to cull a batch that spans
+## the entire map and is therefore never actually culled. Handing it fixed
+## bounds skips the walk entirely.
+const MULTIMESH_WORLD_AABB := AABB(
+		Vector3(-60000.0, -20000.0, -60000.0), Vector3(120000.0, 40000.0, 120000.0))
+
+
 func _build_multimesh_nodes() -> void:
 	var ship_mesh: Mesh = load(SHIP_MESH_PATH)
 	_friendly_mmi = _make_ship_multimesh(ship_mesh, FRIENDLY_COLOR)
@@ -459,6 +475,7 @@ func _build_multimesh_nodes() -> void:
 	bolt_multimesh.mesh = bolt_mesh
 	bolt_multimesh.instance_count = max_ambient_bolts
 	bolt_multimesh.visible_instance_count = 0
+	bolt_multimesh.custom_aabb = MULTIMESH_WORLD_AABB
 	_bolt_mmi.multimesh = bolt_multimesh
 	_bolt_mmi.material_override = bolt_mat
 
@@ -510,6 +527,7 @@ func _make_ship_multimesh(mesh: Mesh, tint: Color) -> MultiMeshInstance3D:
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
 	mm.mesh = mesh
+	mm.custom_aabb = MULTIMESH_WORLD_AABB
 	mmi.multimesh = mm
 	return mmi
 

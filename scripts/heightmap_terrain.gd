@@ -108,7 +108,21 @@ func _ready() -> void:
 	# grade set up in Town.tscn's Environment.
 	mat.roughness = 0.72
 	mat.metallic_specular = 0.45
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	# CULL_BACK, not CULL_DISABLED. This mesh is 524,288 triangles — by far
+	# the largest single object in the game — and CULL_DISABLED made the GPU
+	# rasterize every back-facing triangle too, i.e. every far slope of every
+	# mountain, for geometry that is then immediately overdrawn by the near
+	# slope in front of it. Backface culling is the cheapest possible way to
+	# throw that work away, and it happens before rasterization.
+	#
+	# Safe here because this is a heightmap: it is a single-layer surface
+	# with no interior and no overhangs, so the only viewpoint from which
+	# the back faces are the visible ones is UNDERNEATH the terrain — which
+	# is not a place the player can be. Touching the surface triggers
+	# crash_handler.gd, and ships/bolts are killed by the same height test
+	# (see get_height_at below), so nothing that renders ever ends up below
+	# the ground looking up.
+	mat.cull_mode = BaseMaterial3D.CULL_BACK
 	array_mesh.surface_set_material(0, mat)
 
 	var mesh_instance := MeshInstance3D.new()

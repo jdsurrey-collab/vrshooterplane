@@ -11,7 +11,7 @@
 [ext_resource type="Script" uid="uid://c5vu8gg2v8p2t" path="res://scripts/cloud_deck.gd" id="11_clouddeck"]
 [ext_resource type="Script" uid="uid://cw4dpr1w5cyb6" path="res://scripts/thruster_trails.gd" id="12_thrustertrails"]
 [ext_resource type="Script" path="res://scripts/cloud_top.gd" id="13_cloudtop"]
-[ext_resource type="Script" path="res://scripts/ground_flak.gd" id="14_groundflak"]
+[ext_resource type="Script" uid="uid://dex42byg4lhxr" path="res://scripts/ground_flak.gd" id="14_groundflak"]
 
 [sub_resource type="PanoramaSkyMaterial" id="SkyMat_1"]
 panorama = ExtResource("4_panorama")

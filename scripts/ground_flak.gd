@@ -315,6 +315,12 @@ func _build_multimesh_renderer(length: float, radius: float, max_instances: int,
 	mm.mesh = mesh
 	mm.instance_count = max_instances
 	mm.visible_instance_count = 0
+	# Fixed bounds instead of letting the renderer re-derive them from every
+	# instance each frame — these pools are rewritten wholesale every frame,
+	# which would otherwise mark the AABB dirty every frame and force that
+	# walk. Sized to cover the city and the airspace above it. Same reasoning
+	# and same constant shape as faction_battle.gd's MULTIMESH_WORLD_AABB.
+	mm.custom_aabb = AABB(Vector3(-60000.0, -20000.0, -60000.0), Vector3(120000.0, 40000.0, 120000.0))
 
 	var mmi := MultiMeshInstance3D.new()
 	mmi.multimesh = mm

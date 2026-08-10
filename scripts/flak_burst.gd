@@ -16,6 +16,18 @@ extends Node3D
 ## most of `lifetime` — that's the entire point here, unlike every other
 ## effect in this project, which is deliberately short-lived to avoid
 ## piling up.
+##
+## FILLRATE NOTE. Because these deliberately accumulate (up to
+## ground_flak.gd's cap) and last ~20s, their alpha-blend cost is paid
+## concurrently by every burst in the sky, and it scales with the SQUARE of
+## the puff's on-screen size. The smoke quad started at 30m with a 3-6x
+## scale — a 135m puff, so ten concurrent bursts covered ~28x the whole
+## screen in alpha blending when the player was flying through the flak
+## field. It is now a 14m quad at the same 3-6x scale (a ~63m puff, still
+## generous next to a real flak burst's ~20-30m), which is ~4.6x cheaper
+## while keeping the accumulate-into-a-fog behaviour that was the point of
+## the request. See missile_trail.gd's FILLRATE BUDGET note for the full
+## reasoning on why particle SIZE is the expensive dial here, not count.
 
 const LIGHT_FADE_TIME := 0.4
 
@@ -32,6 +44,12 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	if _light.light_energy <= 0.0:
+		# Hide it outright rather than leaving a zero-energy light in the
+		# scene: a visible OmniLight3D is still binned into the renderer's
+		# light clusters every frame whether or not it contributes anything,
+		# and these nodes outlive their flash by most of a 20s lifetime.
+		# Same thing ship_explosion.gd already does with its fireball light.
+		_light.visible = false
 		set_process(false)
 		return
 	_light.light_energy = move_toward(_light.light_energy, 0.0, (_light_energy / LIGHT_FADE_TIME) * delta)

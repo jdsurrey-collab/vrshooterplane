@@ -46,3 +46,9 @@ func _physics_process(delta: float) -> void:
 		_landed = true
 		if _scorch:
 			_scorch.visible = true
+		# Debris is PERMANENT (see crash_effects.gd), so without this every
+		# piece ever dropped keeps being handed a physics callback for the
+		# rest of the session just to hit the `_landed` early-out on line
+		# one. Detaching from the physics loop entirely is what actually
+		# stops paying for wreckage that has already come to rest.
+		set_physics_process(false)

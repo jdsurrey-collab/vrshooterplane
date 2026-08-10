@@ -519,10 +519,42 @@ writes and wires up scenes/scripts directly.
   gameplay** — when something doesn't work in VR, there's no way to see an
   editor console mid-session, so status has to be visible in-headset to
   diagnose anything at all.
-- `scripts/engine_audio.gd` — two looping engine layers (`accelerate.ogg`
+- `scripts/engine_audio.gd` — three looping engine layers (`accelerate.ogg`
   tied to forward-grip magnitude, `thrust.ogg` tied to roll/elevation/
-  reverse-grip), both always playing but faded by volume/pitch based on
-  input, not started/stopped per event.
+  reverse-grip, `afterburner.ogg` tied to the B-button burner), all always
+  playing but faded by volume/pitch based on input, not started/stopped per
+  event.
+  **The afterburner layer** rides ON TOP of the accelerate layer rather
+  than replacing it (the main drive is still running during a burn, so
+  both should be audible) and is gated on `flight_controller.gd`'s
+  `afterburner_active` — the *same* flag that drives the thruster smoke
+  plume and the actual speed bonus, so sound, visual and physics switch
+  together off one piece of state rather than three approximations of "is
+  the player boosting". Volume only, no pitch ride: the source is already a
+  recording of a booster at full chat, so bending its pitch would fight the
+  recording. `afterburner_response_speed` (11.0) is deliberately faster
+  than the shared `response_speed` (6.0) — a burner lights and cuts much
+  more sharply than a main drive spools, and B is an instant on/off rather
+  than an analogue axis. Its "off" floor is a real value (-46dB) rather
+  than `SILENT_DB`, so the fade has somewhere to travel from and the burner
+  audibly *catches* instead of crawling up out of -80dB; 44dB below its own
+  peak is inaudible under two other engine layers. Paused screens still
+  drop it to `SILENT_DB` like the other two.
+  **Source trimming.** `shipengine/booster1.mp3` (user-supplied, 26.4s) is
+  mostly a long quiet build-up — measured at ~-18dB for its first 17.3s,
+  ramping over ~0.6s, then a sustained booster at ~-3.8dB for the rest.
+  Only that sustained tail is wanted ("I only need the last half of it
+  where the booster actually takes place"), so the asset is cut at **17.9s**
+  (fully sustained, past the ignition ramp) to the end. Because the
+  afterburner can be held for `afterburner_max_duration` (10s) — longer
+  than the 8.4s of usable material — the clip is **looped properly rather
+  than just trimmed**: the last 0.4s is crossfaded over the first 0.4s so
+  the end genuinely flows back into the start, yielding a seamless 8.00s
+  loop. The crossfade uses `c1=qsin:c2=qsin` (constant power), NOT the
+  default `tri` (constant amplitude) — on uncorrelated broadband noise like
+  a rocket, a linear-amplitude crossfade produces a ~3dB dip at the seam,
+  which measured exactly that way on the first attempt; `qsin` cut it to
+  ~1.3dB, inaudible.
   **Converted from `.mp3` to `.ogg`** — MP3 has an inherent encoder
   delay/padding gap at the exact sample a loop restarts, and for an 11-27s
   loop held for minutes at a time that gap was audible as a "pop" on every
@@ -2495,11 +2527,160 @@ doesn't ship in an exported build. Verified by an actual
 `--headless --export-debug` run, not just reasoned about — confirmed
 `res://Assets/Terrain/heightmap.raw16` appears in the pack log.
 
+## Performance — the transparent-overdraw audit
+
+A full pass over every system in the game looking for wasted work, prompted
+by the still-unexplained frame rate collapse below. **Nothing was removed
+and no mechanic was changed** — everything found was either a cost being
+paid for something invisible, or an effect that had never been given the
+budget every comparable effect in this project already had.
+
+### The governing number: alpha-blended screen area
+
+Smoke, tracers, flashes and trails are large transparent quads, and
+transparent overdraw is the single most expensive thing on a VR renderer:
+every covered pixel is shaded again, once per eye, with no depth rejection
+to save it. The cost of a particle effect is
+
+    amount x (quad_size x scale)^2
+
+— **linear in particle count, QUADRATIC in particle size.** That second
+term is what makes this easy to get catastrophically wrong by editing one
+number in a `.tscn`.
+
+Measured against a 2064x2208-per-eye target at 90Hz (one full-screen layer
+= ~0.8 Gpx/s of blend budget), viewed from 200m:
+
+| effect | avg puff | count | per instance | worst case | vs. full screen |
+|---|---|---|---|---|---|
+| **MissileTrail** | 84 m | 280 | 67.1 Mpx | x7 concurrent | **103x** |
+| **FlakBurst** smoke | 135 m | 22 | 13.0 Mpx | x10 concurrent | **29x** |
+| **CrashEffect** smoke | 19 m | 1200 | 15.1 Mpx | unbounded | **13x and rising** |
+| ThrusterTrail | 15 m | 80 | 0.66 Mpx | x10 concurrent | 1.5x |
+| ShipExplosion smoke | 7.5 m | 60 | 0.12 Mpx | x14 concurrent | 0.4x |
+
+**A single missile trail was 14.7x the entire screen, per eye** — about
+fifteen times the whole frame's fillrate budget, for one missile, before
+anything else in the scene drew at all. The irony is exact: `ThrusterTrail`
+is the effect CLAUDE.md already calls "the riskiest visual in the project"
+and which was carefully pooled to 10 emitters against a measured budget —
+and it is **100x cheaper than the missile trail nobody budgeted.** The
+small thing got the scrutiny; the enormous ones never did.
+
+### What changed (all sizes/counts, no behaviour)
+
+- **`MissileTrail`**: 280 particles of 16m quads (scale 3.0-7.5) ->
+  100 particles of 11m quads (scale 2.5-6.0). ~8.8x cheaper. The trail
+  stays continuous because continuity comes from particle SPACING against
+  puff width, not raw count: at 400 m/s over a 4.5s lifetime the trail is
+  ~1800m long, so 100 particles sit ~18m apart while each is ~47m across —
+  still 2.6x overlap along its whole length. The old 280 gave **13x**
+  overlap: invisible extra saturation, paid for at full price every frame.
+- **`flak_missile.gd`** additionally overrides its trail down to
+  `trail_particle_amount` (45) before `add_child()`. Up to `MAX_MISSILES`
+  (5) of these fly at once, making them the biggest concurrent multiplier
+  on the most expensive effect in the game; a cosmetic launch kilometres
+  away doesn't need the player's own weapon's smoke density.
+- **`FlakBurst`** smoke quad 30m -> 14m (same 3-6x scale, so a ~63m puff,
+  still generous against a real flak burst's ~20-30m). ~4.6x cheaper,
+  and the deliberate accumulate-into-a-fog behaviour is untouched.
+- **`CrashEffect`** 1200 -> 420 particles, **and bounded**: see below.
+- **`ShipExplosion`'s `FireballLight`** `omni_range` **6000m -> 700m**
+  (energy 60 -> 22 to compensate for the shorter falloff). Forward+ is a
+  CLUSTERED renderer — a light is binned into every cluster its radius
+  touches and every fragment in those clusters evaluates it, so a 6km
+  radius from anywhere near the fighting was effectively a full-screen
+  light, up to 14 at once. Omni attenuation means 6000m contributed
+  nothing visible past a few hundred meters anyway, so nearly all of that
+  cost bought light too dim to see. This was CLAUDE.md's own standing
+  "first thing to try" and it has now been tried.
+- **`flak_burst.gd`** now sets `_light.visible = false` once its flash has
+  faded instead of leaving a zero-energy light in the scene — a visible
+  light is still clustered every frame whether or not it contributes, and
+  these nodes outlive their flash by most of a 20s lifetime.
+
+### The one that likely explains a collapse that gets WORSE as you play
+
+`CrashEffect` is deliberately permanent — it never dissipates, by design
+("a visible trail of every crash so far"). It was also **completely
+unbounded**. Every player crash added a looping 1200-particle smoke column
+plus ~8 wreck meshes that were re-simulated and re-drawn on every frame
+from then on, *forever*. Crashing is easy (100m spawn altitude over
+genuinely mountainous terrain), so a session's frame rate degraded
+monotonically and never recovered. That fits "FPS collapsed to ~6 during a
+live playtest" better than any static cost in the scene does, and no
+headless test had ever caught it because **the sims never crash the
+player.**
+
+Fixed without giving up permanence: `CrashEffects.MAX_CRASH_SITES` (5)
+recycles the oldest site — column and its debris together, so no orphaned
+wreckage is left standing around a freed column — exactly the budgeted-pool
+convention already used for kill fireballs, battle audio, thruster trails
+and flak bursts. Verified: 9 consecutive crashes leave exactly 5 live.
+
+### Static render costs found
+
+- **The terrain was `CULL_DISABLED`** — 524,288 triangles (by far the
+  largest object in the game, ~10x the whole city) rasterized with
+  backface culling switched off, so every far slope of every mountain was
+  rasterized then immediately overdrawn by the near slope in front of it.
+  Now `CULL_BACK`. Safe because a heightmap is a single-layer surface with
+  no interior or overhangs — the only viewpoint where back faces are the
+  visible ones is *underneath* the terrain, which is not a place anything
+  can be (touching the surface triggers `crash_handler.gd`).
+- **`MultiMesh.custom_aabb` was unset everywhere.** Writing an instance
+  transform marks a MultiMesh's AABB dirty, and a dirty MultiMesh with no
+  custom AABB has its bounds recomputed by walking *every instance*.
+  `faction_battle.gd` rewrites ~520 instance transforms every frame (100 +
+  100 ships, up to 320 bolts) and `ground_flak.gd` another ~100, so that
+  walk ran every frame — to produce a bound that was only ever used to
+  decide whether to cull a batch spanning the entire map, which is
+  therefore never culled anyway. Both now use fixed world bounds.
+- **`falling_debris.gd` never detached from the physics loop.** Debris is
+  permanent, so every piece ever dropped kept receiving a
+  `_physics_process` callback for the rest of the session purely to hit its
+  own `_landed` early-out. Now calls `set_physics_process(false)` on
+  touchdown.
+- **`missile_alert.gd`** built and discarded a whole `Array` of node
+  references every frame (`get_nodes_in_group(...).size()`) just to read
+  its length, for a group that is empty almost all the time. Now
+  `get_node_count_in_group()`.
+
+### Hypotheses eliminated with hard numbers
+
+- **Not the 200 AI ships.** `ship1.obj` is **133 faces** — the entire
+  200-ship fleet is ~50k triangles in **2 draw calls** (they are
+  MultiMeshed and excluded from the shadow pass). CLAUDE.md previously
+  listed "200 un-LOD'd `ship1.obj` instances" as a suspect; it is
+  measurably not one.
+- **Not per-frame node lookups.** A sweep of every `_process` /
+  `_physics_process` in the project found zero `get_node`, `find_child` or
+  `load()` calls on a per-frame path — all resolution happens in `_ready()`.
+- **Geometry is not the bottleneck.** Whole-scene triangle budget is
+  ~870k per eye (terrain 524k, motherships 248k, city ~26k, ships ~50k,
+  two cloud layers ~18k each), which is unremarkable for a 3060 Ti. The
+  problem was never vertices.
+
+### What has NOT been done, deliberately
+
+`project.godot` still sets no `rendering/scaling_3d/*` and no XR foveation.
+**Render-resolution scaling is the single biggest global GPU dial available
+here**, and it is deliberately left at default rather than silently turned
+down, because unlike everything above it is a real image-quality trade
+rather than removing waste. If the fixes above still leave headroom
+wanted, `rendering/scaling_3d/scale` at 0.85 is the emergency dial and
+costs one line.
+
 ## Known gaps / natural next steps
 
-- **Still open: FPS collapsed to ~6 during a live playtest.** Two
-  hypotheses have now been *measured and eliminated*, which is progress
-  even though the cause isn't found:
+- **Still open, but the picture has changed: FPS collapsed to ~6 during a
+  live playtest.** See the transparent-overdraw audit above — several very
+  large costs were found and fixed (a single missile trail measured at
+  ~15x the entire frame's fillrate budget; unbounded permanent crash sites
+  that made the problem worse the longer a session ran; a 6km realtime
+  light). **None of it is confirmed in the headset yet**, and the audit was
+  analytical plus headless, so the live re-test is still the deciding
+  measurement. Historical hypotheses, both still correctly eliminated:
   - **Not the `ShipExplosion` kill effect** (the original suspicion, as the
     most recently added heavy visual). An instrumented headless run showed
     kill rate was near zero at the time and at most one explosion was ever
@@ -2513,16 +2694,11 @@ doesn't ship in an exported build. Verified by an actual
   - Total headless main-loop cost at 100v100 works out to roughly 4ms/frame
     (5400 frames in ~22.5s wall). Meaningful, but nowhere near the ~166ms
     a 6 FPS frame implies, so **the remaining suspicion is firmly
-    GPU-side.** The strongest candidate is `ShipExplosion`'s
-    `OmniLight3D` at `omni_range = 6000` — a 6km-radius realtime light over
-    a city of 1200+ buildings is enormous in a clustered renderer, and
-    several at once would be devastating. It is now capped at
-    `max_concurrent_explosions` (14) and dropped entirely beyond
-    `explosion_light_range`, but **that range is still 4000m and the value
-    itself has never been sanity-checked** — dropping `omni_range` hard
-    (to a few hundred meters) is the first thing to try if this recurs.
-    Other candidates: 200 un-LOD'd `ship1.obj` instances rendered in VR
-    stereo, and the city itself.
+    GPU-side** — which the overdraw audit above then confirmed and acted
+    on. The `omni_range = 6000` fireball light flagged here as "the first
+    thing to try" has now been cut to 700m, and the "200 un-LOD'd
+    `ship1.obj` instances" candidate was measured and eliminated (133 faces
+    each, 2 draw calls for the whole fleet).
   - `hud.gd`'s **PERF** line (`PROC:_ms PHYS:_ms DRAW:_ OBJ:_`) is still the
     tool for the next live test — compare `PHYS` against `DRAW` to settle
     CPU vs GPU. `friendly_count`/`enemy_count` and
