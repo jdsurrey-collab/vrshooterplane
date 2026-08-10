@@ -59,11 +59,41 @@ extends Resource
 @export var maneuver_max_accel: float = 120.0  # m/s^2
 @export var maneuver_accel_time: float = 0.25  # seconds
 
-@export_group("Pitch / yaw")
+@export_group("Pitch")
 ## ~25 deg/s, between the F-16's sustained (17.5) and peak (34) pitch rate.
-@export var max_pitch_yaw_speed: float = 0.44  # rad/s
-@export var pitch_yaw_max_accel: float = 1.2  # rad/s^2
-@export var pitch_yaw_accel_time: float = 0.20  # seconds
+## This is the NOSE-UP figure; nose-down is a fraction of it, see below.
+@export var max_pitch_speed: float = 0.44  # rad/s
+@export var pitch_max_accel: float = 1.2  # rad/s^2
+@export var pitch_accel_time: float = 0.20  # seconds
+
+## Real, source-grounded asymmetry, toned down to a stylistic level rather
+## than applied at the literal real-world ratio. IFCS3_0.pdf documents a
+## real subsystem, "G-force Safety" — thruster output limited by pilot
+## g-tolerance — and real g-tolerance genuinely is asymmetric: a trained
+## pilot sustains roughly +9G pulling a nose up (blood pools toward the
+## feet) but only about -3G pushing a nose over (blood rushes to the head,
+## tolerated far less before redout/injury) — a real ~3:1 ratio. NOT
+## "air friction," which doesn't apply here at all: this ship is a pure
+## RCS-thruster craft with an always-active gravity compensator (see
+## flight_controller.gd), and IFCS3_0.pdf's own atmospheric-flight section
+## is explicit that these ships "do not use aerodynamic forces to achieve
+## flight." The full 3:1 ratio would read as extreme stacked on top of this
+## game's already-arcade acceleration scale (forward thrust alone is
+## already ~51G-equivalent), so this lands at 70% instead — a real,
+## felt asymmetry without being punishing.
+@export var pitch_down_fraction: float = 0.7
+
+@export_group("Yaw")
+## Split out from pitch after direct feedback that the two "felt
+## identical" and shouldn't — pitch and yaw sharing one number was
+## inherited from this project's original pre-Omega flight code, never a
+## deliberate realism choice. Real fighters have distinctly weaker yaw
+## authority than pitch (rudder-limited, and pitch is the primary combat
+## axis, not yaw), so yaw is cut to roughly 65% of pitch's rate and accel
+## here — a first-pass ratio, easy to retune further.
+@export var max_yaw_speed: float = 0.29  # rad/s (~65% of pitch)
+@export var yaw_max_accel: float = 0.8  # rad/s^2 (~65% of pitch)
+@export var yaw_accel_time: float = 0.20  # seconds
 
 @export_group("Roll")
 ## ~86 deg/s. Deliberately well below a real fighter's ~240 deg/s: fast
@@ -90,11 +120,12 @@ extends Resource
 @export_group("AI-only")
 ## Heading convergence for AI ships, which re-point their nose
 ## omnidirectionally toward a steering target rather than rolling into a
-## turn the way a player does. Reuses the PITCH/YAW figures rather than
-## roll's, deliberately: pitch/yaw is the honest, real-fighter-grounded
-## limit on how fast a nose can be brought around, and letting the AI turn
-## at roll speed would make it strictly more maneuverable than the player
-## flying the identical ship.
+## turn the way a player does. Matches PITCH's figures (not yaw's weaker
+## ones, and not roll's faster ones) — pitch is the honest, real-fighter-
+## grounded limit on how fast a nose can be brought around in the plane
+## that matters most for combat maneuvering, and it's independent of these
+## exports so retuning pitch or yaw for the player doesn't silently retune
+## every AI ship's turn rate too.
 @export var ai_turn_max_rate: float = 0.44  # rad/s
 @export var ai_turn_max_accel: float = 1.2  # rad/s^2
 

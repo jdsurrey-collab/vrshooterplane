@@ -147,9 +147,11 @@ func _physics_process(delta: float) -> void:
 ## the stick idles that acceleration to zero and leaves the ship spinning
 ## at whatever rate it already had (real tumble/spin persistence) until
 ## countered by opposite stick input. The rate itself is still clamped to
-## max_pitch_yaw_speed/max_roll_speed — the artificial governor every ship
-## in this game has — but that clamp only ever engages at the ceiling, it
-## never pulls the rate back down on its own.
+## max_pitch_speed/max_yaw_speed/max_roll_speed — the artificial governor
+## every ship in this game has — but that clamp only ever engages at the
+## ceiling, it never pulls the rate back down on its own. Pitch and yaw
+## are deliberately SEPARATE tunables (not shared, as they used to be) —
+## see ship_flight_profile.gd's "Yaw" group for why.
 func _update_rotation(right_stick: Vector2, left_stick: Vector2, delta: float) -> void:
 	var yaw_input := -right_stick.x
 	var pitch_input := -right_stick.y
@@ -158,15 +160,22 @@ func _update_rotation(right_stick: Vector2, left_stick: Vector2, delta: float) -
 
 	var yaw := OmegaMotion.step_acceleration(
 			_angular_velocity.y, _angular_accel.y, yaw_input,
-			profile.pitch_yaw_max_accel, profile.pitch_yaw_accel_time, delta,
-			-profile.max_pitch_yaw_speed, profile.max_pitch_yaw_speed)
+			profile.yaw_max_accel, profile.yaw_accel_time, delta,
+			-profile.max_yaw_speed, profile.max_yaw_speed)
 	_angular_velocity.y = yaw.x
 	_angular_accel.y = yaw.y
 
+	# Positive pitch_input/angular_velocity.x is nose-UP (pulling back);
+	# negative is nose-DOWN (pushing over). Nose-down authority is scaled
+	# down to pitch_down_fraction — see ship_flight_profile.gd's "Pitch"
+	# group for the real G-force-tolerance grounding. Same input-scaling
+	# technique already used for reverse thrust: scale the commanded input
+	# rather than branching step_acceleration itself.
+	var pitch_down_scale := 1.0 if pitch_input >= 0.0 else profile.pitch_down_fraction
 	var pitch := OmegaMotion.step_acceleration(
-			_angular_velocity.x, _angular_accel.x, pitch_input,
-			profile.pitch_yaw_max_accel, profile.pitch_yaw_accel_time, delta,
-			-profile.max_pitch_yaw_speed, profile.max_pitch_yaw_speed)
+			_angular_velocity.x, _angular_accel.x, pitch_input * pitch_down_scale,
+			profile.pitch_max_accel, profile.pitch_accel_time, delta,
+			-profile.max_pitch_speed * profile.pitch_down_fraction, profile.max_pitch_speed)
 	_angular_velocity.x = pitch.x
 	_angular_accel.x = pitch.y
 

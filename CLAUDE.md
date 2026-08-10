@@ -81,12 +81,32 @@ writes and wires up scenes/scripts directly.
   direct answer to "the player's ship should have the same characteristics
   as the AI ship": both draw the same max speeds/accelerations from the
   same resource, not two separately-tuned approximations of each other.
-  Pitch/yaw and roll keep **separate** rotation-rate caps — pitch/yaw
+  Pitch, yaw and roll each keep **separate** rotation-rate caps — pitch
   ~25°/s (grounded in real F-16 sustained/peak pitch rate data), roll ~86°/s
   (deliberately well under a real fighter's ~240°/s — fast rotation is its
-  own VR-comfort issue independent of realism) — carried over unchanged
-  into the shared profile; see `docs/flight-physics-reference.md` for that
-  grounding.
+  own VR-comfort issue independent of realism). **Yaw was originally
+  shared with pitch** (one `max_pitch_yaw_speed` inherited from this
+  project's pre-Omega flight code) until direct feedback that the two
+  "felt identical" and shouldn't — real fighters have distinctly weaker,
+  rudder-limited yaw authority, so yaw is now its own tunable, cut to
+  ~65% of pitch's rate/accel (`ship_flight_profile.gd`'s "Yaw" group).
+  **Pitch is also asymmetric, nose-up vs. nose-down** — nose-down capped
+  at `pitch_down_fraction` (70%) of nose-up's rate/accel. Grounded in a
+  real IFCS subsystem, "G-force Safety" (thruster output limited by pilot
+  g-tolerance), and real g-tolerance genuinely is asymmetric (~+9G pulling
+  up vs. only ~-3G pushing over) — NOT "air friction," which was floated
+  first and doesn't actually apply here: this ship is a pure RCS-thruster
+  craft with an always-active gravity compensator, and `IFCS3_0.pdf`'s own
+  atmospheric-flight section is explicit these ships "do not use
+  aerodynamic forces to achieve flight." (A real drag-based mechanism DOES
+  exist in that same document — center-of-pressure offset from center of
+  mass creating a torque — but that's a shape-dependent disturbance bias
+  requiring actual hull geometry measurement, a different and bigger
+  undertaking than a control-authority scaling; left for later if wanted.)
+  70% (not the real ~33%) because the literal ratio reads as extreme
+  stacked on this game's already-arcade acceleration scale. Carried over
+  into the shared profile; see `docs/flight-physics-reference.md` for the
+  F-16/roll grounding.
   **No auto-braking, anywhere, ever — corrected live, twice.** The
   original coasting-drag model (a real quadratic air-drag curve on throttle
   release) was replaced first with an assisted brake to a goal velocity of
