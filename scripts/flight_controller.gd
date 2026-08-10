@@ -13,22 +13,32 @@ extends Node
 ## Right joystick: pitch (Y axis) and yaw (X axis)
 ## Left joystick:  roll (X axis) and elevation / vertical thrust (Y axis)
 ## Right grip:     forward thrust
-## Left grip:      reverse thrust — a distinct, weaker system from the main
-##                  drive, not the same engine run backwards (see
-##                  ShipFlightProfile.reverse_thrust_fraction): only ~40% of
-##                  forward_max_accel, "not reliable for space braking and
-##                  also not incredibly powerful for flying backwards."
+## Left grip:      AFTERBURNER — hold to raise the forward speed ceiling by
+##                  ShipFlightProfile.afterburner_speed_bonus (200 m/s) for as
+##                  long as fuel lasts (afterburner_max_duration, 10s),
+##                  recharging over afterburner_recharge_time while released.
+##                  Does NOT auto-thrust — the pilot still has to hold the
+##                  right grip to use the extra headroom, same flight-assist-
+##                  OFF philosophy as everything else here. The grip is
+##                  analogue but the burner is binary past
+##                  AFTERBURNER_GRIP_THRESHOLD; see _update_afterburner().
+## Right B button:  REVERSE THRUST / deceleration — a distinct, weaker system
+##                  from the main drive, not the same engine run backwards
+##                  (see ShipFlightProfile.reverse_thrust_fraction): only
+##                  ~40% of forward_max_accel, "not reliable for space
+##                  braking and also not incredibly powerful for flying
+##                  backwards." Binary, since it's a button rather than a
+##                  grip.
 ## Right A button:  air brake — the ONE deliberate exception to flight-assist
 ##                  OFF (see below). Holding it overrides every other input
 ##                  and decelerates all six axes toward zero at
 ##                  ShipFlightProfile.air_brake_fraction of forward_max_accel.
-## Right B button:   afterburner — hold to raise the forward speed ceiling by
-##                  ShipFlightProfile.afterburner_speed_bonus (200 m/s) for as
-##                  long as fuel lasts (afterburner_max_duration, 10s),
-##                  recharging over afterburner_recharge_time while not held.
-##                  Does NOT auto-thrust — the pilot still has to hold the
-##                  right grip to use the extra headroom, same flight-assist-
-##                  OFF philosophy as everything else here.
+##
+## NOTE the afterburner and reverse thrust were SWAPPED onto these controls
+## (burner was the B button, reverse was the left grip). Two consequences
+## worth knowing: reverse lost its analogue range (a button is on/off), and
+## `left_grip_value` no longer means "decelerating" — consumers wanting that
+## read `reverse_input_value` instead.
 ##
 ## Attached to a child of the player's XROrigin3D; moves/rotates its parent
 ## directly each physics frame.
@@ -123,9 +133,20 @@ var _angular_accel: Vector3 = Vector3.ZERO  # local pitch/yaw/roll
 # Latest raw input values, 0..1 (grips) or -1..1 (stick axes), for other
 # systems to react to (e.g. engine_audio.gd) without re-reading controllers.
 var right_grip_value: float = 0.0
+## NOTE the left grip is the AFTERBURNER now, not reverse thrust — consumers
+## wanting "is the pilot decelerating" want `reverse_input_value`, and ones
+## wanting "is the burner lit" want `afterburner_active` (which also accounts
+## for fuel, where this is just the raw squeeze).
 var left_grip_value: float = 0.0
+## Reverse/deceleration command, 0 or 1 — the right B button. Binary rather
+## than analogue because it moved off the grip; see _update_translation().
+var reverse_input_value: float = 0.0
 var roll_input_value: float = 0.0
 var vertical_input_value: float = 0.0
+
+## Squeeze past which the left grip counts as "burner lit". See
+## _update_afterburner() for why this is a threshold rather than proportional.
+const AFTERBURNER_GRIP_THRESHOLD := 0.5
 
 ## Afterburner fuel, in seconds remaining (0..profile.afterburner_max_duration).
 ## Starts full. See _update_afterburner() and this file's header.
@@ -160,8 +181,11 @@ func _physics_process(delta: float) -> void:
 	var left_grip: float = _left_controller.get_float("grip")
 	right_grip_value = right_grip
 	left_grip_value = left_grip
+	# Reverse/deceleration is the RIGHT B BUTTON, so it is binary rather than
+	# analogue — see _update_afterburner() for the swap this is half of.
+	reverse_input_value = 1.0 if _right_controller.is_button_pressed("by_button") else 0.0
 
-	_update_afterburner(delta)
+	_update_afterburner(left_grip, delta)
 
 	# Plume marks the AFTERBURNER, nothing else — not ordinary throttle,
 	# not reverse, not the air brake. `_update_afterburner()` above has
@@ -177,7 +201,7 @@ func _physics_process(delta: float) -> void:
 		_apply_air_brake(delta)
 	else:
 		_update_rotation(right_stick, left_stick, delta)
-		_update_translation(right_grip, left_grip, left_stick, delta)
+		_update_translation(right_grip, reverse_input_value, left_stick, delta)
 
 	_origin.rotate_object_local(Vector3.UP, _angular_velocity.y * delta)
 	_origin.rotate_object_local(Vector3.RIGHT, _angular_velocity.x * delta)
@@ -246,8 +270,15 @@ func _update_rotation(right_stick: Vector2, left_stick: Vector2, delta: float) -
 ## unconditionally (even under air brake) since it's a resource meter, not
 ## a movement input; holding both simultaneously just drains fuel for no
 ## effect, not worth special-casing.
-func _update_afterburner(delta: float) -> void:
-	var held := _right_controller.is_button_pressed("by_button")
+func _update_afterburner(left_grip: float, delta: float) -> void:
+	# LEFT GRIP, swapped with the right B button (which now drives reverse).
+	# The grip is analogue but the burner stays binary: it raises the speed
+	# CEILING by a fixed bonus, and a partially-raised ceiling isn't a
+	# meaningful control — you'd be modulating a limit you may not even be
+	# pushing against. So it lights past a threshold and is otherwise off,
+	# which is also what keeps it consistent with the fuel meter reading as
+	# "burning / not burning".
+	var held := left_grip >= AFTERBURNER_GRIP_THRESHOLD
 	if held and _afterburner_fuel > 0.0:
 		afterburner_active = true
 		_afterburner_fuel = maxf(0.0, _afterburner_fuel - delta)
@@ -262,9 +293,14 @@ func get_afterburner_fuel_fraction() -> float:
 	return _afterburner_fuel / maxf(profile.afterburner_max_duration, 0.001)
 
 
-func _update_translation(right_grip: float, left_grip: float, left_stick: Vector2, delta: float) -> void:
+func _update_translation(right_grip: float, reverse_input: float, left_stick: Vector2, delta: float) -> void:
 	var basis := _origin.global_transform.basis
-	var forward_input := right_grip - left_grip
+	# `reverse_input` is the RIGHT B BUTTON now, not the left grip — so it is
+	# 0 or 1 rather than an analogue squeeze. Reverse is a deliberate,
+	# committed act at 40% of forward power (reverse_thrust_fraction), so
+	# losing the analogue range costs little in practice; the throttle that
+	# actually wants fine control, forward thrust, is still the right grip.
+	var forward_input := right_grip - reverse_input
 	var vertical_input := left_stick.y
 	vertical_input_value = vertical_input
 

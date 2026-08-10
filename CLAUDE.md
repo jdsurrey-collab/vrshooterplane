@@ -60,9 +60,24 @@ writes and wires up scenes/scripts directly.
   hull's modeled nose backwards.
 - `scripts/flight_controller.gd` — inertia-based 6DOF flight, **flight
   assist OFF on every axis, no exceptions**: grip/stick input directly
-  commands an acceleration, never a goal to return to. Right grip/left grip
-  = forward/reverse thrust; right stick = pitch/yaw; left stick =
-  roll/elevation. Velocity is stored in **world space** and reprojected
+  commands an acceleration, never a goal to return to. **Right grip =
+  forward thrust; LEFT GRIP = afterburner; right B = reverse thrust /
+  deceleration**; right A = air brake; right stick = pitch/yaw; left stick =
+  roll/elevation.
+  **The afterburner and reverse were SWAPPED** onto those two controls (the
+  burner used to be the B button, reverse used to be the left grip). Two
+  consequences worth knowing: reverse **lost its analogue range** — a button
+  is on/off, so it now commands full reverse or none, which matters little
+  in practice because reverse is already a committed act capped at 40% of
+  forward power while the throttle that actually wants fine control (forward
+  thrust) is still an analogue grip. And `left_grip_value` **no longer means
+  "decelerating"**; consumers wanting that read the new
+  `reverse_input_value`, which `engine_audio.gd`'s maneuvering layer and
+  `flight_hud.gd`'s thrust gauge were both updated to use — feeding the left
+  grip into either would now double-count an afterburner burn as throttle.
+  The burner is binary past `AFTERBURNER_GRIP_THRESHOLD` (0.5) rather than
+  proportional, because it raises a speed CEILING by a fixed bonus and a
+  partially-raised ceiling isn't a meaningful control. Velocity is stored in **world space** and reprojected
   into the ship's current local frame each frame only to apply thrust — so
   flipping the ship around and thrusting decelerates existing drift before
   building speed the new way, real Newtonian behavior, with no
@@ -107,7 +122,8 @@ writes and wires up scenes/scripts directly.
   stacked on this game's already-arcade acceleration scale. Carried over
   into the shared profile; see `docs/flight-physics-reference.md` for the
   F-16/roll grounding.
-  **Afterburner — right controller's B (`by_button`, previously unused).**
+  **Afterburner — LEFT GRIP** (swapped off the right B button; see the
+  control-swap note below).
   Holding it raises the forward speed CEILING by
   `afterburner_speed_bonus` (200 m/s, 300 -> 500) for as long as fuel
   lasts (`afterburner_max_duration`, 10s), recharging over
@@ -1921,6 +1937,45 @@ Verified headlessly (8/8): pool loads, clip lengths are right, the tank
 sound is the long one, 0 back-to-back repeats in 400 picks, bursts audible
 over the city, voices inside budget, out-of-range bursts culled entirely
 rather than merely quiet, and a tank detonation spawns its sound.
+
+### Building collapse audio
+
+When a fuel tank takes its block down (`city_generator.gd`'s
+`collapse_near()`), the demolition has its own sound — four variants, so
+repeated demolitions across a match don't all sound identical, with the same
+never-repeat-back-to-back rule used for damage hits and flak bursts.
+
+**Each variant is a LAYERED composite, not one recording.** The seven
+user-supplied sources in `city explsosions/building collapse/` fell into
+three natural groups — structural groan (stressing metal), the crash itself,
+and sliding rubble — so they're mixed in that order with real offsets:
+metal groans, *then* the structure goes, *then* debris settles. That is the
+shape of an actual collapse, and it's what lets an 8-9.5s sound track the
+7s `collapse_duration` as a single event rather than reading as noise.
+Processed per request — highs gone above 850Hz, a big bass lift, and a
+two-stage `aecho` reverb tail for a city bouncing it back — then peak
+normalised so no variant is quieter than the rest. Mono, since
+`AudioStreamPlayer3D` can only position a mono source.
+
+**`collapse_sound_delay` (0.8s) is load-bearing, not polish.** Buildings
+don't start falling at the instant of the blast; without the offset the
+collapse reads as *part of* the explosion rather than a consequence of it.
+Verified explicitly: no voice exists on the frame the tank dies, and one
+exists after the delay.
+
+**It lives in `collapse_near()`, not in `tank_objective.gd`** — that is the
+general entry point for bringing a block down, so anything that does it
+later (a bomb, another objective) gets the audio for free rather than each
+caller remembering. No concurrency cap is needed: a collapse event means a
+fuel tank just went up, there are only 20 in a match, and they can't be
+destroyed faster than the player can fly between them, so the natural rate
+already *is* the budget. `collapse_sound_range` (16000m) doubles as the
+spawn gate.
+
+Verified headlessly (8/8): four variants all outlasting the collapse, 0
+back-to-back repeats in 400 picks, delayed rather than simultaneous, played
+at the blast position, muffled to 750Hz by distance, and culled entirely
+when out of range.
 
 ### A real bug caught during verification, not a hypothetical
 

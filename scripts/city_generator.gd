@@ -169,7 +169,45 @@ const CITY_BATCH_AABB := AABB(
 ## building instead descends at its own rate, `(height + extra) / duration`,
 ## so an entire condemned block goes under together and the effect has a
 ## predictable length regardless of what happened to be standing there.
+## Sound of a city block coming down. Four variants so repeated demolitions
+## across a match don't all sound identical — `_pick_collapse_sound()` also
+## never plays the same one twice running, the rule this project already uses
+## for damage hits and flak bursts.
+##
+## Each is a LAYERED composite rather than one recording, built once through
+## ffmpeg from user-supplied sources that fell into three natural groups
+## (structural groan, the crash itself, sliding rubble). They're mixed in
+## that order with real offsets — metal groans, *then* the structure goes,
+## *then* debris settles — which is the shape of an actual collapse and is
+## what makes an 8-9s sound track a 7s `collapse_duration` instead of just
+## being noise. Processed heavily muffled per request: highs gone above
+## 850Hz, big bass lift, and a long two-stage reverb tail for a city
+## bouncing it back. Mono, since AudioStreamPlayer3D can only position mono.
+const COLLAPSE_SOUNDS: Array[AudioStream] = [
+	preload("res://Assets/Audio/building_collapse_1.mp3"),
+	preload("res://Assets/Audio/building_collapse_2.mp3"),
+	preload("res://Assets/Audio/building_collapse_3.mp3"),
+	preload("res://Assets/Audio/building_collapse_4.mp3"),
+]
+
 @export var collapse_duration: float = 7.0
+
+@export_group("Collapse audio")
+## Beyond this no voice is spawned at all — the range gate and the budget are
+## the same thing, matching ground_flak.gd's burst audio.
+@export var collapse_sound_range: float = 16000.0
+## Buildings don't start falling at the instant of the blast; they groan and
+## then go. This offset is what stops the collapse reading as part of the
+## explosion rather than a consequence of it.
+@export var collapse_sound_delay: float = 0.8
+@export var collapse_sound_unit_size: float = 1600.0
+## Godot's distance low-pass. Low, so a block coming down on the far side of
+## the city is a dull rumble rather than audible rubble.
+@export var collapse_sound_cutoff_hz: float = 750.0
+@export var collapse_volume_db: float = -1.0
+@export var player_path: NodePath = ^"../Player"
+
+var _last_collapse_sound: int = -1
 ## Extra depth kept descending past the building's own height before it is
 ## hidden outright, so one on sloping ground can't leave a corner poking out
 ## of the hillside.
@@ -561,7 +599,54 @@ func collapse_near(center: Vector3, radius: float) -> int:
 		started += 1
 	if started > 0:
 		set_process(true)
+		_play_collapse_sound(center)
 	return started
+
+
+## One layered collapse sound per demolition event, positioned at the blast
+## centre. Lives here rather than in tank_objective.gd because collapse_near()
+## is the general entry point — anything that brings a block down later (a
+## bomb, another objective) gets the audio for free instead of each caller
+## remembering to play it.
+##
+## No concurrency cap: this can only fire once per collapse event, and a
+## collapse event means a fuel tank just went up. There are 20 of those in a
+## whole match, so the natural rate is already the budget — the same
+## reasoning tank_objective.gd's own detonation sound uses.
+func _play_collapse_sound(at_position: Vector3) -> void:
+	if COLLAPSE_SOUNDS.is_empty():
+		return
+	var player: Node3D = get_node_or_null(player_path) as Node3D
+	if player and player.global_position.distance_to(at_position) > collapse_sound_range:
+		return
+
+	var stream: AudioStream = _pick_collapse_sound()
+	# Deferred rather than immediate — see collapse_sound_delay.
+	get_tree().create_timer(collapse_sound_delay).timeout.connect(
+			func() -> void:
+				if not is_inside_tree():
+					return
+				var sound := AudioStreamPlayer3D.new()
+				get_tree().current_scene.add_child(sound)
+				sound.global_position = at_position
+				sound.stream = stream
+				sound.volume_db = collapse_volume_db
+				sound.unit_size = collapse_sound_unit_size
+				sound.max_distance = collapse_sound_range
+				sound.attenuation_filter_cutoff_hz = collapse_sound_cutoff_hz
+				sound.attenuation_filter_db = -30.0
+				sound.play()
+				sound.finished.connect(sound.queue_free))
+
+
+func _pick_collapse_sound() -> AudioStream:
+	if COLLAPSE_SOUNDS.size() == 1:
+		return COLLAPSE_SOUNDS[0]
+	var i := randi() % COLLAPSE_SOUNDS.size()
+	if i == _last_collapse_sound:
+		i = (i + 1 + (randi() % (COLLAPSE_SOUNDS.size() - 1))) % COLLAPSE_SOUNDS.size()
+	_last_collapse_sound = i
+	return COLLAPSE_SOUNDS[i]
 
 
 func _process(delta: float) -> void:

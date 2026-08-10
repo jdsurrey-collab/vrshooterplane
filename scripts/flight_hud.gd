@@ -177,7 +177,11 @@ func _process(_delta: float) -> void:
 		_altitude_tick.position.y = hud_center.y + frac * ladder_half_span * element_scale
 
 	if _thrust_fill:
-		var thrust: float = clampf(absf(_flight_controller.right_grip_value - _flight_controller.left_grip_value), 0.0, 1.0)
+		# right grip (forward) vs. reverse_input_value (the B button) — the
+		# left grip drives the afterburner now and is shown on the separate
+		# boost gauge, so including it here would read as throttle.
+		var thrust: float = clampf(absf(
+				_flight_controller.right_grip_value - _flight_controller.reverse_input_value), 0.0, 1.0)
 		var h: float = maxf(gauge_height * element_scale * thrust, 0.001)
 		_thrust_fill.scale.y = h
 		_thrust_fill.position.y = (hud_center.y - gauge_height * element_scale * 0.5) + h * 0.5

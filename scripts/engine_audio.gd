@@ -123,7 +123,11 @@ func _process(delta: float) -> void:
 			var maneuvering: float = clampf(
 					absf(_flight_controller.roll_input_value)
 					+ absf(_flight_controller.vertical_input_value)
-					+ _flight_controller.left_grip_value,
+					# reverse_input_value, NOT left_grip_value — the left grip
+					# is the afterburner now, and that has its own layer
+					# below. Feeding it in here too would double-count a burn
+					# as maneuvering thrust.
+					+ _flight_controller.reverse_input_value,
 					0.0, 1.0)
 			target_volume = lerpf(thrust_min_volume_db, thrust_max_volume_db, maneuvering)
 			target_pitch = lerpf(thrust_min_pitch, thrust_max_pitch, maneuvering)
