@@ -45,8 +45,27 @@ const FONT := preload("res://Assets/Fonts/Orbitron-Variable.ttf")
 ## paying for a hundred labels.
 @export var tag_count: int = 18
 
-## "within one thousand meters".
-@export var tag_radius: float = 1000.0
+## RANGE — raised from an originally-specified 1000m after measuring what
+## 1000m actually covers in this world, which is nearly nothing.
+##
+## Sampled over a real match with the player at the friendly spawn: once the
+## fleet launches (~t=30s) the number of friendlies within 1000m is **0,
+## essentially always** — the nearest friendly sits between 1.5km and 8.8km
+## away for the rest of the match. Counts in range at t=42-126s:
+##
+##     <1000m   0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+##     <2000m   0 0 0 0 0 0 0 0 0 0 0 1 0 0 0
+##     <3000m   2 0 0 1 0 1 0 0 1 1 1 1 4 1 3
+##     <4000m  11 2 0 1 0 1 0 1 2 6 4 4 5 7 4
+##     <6000m  29 16 1 2 1 1 1 1 3 6 9 6 9 9 10
+##
+## 1000m simply isn't "nearby" at this scale — the dome alone is 8000m in
+## radius and the city is 10800m across. 4000m keeps the peak inside the
+## label pool while making the feature actually do its job. Because
+## `fixed_size` holds apparent size constant (see `font_size`), a callsign at
+## 4000m is exactly as legible as one at 400m, so range costs nothing in
+## readability. Drop it back to 1000.0 if the wider net reads as clutter.
+@export var tag_radius: float = 4000.0
 
 ## A tag keeps its ship until that ship dies or drifts past
 ## `tag_radius * release_hysteresis`, so ships hovering right at the boundary
@@ -68,7 +87,7 @@ const FONT := preload("res://Assets/Fonts/Orbitron-Variable.ttf")
 ## would shrink with distance and be unreadable well before the 1000m cutoff
 ## — the same "fixed apparent size" reasoning target_lock.gd already uses for
 ## its visor-anchored readouts.
-@export var font_size: int = 28
+@export var font_size: int = 36
 @export var pixel_size: float = 0.0006
 
 @export var battle_path: NodePath = ^".."
@@ -118,9 +137,24 @@ func _build_tags() -> void:
 		# the rest of this project's Label3Ds already use.
 		label.outline_size = 10
 		label.outline_modulate = Color(0.0, 0.0, 0.0, 0.85)
-		# Depth testing left ON (unlike the cockpit HUD's no_depth_test
-		# elements): a callsign for a wingman on the far side of a skyscraper
-		# should be hidden by that skyscraper, not painted over it.
+		# ALWAYS ON TOP. This was originally left depth-tested on the
+		# reasoning that a wingman's callsign behind a skyscraper ought to be
+		# hidden by it — which sounded principled and was wrong in practice,
+		# because it made the feature fail silently in the one place tags are
+		# guaranteed to be assigned.
+		#
+		# Every ship starts the match PARKED on its mothership's flight deck,
+		# and a tag sits `tag_y_offset` BELOW its ship — i.e. inside the
+		# mothership's own solid hull. Depth-tested, all ~16 of those tags
+		# render inside the deck and are invisible, so the entire pre-launch
+		# window (the one stretch where friendlies are reliably close) showed
+		# nothing at all. The same thing happens to anyone flying below a
+		# tower in the city.
+		#
+		# An identification aid whose whole job is "tell me who that is"
+		# should not be defeated by the geometry the target is standing on.
+		# This also matches every other HUD element in this project.
+		label.no_depth_test = true
 		label.visible = false
 		add_child(label)
 		_tags.append({"node": label, "key": -1})

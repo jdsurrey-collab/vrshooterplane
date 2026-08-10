@@ -1520,7 +1520,30 @@ it.
 
 `scripts/friendly_tags.gd` (`FriendlyTags` under `FactionBattle`) — small
 white callsign labels floating under every FRIENDLY ship within
-`tag_radius` (**1000m**), so you can read who is flying near you.
+`tag_radius`, so you can read who is flying near you.
+
+### `tag_radius` is 4000m, raised from a specified 1000m — measured, not guessed
+
+Reported live as "I'm not seeing the callsigns on the allies." The pooling
+logic was working correctly; **1000m simply isn't "nearby" at this world's
+scale.** Sampled over a real match with the player at the friendly spawn,
+friendlies in range once the fleet launches (~t=30s):
+
+| range | t=42s | 48 | 54 | 60 | 72 | 90 | 102 | 114 | 126 |
+|---|---|---|---|---|---|---|---|---|---|
+| **<1000m** | **0** | **0** | **0** | **0** | **0** | **0** | **0** | **0** | **0** |
+| <2000m | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| <3000m | 2 | 0 | 0 | 1 | 1 | 1 | 1 | 4 | 3 |
+| <4000m | 11 | 2 | 0 | 1 | 1 | 2 | 4 | 5 | 4 |
+| <6000m | 29 | 16 | 1 | 2 | 1 | 3 | 9 | 9 | 10 |
+
+The nearest friendly sits **1.5km to 8.8km** away for most of the match —
+the dome alone is 8000m in radius and the city is 10800m across. 4000m keeps
+the peak inside the 18-label pool while making the feature actually work.
+Because `fixed_size` holds apparent size constant, a callsign at 4000m is
+exactly as legible as one at 400m, so range costs nothing in readability.
+`font_size` also went 28 -> 36. After the fix: tags present in **18 of 25
+post-launch samples (peak 16), up from 0**, plus 18 live on the deck.
 
 **Why this is a pool, not a label per ship.** Friendly ships are not nodes —
 they are `Combatant` objects (`RefCounted`, never in the scene tree) drawn
@@ -1564,9 +1587,17 @@ Details that matter:
   other HUD text is. Those are pushed so `Town.tscn`'s Glow pass blooms
   them, which is right for a big readout but would smear small text at range
   into an illegible blob. A dark outline carries legibility instead.
-- **Depth testing left ON**, unlike the cockpit HUD's `no_depth_test`
-  elements — a wingman's callsign on the far side of a skyscraper should be
-  hidden by that skyscraper. One-line flip if see-through is wanted.
+- **Always on top (`no_depth_test`) — and getting this wrong once made the
+  whole feature invisible.** It was originally left depth-tested on the
+  reasoning that a wingman's callsign behind a skyscraper ought to be hidden
+  by it. That sounded principled and was wrong in practice: every ship
+  starts the match PARKED on its mothership's flight deck, and a tag sits
+  `tag_y_offset` BELOW its ship — i.e. **inside the mothership's own solid
+  hull**. Depth-tested, all ~16 of those tags rendered inside the deck and
+  were invisible, so the one stretch where friendlies are guaranteed to be
+  close showed nothing at all. The same happens to anything flying below a
+  tower in the city. An identification aid should not be defeated by the
+  geometry its target is standing on.
 - Reassignment runs on a `rescan_interval` (0.4s) timer, not per frame, with
   `release_hysteresis` (1.2) so ships sitting right at the 1000m boundary
   don't make tags flicker between callsigns. Positions still update every
