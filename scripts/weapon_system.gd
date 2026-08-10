@@ -33,6 +33,14 @@ const LASER_BOLT := preload("res://scenes/LaserBolt.tscn")
 @export var crosshair_path: NodePath = ^"../Ship/Crosshair"
 @export var convergence_distance: float = 229.0  # meters (250 yards, RAF WWII standard) — GUN AIM only
 @export var crosshair_distance: float = 0.9  # meters — where the SYMBOL is drawn, on the glass, not at the real convergence point
+## Local Y for the crosshair symbol — NOT the gun mounts' own Y (1.9).
+## Matches flight_hud.gd's hud_center.y (2.8): now that the crosshair sits
+## at the same close glass depth as the rest of that cluster (see above),
+## using the gun mounts' height instead of the cluster's own tuned height
+## put it visibly below everything else — reported live as "sitting way
+## too low" the moment the crosshair actually became visible at this
+## distance for the first time.
+@export var crosshair_height: float = 2.8
 
 ## Set by the options menu while it's open, so config adjustments can't
 ## trigger weapon fire.
@@ -93,7 +101,7 @@ func _setup_convergence() -> void:
 	_gun_right.look_at(target_world, Vector3.UP)
 
 	if _crosshair:
-		_crosshair.position = Vector3(mid_local.x, mid_local.y, crosshair_distance)
+		_crosshair.position = Vector3(mid_local.x, crosshair_height, crosshair_distance)
 
 
 func _physics_process(delta: float) -> void:
