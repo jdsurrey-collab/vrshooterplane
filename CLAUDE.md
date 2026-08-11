@@ -877,10 +877,56 @@ mistake. `ship_explosion.gd`'s new `enable_light` follows the same rule.
 ### Effect and audio budgets
 
 Now that the AI actually fights, kills are constant — and every kill used
-to spawn an unconditional `ShipExplosion` (a particle tree plus a 6000m
+to spawn an unconditional `ShipExplosion` (then a particle tree, now a mesh orb, plus a 6000m
 `OmniLight3D`). Everything spawned from the battle is now budgeted:
 
-- **Kill fireballs** — hard cap (`max_concurrent_explosions`, 14), no
+- **Kill fireballs are a MESH ORB, not particles** (`ShipExplosion.tscn` /
+  `ship_explosion.gd` / `Assets/Shaders/explosion_orb.gdshader`). Direct
+  request: "move away from a particle explosion on ships being destroyed and
+  move more into a mesh style flash of a big, glowing orb", at "around two
+  hundred meters big in diameter".
+
+  This also fixed a real weakness at this game's scale. A particle fireball
+  is a cloud of individually small quads whose apparent size falls off with
+  distance like everything else — so the effect meant to announce a kill
+  across a whole battle was made of pieces that went sub-pixel within a few
+  hundred metres, the same arithmetic that made distant tracers invisible.
+  One 200m sphere is a single coherent shape: **11.4 degrees across at 1km,
+  3.8 at 3km, still 1.4 at 8km**, so a kill reads from clear across the dome
+  instead of dissolving into speckle.
+
+  - **Two layers, because one is flat.** A hot near-white CORE punches out
+    fast and dies fast (0.30s); a larger orange SHELL expands behind it and
+    lingers (0.85s). The offset in timing *and* colour is what reads as a
+    fireball cooling as it grows rather than one ball uniformly dimming.
+  - **The shader is what stops a sphere reading as a flat disc.** An unshaded
+    sphere renders every fragment of its visible hemisphere at the same
+    brightness — a crisp-edged sticker. One dot product fixes it:
+    `dot(NORMAL, VIEW)` is 1.0 at the centre of the projected disc and 0.0
+    exactly at the silhouette, so using it as density makes the orb brightest
+    through its middle and feather to nothing at the rim. That is both what a
+    ball of burning gas looks like and a cheap stand-in for integrating
+    density through a sphere — the same reach-for-the-affordable-
+    approximation instinct that rejected volumetric fog three times.
+  - **Additive**, because a fireball emits light rather than occluding what's
+    behind it — and additive needs no back-to-front sorting, which matters
+    with up to 14 overlapping at once. `depth_draw_never` so orbs don't clip
+    against each other, but depth TESTING stays on so terrain and buildings
+    still occlude one happening behind them.
+  - **Materials are duplicated per instance.** Several explosions are alive
+    at once and each drives its own `fade`; sharing the scene's material
+    would make every live orb fade to whichever one updated last.
+  - **No smoke.** The old version left a 12-second rising column, which both
+    fought the nothing-is-persistent rule and meant every kill in a 200-ship
+    battle added a long-lived alpha-blended plume.
+  - `orb_radius` (100.0) is the single dial for how big a kill reads.
+
+  Verified headlessly (13/13): zero particle systems remain, the shader
+  compiles, the shell peaks at exactly 200m diameter, it is scaled correctly
+  on frame zero rather than popping in at 1m, it frees itself after the
+  flash, and the `enable_light` distance LOD still works in both directions.
+
+- **Kill fireball budget** — hard cap (`max_concurrent_explosions`, 14), no
   `OmniLight3D` beyond `explosion_light_range` (4000m, passed in as
   `enable_light` before `add_child()`), nothing at all beyond
   `explosion_cull_range` (15000m).
@@ -3261,7 +3307,7 @@ Measured against a 2064x2208-per-eye target at 90Hz (one full-screen layer
 | **FlakBurst** smoke | 135 m | 22 | 13.0 Mpx | x10 concurrent | **29x** |
 | **CrashEffect** smoke | 19 m | 1200 | 15.1 Mpx | unbounded | **13x and rising** |
 | ThrusterTrail | 15 m | 80 | 0.66 Mpx | x10 concurrent | 1.5x |
-| ShipExplosion smoke | 7.5 m | 60 | 0.12 Mpx | x14 concurrent | 0.4x |
+| ShipExplosion smoke | 7.5 m | 60 | 0.12 Mpx | x14 concurrent | 0.4x (now a mesh orb — see above) |
 
 **A single missile trail was 14.7x the entire screen, per eye** — about
 fifteen times the whole frame's fillrate budget, for one missile, before
