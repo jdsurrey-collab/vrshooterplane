@@ -4,9 +4,9 @@
 [ext_resource type="Texture2D" path="res://Assets/Textures/soft_particle.png" id="2_softparticle"]
 
 [sub_resource type="CylinderMesh" id="CylinderMesh_body"]
-top_radius = 0.16
-bottom_radius = 0.26
-height = 4.2
+top_radius = 1.6
+bottom_radius = 2.6
+height = 42.0
 radial_segments = 8
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_body"]
@@ -15,7 +15,7 @@ metallic = 0.4
 roughness = 0.5
 
 [sub_resource type="QuadMesh" id="QuadMesh_exhaust"]
-size = Vector2(1.6, 1.6)
+size = Vector2(16, 16)
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_exhaust"]
 transparency = 1
@@ -32,10 +32,10 @@ colors = PackedColorArray(1, 0.8, 0.4, 1, 1, 0.3, 0.05, 0)
 [sub_resource type="ParticleProcessMaterial" id="ParticleProcessMaterial_exhaust"]
 direction = Vector3(0, 0, 1)
 spread = 8.0
-initial_velocity_min = 1.0
-initial_velocity_max = 3.0
-scale_min = 0.5
-scale_max = 1.0
+initial_velocity_min = 10.0
+initial_velocity_max = 30.0
+scale_min = 5.0
+scale_max = 10.0
 color_ramp = SubResource("Gradient_exhaust")
 
 [node name="FlakMissile" type="Node3D"]
@@ -47,11 +47,11 @@ mesh = SubResource("CylinderMesh_body")
 surface_material_override/0 = SubResource("StandardMaterial3D_body")
 
 [node name="Exhaust" type="GPUParticles3D" parent="."]
-position = Vector3(0, 0, 2.2)
+position = Vector3(0, 0, 22)
 material_override = SubResource("StandardMaterial3D_exhaust")
 emitting = true
 amount = 28
 lifetime = 0.7
-visibility_aabb = AABB(-30, -30, -30, 60, 60, 60)
+visibility_aabb = AABB(-300, -300, -300, 600, 600, 600)
 process_material = SubResource("ParticleProcessMaterial_exhaust")
 draw_pass_1 = SubResource("QuadMesh_exhaust")

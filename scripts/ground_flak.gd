@@ -53,7 +53,15 @@ const BOLT_CONE_DEGREES := 14.0  # off straight-up, for visual variety
 const MAX_MISSILES := 5
 const MISSILE_SPAWN_INTERVAL_MIN := 2.5
 const MISSILE_SPAWN_INTERVAL_MAX := 6.0
-const MISSILE_CONE_DEGREES := 22.0
+## Off straight-up, so launches run between 70 and 90 degrees of elevation —
+## a direct request, to make the city read as throwing ballistic missiles out
+## on visibly varied trajectories rather than firing everything dead vertical.
+##
+## Note the cone was already 22 degrees and the variance still was not
+## visible: flak_missile.gd used to slerp its heading back toward vertical
+## over the first 2.5s, which erased the launch angle before it could be seen.
+## Removing that (see its header) is what actually makes this constant matter.
+const MISSILE_CONE_DEGREES := 20.0
 
 # --- Flak shells + bursts ----------------------------------------------
 const MAX_SHELLS := 12

@@ -2066,15 +2066,36 @@ when the player happens to be far from the nearest few candidates.
   `Town.tscn`'s Glow pass actually blooms them, the same convention this
   project's other emissive elements use — via `MultiMesh.use_colors`, so
   each bolt gets real per-instance variety rather than one flat tint.
-- **SAM missiles** — a rarer, bigger event (every 2.5-6s while under
+- **Ballistic missiles** — a rarer, bigger event (every 2.5-6s while under
   `MAX_MISSILES`, 5). Real (but simple) `Node`s, since only a handful
   exist at once — `scripts/flak_missile.gd` reuses `missile.gd`'s visual
   language (the same body/exhaust mesh style, the same `MissileTrail.tscn`
-  smoke) but carries none of its homing/damage/flare logic: no target, no
-  collision check against anything. Flies in a roughly-vertical line with
-  a brief post-launch straightening slerp toward `Vector3.UP` over its
-  first 2.5s (mimicking a real SAM's pitch program, since there's no
-  target to guide toward), then self-destructs after `lifetime` (6s).
+  ribbon) but carries none of its homing/damage/flare logic: no target, no
+  collision check against anything. Self-destructs after `lifetime` (6s).
+
+  **Scaled up 10x into genuine ballistic missiles** on direct request —
+  "almost to simulate the city launching ballistic missiles out. They don't
+  do any damage to the player, but they do have a cool cinematic appeal."
+  The body went 4.2m -> **42m** (radii, exhaust nozzle position, exhaust
+  quad and particle scales all scaled with it, so the proportions hold), and
+  `trail_width_scale` went 0.55 -> **1.8**, i.e. from *narrower* than the
+  player's own missile trail to considerably wider. A thin trail behind a
+  42m body reads as wrong, and the whole point of the effect is legibility
+  from across the city. Going wider is only affordable because the ribbon
+  rewrite made trails several times cheaper than the particle system they
+  replaced.
+
+  **They now fly a straight line along their launch angle, at 70-90 degrees
+  of elevation** (`MISSILE_CONE_DEGREES` 20, off vertical). Reported as
+  shooting "straight ninety degrees" with a request for the spread — but
+  **the cone was already 22 degrees**, so the cone was never the problem.
+  `flak_missile.gd` slerped its heading back toward `Vector3.UP` over the
+  first 2.5s, on the reasoning that it mimicked a real SAM's pitch program,
+  and that erased the launch angle before it was ever visible. A launch
+  angle you cannot see is not a launch angle: the pitch program is gone, and
+  removing it is what actually makes the cone constant matter. Verified: a
+  missile launched at 70 degrees is still flying at 70.0 degrees two seconds
+  later, and 400 sampled launches span 70.1-90.0 degrees.
 - **Flak shells + bursts** — the WWII-flak-field look. Shells are
   mortar-style projectiles (`SHELL_SPEED` 380 m/s, pooled data like the
   tracer bolts, their own small `MultiMeshInstance3D`, a flat warm-white

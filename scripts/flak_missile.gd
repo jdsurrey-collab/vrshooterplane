@@ -4,10 +4,18 @@ extends Node3D
 ## system (see that script's header). Reuses missile.gd's visual language
 ## (the same body/exhaust mesh style, the same MissileTrail smoke) but
 ## carries NONE of its homing/damage/flare logic: no target, no damage, no
-## collision check against anything. It exists purely to be seen — flies
-## in a roughly-vertical line with a brief post-launch straightening arc
-## (mimicking a real SAM's pitch program, since there's no target to guide
-## toward), then self-destructs after `lifetime`.
+## collision check against anything. It exists purely to be seen — the city
+## throwing big ballistic missiles up out of the skyline for the spectacle of
+## it — then self-destructs after `lifetime`.
+##
+## IT FLIES A STRAIGHT BALLISTIC LINE ALONG ITS LAUNCH ANGLE. There used to be
+## a post-launch slerp toward straight up over the first 2.5s, on the
+## reasoning that it mimicked a real SAM's pitch program. That turned out to
+## be self-defeating: ground_flak.gd already launches these across a cone
+## (MISSILE_CONE_DEGREES), and the straightening erased that spread before it
+## was ever visible, so every missile read as going dead vertical — reported
+## as exactly that. A launch angle you cannot see is not a launch angle, so
+## the pitch program is gone and the cone is now what actually shows.
 ##
 ## Orientation follows missile.gd's own convention: the spawner
 ## (ground_flak.gd) sets the full global_transform — position AND facing —
@@ -20,19 +28,18 @@ const TRAIL := preload("res://scenes/MissileTrail.tscn")
 @export var speed: float = 260.0
 @export var lifetime: float = 6.0
 
-## Particle count for this missile's trail, overriding MissileTrail.tscn's
-## own default before add_child(). Up to MAX_MISSILES (5) of these are in
-## the air at once, so they are the biggest concurrent multiplier on the
-## the most fillrate-expensive effect in the game (see missile_trail.gd's
-## FILLRATE note). A cosmetic background launch several kilometres away over
-## the city does not need the same presence as the player's own weapon fired
-## from the cockpit, so its ribbon runs narrower — which bounds the flak
-## system's whole contribution rather than letting five full-width trails
-## stack.
+## Trail width multiplier, overriding RibbonTrail's own default before
+## add_child(). Now WIDER than the player's own missile rather than narrower:
+## the body is a 42m ballistic missile (10x the original 4.2m SAM), and a thin
+## trail behind something that size reads as wrong. It also has to be legible
+## from across the city, which is the whole point of the effect.
 ##
-## Was `trail_particle_amount` while the trail was a particle system; it is a
-## ribbon now, so the equivalent dial is its width.
-@export var trail_width_scale: float = 0.55
+## Up to MAX_MISSILES (5) are in the air at once, so this is the biggest
+## concurrent multiplier on trail cost — but a ribbon is several times cheaper
+## than the particle system it replaced, which is what makes going wider
+## affordable at all. Exported so it can come straight back down if five fat
+## plumes over the city read as too much in the headset.
+@export var trail_width_scale: float = 1.8
 
 var _direction: Vector3 = Vector3.UP
 var _age: float = 0.0
@@ -46,14 +53,8 @@ func _ready() -> void:
 
 func _physics_process(delta: float) -> void:
 	_age += delta
-
-	# A real SAM pitches over from its launch angle toward vertical in the
-	# first couple of seconds, then holds straight — approximated with a
-	# slerp toward straight up rather than any real guidance, since this
-	# missile has no target to guide toward.
-	if _age < 2.5:
-		_direction = _direction.slerp(Vector3.UP, clampf(delta * 1.5, 0.0, 1.0)).normalized()
-
+	# Straight along the launch angle — see the header for why the old
+	# straightening slerp toward vertical was removed.
 	global_position += _direction * speed * delta
 
 	# up_ref is unconditionally FORWARD, not a conditional UP/FORWARD switch
