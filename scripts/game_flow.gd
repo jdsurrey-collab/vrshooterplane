@@ -60,6 +60,7 @@ var _engine_audio: Node
 var _ship_engine_audio: Node
 var _thruster_trails: Node
 var _friendly_tags: Node
+var _damage_smoke: Node
 var _role_stamp: Node
 
 var _confirm_button_was_down: bool = false
@@ -86,6 +87,7 @@ func _ready() -> void:
 		_ship_engine_audio = _battle.get_node_or_null("ShipEngineAudio")
 		_thruster_trails = _battle.get_node_or_null("ThrusterTrails")
 		_friendly_tags = _battle.get_node_or_null("FriendlyTags")
+		_damage_smoke = _battle.get_node_or_null("DamageSmoke")
 
 	_enter_menu()
 
@@ -154,6 +156,8 @@ func _set_player_paused(value: bool) -> void:
 		_thruster_trails.paused = value
 	if _friendly_tags:
 		_friendly_tags.paused = value
+	if _damage_smoke:
+		_damage_smoke.paused = value
 
 
 ## The player starts on the friendly mothership's flight deck alongside the
@@ -219,6 +223,8 @@ func _enter_game_over() -> void:
 func _return_to_menu() -> void:
 	if _player_damage:
 		_player_damage.reset_health()
+	if _missile_system:
+		_missile_system.reload_remaining = 0.0
 	_reposition_player()
 	if _battle:
 		_battle.reset_battle()

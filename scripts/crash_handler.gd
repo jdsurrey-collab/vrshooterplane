@@ -149,5 +149,10 @@ func _respawn() -> void:
 	_set_systems_paused(false)
 	if _player_damage:
 		_player_damage.reset_health()
+	# A fresh ship off the deck comes with a fresh reload, same reasoning as
+	# resetting health here rather than making the player wait out whatever
+	# cooldown was running on the ship they just died in.
+	if _missile_system:
+		_missile_system.reload_remaining = 0.0
 	if _damage_audio and _damage_audio.has_method("stop_all"):
 		_damage_audio.stop_all()

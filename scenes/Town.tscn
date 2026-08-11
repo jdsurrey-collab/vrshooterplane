@@ -1,4 +1,4 @@
-[gd_scene load_steps=19 format=3 uid="uid://ceaei3xynkod2"]
+[gd_scene load_steps=20 format=3 uid="uid://ceaei3xynkod2"]
 
 [ext_resource type="PackedScene" uid="uid://c2dyoeywkgf30" path="res://scenes/Player.tscn" id="1_player"]
 [ext_resource type="Texture2D" uid="uid://neat1aug36g3" path="res://Assets/Skybox/panorama.tga" id="4_panorama"]
@@ -15,6 +15,7 @@
 [ext_resource type="Script" uid="uid://k3g26ysl12mj" path="res://scripts/tank_objective.gd" id="15_tankobjective"]
 [ext_resource type="Script" uid="uid://1wgta10o6w0v" path="res://scripts/friendly_tags.gd" id="16_friendlytags"]
 [ext_resource type="Script" uid="uid://cv0ubfryy7x2w" path="res://scripts/perf_logger.gd" id="17_perflogger"]
+[ext_resource type="Script" path="res://scripts/damage_smoke.gd" id="18_damagesmoke"]
 
 [sub_resource type="PanoramaSkyMaterial" id="SkyMat_1"]
 panorama = ExtResource("4_panorama")
@@ -114,6 +115,9 @@ script = ExtResource("12_thrustertrails")
 
 [node name="FriendlyTags" type="Node3D" parent="FactionBattle"]
 script = ExtResource("16_friendlytags")
+
+[node name="DamageSmoke" type="Node3D" parent="FactionBattle"]
+script = ExtResource("18_damagesmoke")
 
 [node name="GameFlow" type="Node" parent="."]
 script = ExtResource("8_gameflow")

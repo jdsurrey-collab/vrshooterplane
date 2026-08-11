@@ -46,12 +46,31 @@ const LASER_BOLT := preload("res://scenes/LaserBolt.tscn")
 ## trigger weapon fire.
 var paused: bool = false
 
+## Distinct, cockpit-only "tink" for HIT CONFIRMATION — plain
+## AudioStreamPlayer, not 3D, for the same reason missile_system.gd's own
+## lock/launch tones are plain players: this is feedback about the player's
+## own shot landing, happening inside their own cockpit, so proximity is
+## meaningless. Node path, not a preload, because the stream lives on a
+## scene child (HitConfirmAudio under WeaponSystem in Player.tscn) — the
+## same pattern MissileSystem's LockAudio/LaunchAudio already use.
+@export var hit_confirm_audio_path: NodePath = ^"HitConfirmAudio"
+
+## How hard and how long the glass crosshair punches out on a landed hit —
+## see notify_hit(). Deliberately brief: this is a confirmation flash, not a
+## sustained state change.
+const HIT_PULSE_DURATION := 0.14
+const HIT_PULSE_PEAK_SCALE := 1.7
+
 var _right_controller: XRController3D
 var _gun_left: Node3D
 var _gun_right: Node3D
 var _crosshair: Node3D
 var _audio_left: AudioStreamPlayer3D
 var _audio_right: AudioStreamPlayer3D
+var _hit_audio: AudioStreamPlayer
+
+var _crosshair_base_scale: Vector3 = Vector3.ONE
+var _hit_pulse_time: float = -1.0  # negative = idle, no pulse in progress
 
 var _fire_from_left: bool = true
 
@@ -77,6 +96,9 @@ func _ready() -> void:
 		_audio_left = _gun_left.get_node_or_null("Audio")
 	if _gun_right:
 		_audio_right = _gun_right.get_node_or_null("Audio")
+	_hit_audio = get_node_or_null(hit_confirm_audio_path)
+	if _crosshair:
+		_crosshair_base_scale = _crosshair.scale
 	print("[Weapon] right_controller=%s gun_left=%s gun_right=%s crosshair=%s" % [
 			_right_controller, _gun_left, _gun_right, _crosshair])
 
@@ -104,7 +126,20 @@ func _setup_convergence() -> void:
 		_crosshair.position = Vector3(mid_local.x, crosshair_height, crosshair_distance)
 
 
+## Called by laser_bolt.gd the instant the player's own bolt lands a hit —
+## kill or not. Plays the cockpit "tink" and punches the glass crosshair out
+## briefly. Runs BEFORE the paused/controller-active early-outs below so an
+## in-flight pulse always finishes decaying rather than freezing mid-punch if
+## the menu opens or the controller drops out a frame later.
+func notify_hit() -> void:
+	if _hit_audio:
+		_hit_audio.play()
+	_hit_pulse_time = 0.0
+
+
 func _physics_process(delta: float) -> void:
+	_update_hit_pulse(delta)
+
 	if paused:
 		return
 	if not _right_controller:
@@ -127,6 +162,23 @@ func _physics_process(delta: float) -> void:
 		_last_pressed_state = trigger_pressed
 	if trigger_pressed:
 		_try_fire()
+
+
+## Decays the crosshair back to its base scale over HIT_PULSE_DURATION. A
+## plain scale pulse rather than an emission-brightness change specifically
+## to sidestep this project's own known gotcha: a headless resave has been
+## observed stripping emission_enabled/emission/emission_energy_multiplier
+## from StandardMaterial3D_crosshair specifically (see CLAUDE.md's Flight HUD
+## section) — scale carries no such risk and needs no material edit at all.
+func _update_hit_pulse(delta: float) -> void:
+	if _hit_pulse_time < 0.0 or not _crosshair:
+		return
+	_hit_pulse_time += delta
+	var t := clampf(_hit_pulse_time / HIT_PULSE_DURATION, 0.0, 1.0)
+	var scale_mult := lerpf(HIT_PULSE_PEAK_SCALE, 1.0, t)
+	_crosshair.scale = _crosshair_base_scale * scale_mult
+	if t >= 1.0:
+		_hit_pulse_time = -1.0
 
 
 func _try_fire() -> void:

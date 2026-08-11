@@ -1196,6 +1196,139 @@ player happened to be left.
 - They are indestructible and take no part in the battle — no guns, no
   health, no effect on Air Superiority.
 
+## Gunnery overhaul — Phase 1: feedback
+
+Reported live: *"I feel like I'm having a hard time getting kills. I don't
+want it to get easier, but I just wanna make sure I'm not missing something
+important to make it a game versus a simulator."* An alien dies in 3 bolts
+(30 HP / 10 damage each) — the difficulty was never the numbers. Research
+found the gunnery system genuinely could not tell the player what was
+happening: `laser_bolt.gd` called `FactionBattle.apply_damage()` and stopped,
+so a hit that didn't kill was visually and audibly identical to a miss.
+
+This is Phase 1 of a larger planned overhaul (a shared gunnery solver,
+dynamic convergence, a Star-Citizen-style gimbal assist gated to a 1200m
+lethal range, a range-coded PIP, and boresight calibration) — the plan lives
+in the session history. Phase 1 is deliberately self-contained: pure
+feedback, **no accuracy or difficulty change at all**, and it lands the
+highest value for the time it costs.
+
+### Hit confirmation
+
+`laser_bolt.gd`'s player-fired path now does what every reference game
+(Ace Combat, Star Wars: Squadrons, CoD) already does on every landed hit:
+
+- **Cockpit audio + a crosshair pulse, on every hit, kill or not.**
+  `weapon_system.gd` gained `notify_hit()`, called from `laser_bolt.gd`
+  immediately after `apply_damage()`. The sound is a new procedurally
+  generated `Assets/Audio/hit_confirm.tres` (two decaying sine partials at
+  2400/3600Hz plus a 3ms noise click, ~90ms total) — deliberately distinct
+  from every other cockpit tone already in the game (the continuous 1400Hz
+  missile-lock sine, the three-layer stamp thump, the engine recordings),
+  since this one can fire several times a second. Generated the same
+  one-off-script-then-delete way as `missile_lock.tres`/`stamp.tres`, same
+  `.tres`-not-`.wav` `ResourceSaver` gotcha.
+  The crosshair pulse is a plain **scale** punch (1.7x decaying over 0.14s),
+  not an emission-brightness change — deliberately sidestepping this
+  project's own known gotcha where a headless resave has been observed
+  stripping `emission_enabled`/`emission`/`emission_energy_multiplier`
+  specifically from `StandardMaterial3D_crosshair` (see the Flight HUD
+  section). Scale needs no material edit at all.
+- **A spark, only for a hit the target SURVIVES.** `FactionBattle`'s
+  existing `_spawn_hit_spark()` (previously used only for AI-vs-AI ambient
+  bolts) is now public `spawn_hit_spark()`, and `laser_bolt.gd` calls it on
+  the identical condition already established there — a kill already spawns
+  the much bigger 200m explosion orb at the same spot, so a spark on top
+  would be redundant.
+
+### Target health readout
+
+`FactionBattle.get_health_fraction(index)` (0..1, mirrors `is_alive()` /
+`get_alien_position()`'s existing index convention). `target_lock.gd`'s info
+label gained a `HULL %` line, so a hit shows real progress instead of the
+player guessing whether they're one shot from a kill or starting over on a
+fresh ship.
+
+**Deliberately text-only, not a graphical bar, for now.** This project's own
+repeated lesson — the Flight HUD went through three placement rewrites
+before it read correctly — is that on-screen alignment across depths needs a
+live headset pass to get right, and a wrongly-placed bar shipped sight-unseen
+is worse than no bar. A graphical gauge is the natural next step once seen
+live.
+
+### Missile reload — 20 second cooldown
+
+Direct request: *"let's also add a cool down for the missiles at twenty
+seconds."* There was previously no reload gate at all — lock, release, fire,
+repeat immediately.
+
+`missile_system.gd` gained `missile_reload_time` (20.0) and public
+`reload_remaining`. Two deliberate design choices:
+
+- **Only the LAUNCH is gated, not the lock.** Being able to track and
+  designate while the weapon reloads is both how these systems actually work
+  and less frustrating than a dead weapon, and `lock_time` (3s) already
+  usefully overlaps the tail of a typical cooldown. If the trigger is held
+  *through* the cooldown, `locked` stays true (the existing early-return in
+  `_update_lock` once already locked) and release fires the instant
+  `reload_remaining` reaches zero — no need to release and re-hold.
+- **A denied launch (locked, released, still reloading) gets its own short
+  haptic** — `_deny_launch()`, 0.6/0.08s, distinct from both the search-tone
+  buzz (0.35/0.05) and the launch pulse (1.0/0.3) — so it reads as "not
+  ready," not as the trigger silently doing nothing. This is the exact
+  lesson this system's own lock design already learned twice (see the
+  Homing missiles section below).
+
+`hud.gd`'s `MSL` line gained a `RELOADING Ns` state, including the compound
+`LOCKED — RELOADING Ns` case (locking during cooldown is a real, distinct
+state now, not just an either/or). Resets on respawn
+(`crash_handler.gd._respawn()`, alongside health) and on returning to the
+menu (`game_flow.gd._return_to_menu()`), same reasoning as resetting player
+health in both places — a fresh ship comes with a fresh reload.
+
+### Damaged-enemy smoke
+
+Direct request, specifying the technique to reuse: *"smoke will use a
+reddish smoke band like we are for the missiles."* `scripts/damage_smoke.gd`
+(`DamageSmoke`, under `FactionBattle`) is the third consumer of
+`ribbon_trail.gd`'s `RibbonTrail`, after missiles and afterburners —
+`scenes/DamageSmokeTrail.tscn` is the identical ribbon technique, recoloured
+dark red/black instead of white or orange, so the three stay visually
+distinct despite sharing one script.
+
+Structurally a near-clone of `thruster_trails.gd`'s pool — same
+`get_ships_near()` / `is_ship_alive_by_key()` / `paused` API, same
+`CANDIDATE_MULTIPLIER` candidate widening — with the differences that
+actually matter:
+
+- **Claim condition is health, not a flight-state flag**: a new
+  `FactionBattle.get_ship_health_fraction_by_key()` (mirrors
+  `is_ship_afterburning_by_key()`'s existing by-key convention), and any
+  living ship at or under `damage_threshold` (0.45) qualifies — **either
+  faction**, unlike the afterburner pool, since a hurt ship reads as hurt
+  regardless of who's flying it.
+- **Not gated on speed.** A badly wounded ship trailing smoke while nearly
+  stationary is exactly the image this is going for, not a case to filter
+  out the way a parked, non-afterburning ship is for the thruster pool.
+- **No release hysteresis needed.** Health here only ever decreases until
+  death — there's no in-combat regen — so a claimed ship can't flicker back
+  and forth across `damage_threshold` the way a ship hovering at a distance
+  boundary could. `trail_count` is 8 (smaller than the afterburner pool's
+  10): a wounded ship stays in that state far longer than an afterburner
+  burst does, so far fewer concurrent emitters keep "who's hurt nearby"
+  reliably covered.
+
+Verified headlessly (26/26): every piece above wired and functioning,
+including that locking genuinely isn't blocked by an active cooldown, that a
+launch attempt inside the cooldown is actually refused, and that both reset
+points (respawn, return to menu) actually clear `reload_remaining`.
+
+**Not yet built** (later phases of the same overhaul, deferred for session
+time): the shared `Gunnery` solver, dynamic per-frame convergence, the
+gimbal assist and its 1200m/2000m range bands, the range-coded PIP, and
+boresight/seat calibration. `enemy_hit_radius` (4.0) also still doesn't
+match the AI's own `BOLT_HIT_RADIUS` (6.0) — a fairness gap, not yet closed.
+
 ## Homing missiles
 
 Second weapon, **left trigger** (guns stay on the right trigger) — a

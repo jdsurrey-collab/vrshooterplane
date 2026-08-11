@@ -1886,7 +1886,7 @@ func _check_ambient_bolt_hit(b: Dictionary, prev_pos: Vector3, new_pos: Vector3)
 					# Only for hits the target SURVIVED — a kill already spawns
 					# the far bigger ShipExplosion at the same spot.
 					if o.alive:
-						_spawn_hit_spark(closest)
+						spawn_hit_spark(closest)
 					return true
 	return false
 
@@ -1896,7 +1896,13 @@ func _check_ambient_bolt_hit(b: Dictionary, prev_pos: Vector3, new_pos: Vector3)
 ## many times a second across the whole map, and an unbudgeted particle
 ## burst per hit is exactly the kind of thing that quietly eats a VR frame
 ## budget.
-func _spawn_hit_spark(at_position: Vector3) -> void:
+##
+## PUBLIC (was `_spawn_hit_spark`) — laser_bolt.gd's own player-fired hits
+## now call this directly for a hit the target SURVIVES, matching the exact
+## convention already used above for AI-vs-AI ambient-bolt hits. This closed
+## a real gap: the player's own gun previously called apply_damage() and
+## nothing else, so a hit that didn't kill was visually identical to a miss.
+func spawn_hit_spark(at_position: Vector3) -> void:
 	if not _player or _player.global_position.distance_to(at_position) > spark_range:
 		return
 	_purge_freed(_live_sparks)
@@ -2272,6 +2278,15 @@ func is_ship_afterburning_by_key(key: int) -> bool:
 	return c != null and c.alive and c.afterburner_active
 
 
+## Fraction of max health remaining for EITHER faction's ship, by key — read
+## by damage_smoke.gd to decide who is hurt enough to trail smoke. Defaults
+## to 1.0 (i.e. "not damaged") for a dead or nonexistent key, so a bad key
+## can never be mistaken for a heavily damaged ship and claim an emitter.
+func get_ship_health_fraction_by_key(key: int) -> float:
+	var c := _ship_for_key(key)
+	return clampf(c.health / MAX_HEALTH, 0.0, 1.0) if c and c.alive else 1.0
+
+
 ## Where the player starts the match and respawns: parked on the friendly
 ## mothership's deck with the rest of the fleet. Returned as a world
 ## position so game_flow.gd / crash_handler.gd don't have to re-derive the
@@ -2347,6 +2362,16 @@ func get_alien_position(index: int) -> Vector3:
 	if index < 0 or index >= _enemies.size():
 		return Vector3.ZERO
 	return _enemies[index].position
+
+
+## Fraction of MAX_HEALTH remaining, 0..1 — read by target_lock.gd's info
+## readout so a landed hit shows real progress instead of the player having
+## to guess how many more shots a target needs. Out-of-range or dead reads as
+## 0.0 rather than erroring, matching this file's other index-guarded getters.
+func get_health_fraction(index: int) -> float:
+	if index < 0 or index >= _enemies.size():
+		return 0.0
+	return clampf(_enemies[index].health / MAX_HEALTH, 0.0, 1.0)
 
 
 func get_velocity(index: int) -> Vector3:

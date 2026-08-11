@@ -57,6 +57,7 @@ var _battle: Node
 var _tanks: Node  # TankObjective — the ground objective, absent in some scenes
 var _player: Node3D
 var _player_damage: Node
+var _weapon_system: Node  # player-fired bolts only — see _check_enemy_hit
 
 
 func _ready() -> void:
@@ -67,6 +68,8 @@ func _ready() -> void:
 	_tanks = get_tree().current_scene.get_node_or_null("TankObjective")
 	if fired_by_player:
 		_thin_player_mesh()
+		var player := get_tree().current_scene.get_node_or_null("Player")
+		_weapon_system = player.get_node_or_null("WeaponSystem") if player else null
 	else:
 		_resolve_player_refs()
 
@@ -147,6 +150,24 @@ func _check_enemy_hit(previous_position: Vector3) -> bool:
 		return false
 
 	_battle.apply_damage(index, damage)
+
+	# HIT CONFIRMATION — the whole reason this project's own gunnery felt
+	# like a simulator rather than a game: apply_damage() used to be the
+	# entire hit path, so a hit that didn't kill was visually and audibly
+	# IDENTICAL to a miss. Every reference game (Ace Combat, Squadrons, CoD)
+	# confirms every landed hit, kill or not — that confirmation is what this
+	# adds, via weapon_system.gd's cockpit audio/reticle pulse.
+	#
+	# The SPARK specifically is reserved for a hit the target SURVIVES,
+	# matching the exact convention already established for AI-vs-AI ambient
+	# bolts in _check_ambient_bolt_hit() — a kill already spawns the much
+	# bigger 200m explosion orb at the same spot, so a spark on top of that
+	# would be redundant.
+	if _weapon_system:
+		_weapon_system.notify_hit()
+	if _battle.is_alive(index):
+		_battle.spawn_hit_spark(closest)
+
 	return true
 
 

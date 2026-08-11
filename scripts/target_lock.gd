@@ -170,7 +170,16 @@ func _update_lock_display(delta: float) -> void:
 		rate_text = "OPENING %d m/s" % roundi(-rate)
 
 	var target_name := "HOSTILE-%03d" % locked_index
-	_info_label.text = "%s\n%d m\n%s" % [target_name, roundi(distance), rate_text]
+	# HULL % — closes a real "can't tell if I'm hitting" gap: three bolts
+	# kill an alien, but with no health readout the player had no way to
+	# tell "one more shot" from "starting over on a fresh ship." A text line
+	# rather than a graphical bar is deliberate for now: this project's own
+	# repeated lesson is that on-screen alignment across depths needs a live
+	# headset pass to get right (see flight_hud.gd's three placement
+	# rewrites), and a wrongly-placed bar shipped sight-unseen is worse than
+	# no bar. A graphical gauge is the natural next step once seen live.
+	var hull_pct := roundi(_battle.get_health_fraction(locked_index) * 100.0)
+	_info_label.text = "%s\n%d m\n%s\nHULL %d%%" % [target_name, roundi(distance), rate_text, hull_pct]
 	# Below the box in VIEW-space (camera's own local down), not world down —
 	# stays correctly positioned relative to the box regardless of head tilt.
 	_info_label.global_position = box_pos - cam_basis.y * label_offset

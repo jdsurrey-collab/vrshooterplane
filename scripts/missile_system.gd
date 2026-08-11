@@ -91,6 +91,22 @@ const MISSILE := preload("res://scenes/Missile.tscn")
 ## manoeuvring target is a long time in a dogfight; 3 is enough to make the
 ## missile a committed shot rather than a spammable one without being
 ## tedious. Exported so it's tunable in the headset without a code change.
+## Direct request: "let's also add a cool down for the missiles at twenty
+## seconds." Previously there was NO reload gate at all — lock, release,
+## fire, and the moment the trigger was pulled again the whole cycle could
+## restart immediately, which is not how a limited-ordnance weapon reads in
+## any reference game this project is following.
+##
+## ONLY THE LAUNCH is gated, not the lock — see _fire_missile()'s caller in
+## _physics_process(). Being able to track and designate while the weapon
+## reloads is both how these systems actually work and less frustrating than
+## a dead weapon, and lock_time (3s) already usefully overlaps the tail of a
+## typical cooldown. If the trigger is held THROUGH the cooldown, `locked`
+## stays true (see _update_lock's early return once already locked) and
+## release fires the instant reload_remaining reaches zero — no need to
+## release and re-hold.
+@export var missile_reload_time: float = 20.0
+
 @export var lock_time: float = 3.0
 ## Widened from 9°, which was unforgivingly narrow — aliens are sparse
 ## across an 8km dome, so holding a 9° bead on one long enough to notice the
@@ -116,6 +132,11 @@ var lock_progress: float = 0.0
 var locked: bool = false
 var acquiring: bool = false
 var tracked_target_index: int = -1
+
+## Seconds until another missile can be LAUNCHED — 0 means ready. Public
+## (not underscore-prefixed) specifically so hud.gd can read it, matching
+## lock_progress/locked/acquiring's own convention.
+var reload_remaining: float = 0.0
 
 var _left_controller: XRController3D
 var _origin: Node3D  # XROrigin3D — the authoritative "which way is forward", see the class comment
@@ -169,6 +190,13 @@ func _physics_process(delta: float) -> void:
 	if paused:
 		_reset_lock()
 		return
+
+	# Ticks even with the controller inactive or nothing designated — the
+	# weapon is physically reloading regardless of what the player is doing
+	# with their hands right now.
+	if reload_remaining > 0.0:
+		reload_remaining = maxf(0.0, reload_remaining - delta)
+
 	if not _left_controller or not _left_controller.get_is_active():
 		return
 	if not _origin or not _battle:
@@ -179,10 +207,13 @@ func _physics_process(delta: float) -> void:
 	if trigger_down:
 		_update_lock(delta)
 	elif _trigger_was_down:
-		# Release is the trigger to launch — a completed lock fires, an
-		# incomplete one is simply discarded.
+		# Release is the trigger to launch. A completed lock only actually
+		# fires if the weapon has finished reloading — see missile_reload_time.
 		if locked:
-			_fire_missile()
+			if reload_remaining <= 0.0:
+				_fire_missile()
+			else:
+				_deny_launch()
 		_reset_lock()
 
 	_trigger_was_down = trigger_down
@@ -262,7 +293,18 @@ func _reset_lock() -> void:
 	_beep_timer = 0.0
 
 
+## A completed lock was released while the weapon was still reloading — the
+## shot is refused. A SHORT, WEAKER, DISTINCT pulse from both the search-tone
+## buzz (0.35/0.05) and the launch pulse (1.0/0.3), so a denied shot reads as
+## "not ready" rather than as the trigger silently doing nothing. This is the
+## same lesson missile_system.gd's own lock design already learned the hard
+## way, twice — a weapon with invisible feedback reads as broken, not busy.
+func _deny_launch() -> void:
+	_pulse(0.6, 0.08)
+
+
 func _fire_missile() -> void:
+	reload_remaining = missile_reload_time
 	var missile := MISSILE.instantiate()
 	# Target assigned before add_child(), since add_child() runs missile.gd's
 	# _ready() immediately — see faction_battle.gd's header for the bug this
