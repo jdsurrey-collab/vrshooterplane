@@ -1,9 +1,16 @@
+class_name RibbonTrail
 extends MeshInstance3D
 
-## Missile smoke trail, built as a CONTINUOUS RIBBON MESH rather than a
-## particle system. At 400 m/s the missile body is off-screen almost
-## immediately, so the trail is the thing that actually lets you see and track
-## a shot you just fired.
+## Smoke trail built as a CONTINUOUS RIBBON MESH rather than a particle
+## system. This is now THE smoke technique for anything that leaves a trail
+## behind a moving object — missiles and afterburners both — after the
+## particle version was replaced on direct feedback and the result was
+## "perfect". Prefer it over GPUParticles3D for any future trail.
+##
+## Two consumers today, both driving the same script through different scenes:
+##   MissileTrail.tscn  — missile.gd / flak_missile.gd, follows a missile
+##   ThrusterTrail.tscn — the player's afterburner (a child of Ship) and
+##                        thruster_trails.gd's pooled AI emitters
 ##
 ## WHY THIS IS NOT PARTICLES ANY MORE
 ##
@@ -69,13 +76,30 @@ extends MeshInstance3D
 ## of 100 overlapping 47m puffs, with no per-particle overdraw stacking, which
 ## is several times cheaper again — and it is one draw call of ~500 triangles.
 ##
-## STILL NOT A CHILD OF THE MISSILE, for the same two reasons as before: the
-## geometry is built in WORLD space so it stays where it was laid down, and a
-## missile queue_free()s the instant it hits something — freeing the emitter
-## would take the whole existing trail with it and pop a kilometre of smoke
-## out of the sky in one frame. It lives at scene level and merely FOLLOWS.
+## THE GEOMETRY IS WORLD-SPACE, so this node's own transform must stay at
+## identity — `top_level` is forced on in _ready() to guarantee that even when
+## the scene parents it to something that moves (the player's afterburner is a
+## child of `Ship`). The emitter position therefore cannot come from this
+## node's own transform, and arrives one of three ways:
 ##
-## Set `follow` to the missile immediately after instantiating.
+##   `follow` + `follow_offset` — track a node, at a fixed local offset from
+##       it. `inherit_parent_as_follow` captures both automatically from the
+##       scene's own parenting, which is how the player's afterburner keeps
+##       its authored nozzle offset without anything hard-coding it.
+##   `emit_position` — set externally each frame. thruster_trails.gd's pool
+##       uses this, since its emitters are handed between ships.
+##
+## POOL REASSIGNMENT NEEDS A BREAK, and this is a genuine behavioural
+## difference from the particle version it replaced. World-space particles
+## could be teleported to a new ship freely — the old smoke simply hung in the
+## air and the new emitter started fresh, which CLAUDE.md specifically called
+## out as making reassignment safe. A ribbon is CONNECTED, so the same
+## teleport would draw a single continuous streak from the old ship to the new
+## one, straight across the map. `_points` therefore carries a `break` flag:
+## any jump further than `break_distance` starts a new strip instead of
+## joining, so the abandoned trail still fades out naturally on its own while
+## the new one grows. That preserves the pool's no-pop property rather than
+## clearing the old geometry outright.
 
 ## How long a section of trail survives after being laid down.
 @export var trail_lifetime: float = 4.5
@@ -109,15 +133,48 @@ extends MeshInstance3D
 ## seam running down the middle of the trail instead of a soft column.
 @export var max_alpha: float = 0.62
 
-var follow: Node3D
+## While false the trail lays down no new sections but existing ones keep
+## ageing and fading — the afterburner switching off should let its plume
+## dissipate, not delete it.
+@export var emitting: bool = true
 
-# Each entry: {"pos": Vector3, "age": float}
+## Free the node once the last section has faded. True for missiles (one
+## trail per shot, fire and forget); false for thruster_trails.gd's pool,
+## whose emitters are long-lived and reused.
+@export var auto_free: bool = true
+
+## Capture `follow`/`follow_offset` from this node's own scene parenting in
+## _ready(). How the player's afterburner keeps the nozzle offset authored in
+## Player.tscn without any script hard-coding the number.
+##
+## Consumers that position the trail themselves MUST set this false BEFORE
+## add_child() — _ready() runs immediately on add_child, per this project's
+## standing before-add_child rule.
+@export var inherit_parent_as_follow: bool = false
+
+## A jump larger than this starts a new strip rather than joining — see the
+## pool-reassignment note in the header. Comfortably above the distance
+## anything covers in one frame (a 400 m/s missile moves ~7m at 60fps).
+@export var break_distance: float = 220.0
+
+var follow: Node3D
+var follow_offset: Vector3 = Vector3.ZERO
+var emit_position: Vector3 = Vector3.ZERO
+
+# Each entry: {"pos": Vector3, "age": float, "break": bool}
 var _points: Array[Dictionary] = []
 var _mesh: ImmediateMesh
 var _released: bool = false
 
 
 func _ready() -> void:
+	# Captured BEFORE top_level clears this node's relationship to its parent.
+	if inherit_parent_as_follow and follow == null:
+		var parent := get_parent()
+		if parent is Node3D:
+			follow = parent
+			follow_offset = transform.origin
+
 	_mesh = ImmediateMesh.new()
 	mesh = _mesh
 	# The ribbon is built from absolute WORLD coordinates, so the node must
@@ -127,6 +184,23 @@ func _ready() -> void:
 	global_transform = Transform3D.IDENTITY
 	cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	material_override = _build_material()
+
+
+## Where the next section is laid down. `follow` wins when it is alive so a
+## node-tracking trail keeps working; `emit_position` is the externally-driven
+## fallback.
+func _source_position() -> Vector3:
+	if is_instance_valid(follow):
+		return follow.global_transform * follow_offset
+	return emit_position
+
+
+## Drops every existing section immediately. Only for a hard reset (returning
+## to the menu) — ordinary release should clear `emitting` and let the trail
+## fade out instead.
+func clear_trail() -> void:
+	_points.clear()
+	_mesh.clear_surfaces()
 
 
 func _build_material() -> StandardMaterial3D:
@@ -158,19 +232,24 @@ func _process(delta: float) -> void:
 	while not _points.is_empty() and float(_points[0]["age"]) > trail_lifetime:
 		_points.remove_at(0)
 
-	if is_instance_valid(follow):
-		var here := follow.global_position
-		if _points.is_empty() or here.distance_to(_points[-1]["pos"] as Vector3) >= min_point_spacing:
-			_points.append({"pos": here, "age": 0.0})
+	var tracking := emitting and (is_instance_valid(follow) or follow == null)
+	if tracking:
+		var here := _source_position()
+		var gap := INF if _points.is_empty() else here.distance_to(_points[-1]["pos"] as Vector3)
+		if gap >= min_point_spacing:
+			# A jump means this emitter was handed to a different object — start
+			# a fresh strip instead of joining across the map. See the header.
+			_points.append({"pos": here, "age": 0.0, "break": gap > break_distance})
 			if _points.size() > max_points:
 				_points.remove_at(0)
-	elif not _released:
-		# The missile is gone — stop extending, let what is in the air fade.
+	elif not _released and auto_free:
+		# The thing being followed is gone — stop extending, let what is in the
+		# air fade out on its own.
 		_released = true
 
 	if _points.size() < 2:
 		_mesh.clear_surfaces()
-		if _released and _points.is_empty():
+		if _released and _points.is_empty() and auto_free:
 			queue_free()
 		return
 
@@ -191,6 +270,10 @@ func _rebuild() -> void:
 		var b: Dictionary = _points[i + 1]
 		var pa: Vector3 = a["pos"]
 		var pb: Vector3 = b["pos"]
+
+		# `break` marks the first section of a new strip — never join across it.
+		if b.get("break", false):
+			continue
 
 		var seg := pb - pa
 		if seg.length_squared() < 0.0001:

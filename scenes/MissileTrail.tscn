@@ -1,6 +1,6 @@
 [gd_scene load_steps=2 format=3]
 
-[ext_resource type="Script" path="res://scripts/missile_trail.gd" id="1_missiletrail"]
+[ext_resource type="Script" path="res://scripts/ribbon_trail.gd" id="1_ribbontrail"]
 
 [node name="MissileTrail" type="MeshInstance3D"]
-script = ExtResource("1_missiletrail")
+script = ExtResource("1_ribbontrail")

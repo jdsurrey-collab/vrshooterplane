@@ -153,7 +153,7 @@ const AFTERBURNER_GRIP_THRESHOLD := 0.5
 var _afterburner_fuel: float = 0.0
 var afterburner_active: bool = false  # readable by engine_audio.gd/flight_hud.gd
 
-var _thruster_trail: GPUParticles3D
+var _thruster_trail: RibbonTrail
 
 
 func _ready() -> void:
@@ -161,7 +161,7 @@ func _ready() -> void:
 	_left_controller = _origin.get_node_or_null("LeftHand")
 	_right_controller = _origin.get_node_or_null("RightHand")
 	_afterburner_fuel = profile.afterburner_max_duration
-	_thruster_trail = get_node_or_null(thruster_trail_path) as GPUParticles3D
+	_thruster_trail = get_node_or_null(thruster_trail_path) as RibbonTrail
 
 
 func _physics_process(delta: float) -> void:

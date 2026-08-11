@@ -21,21 +21,27 @@ extends Node3D
 ## Instead a small fixed pool is handed to whichever ships are nearest the
 ## player.
 ##
-## WHY REASSIGNMENT IS SAFE HERE, unlike the audio pool: these emitters use
-## `local_coords = false`, so particles already in the air stay exactly
-## where they were laid down. Moving an emitter to a different ship leaves
-## the old trail hanging in the sky to dissipate on its own and simply
-## starts laying new smoke elsewhere — there is no equivalent of the audio
-## pool's "pop" on a voice steal, so no gain-ramp machinery is needed. The
-## hysteresis below is purely to stop emitters churning between ships that
-## are all hovering at the edge of `trail_radius`.
+## WHY REASSIGNMENT IS SAFE HERE, unlike the audio pool: the geometry is
+## world-space, so a trail already laid down stays exactly where it was.
+## Moving an emitter to a different ship leaves the old plume hanging in the
+## sky to fade on its own and starts a new one elsewhere — there is no
+## equivalent of the audio pool's "pop" on a voice steal, so none of its
+## gain-ramp machinery is needed. The hysteresis below is purely to stop
+## emitters churning between ships hovering at the edge of `trail_radius`.
+##
+## That property survived the move from particles to ribbons but is no
+## longer free: a ribbon is CONNECTED, so teleporting an emitter to a new
+## ship would draw one continuous streak between the two straight across
+## the map. RibbonTrail handles it with a break-on-jump (see
+## `break_distance` there) rather than clearing the old geometry, which is
+## what keeps the no-pop behaviour intact.
 ##
 ## KNOWN LIMITATION, worth stating plainly: ships beyond the pool's reach
 ## have no trail at all. A trail is long enough to be visible from much
 ## further away than `trail_radius`, so a distant furball will look
 ## emptier than a near one. That is a deliberate cost trade, not an
-## oversight — covering every ship would need a MultiMesh-based trail
-## (a much bigger piece of work) rather than GPUParticles3D.
+## oversight — covering every ship would need trails batched into a single
+## MultiMesh, a much bigger piece of work.
 
 const TRAIL_SCENE := preload("res://scenes/ThrusterTrail.tscn")
 
@@ -64,7 +70,7 @@ const CANDIDATE_MULTIPLIER := 8
 
 var _battle: Node
 var _player: Node3D
-var _trails: Array = []  # {"node": GPUParticles3D, "key": int}
+var _trails: Array = []  # {"node": RibbonTrail, "key": int}
 var _rescan_timer: float = 0.0
 
 ## Set by game_flow.gd, same convention as ship_engine_audio.gd's own
@@ -76,7 +82,7 @@ var paused: bool = false:
 		paused = value
 		if paused:
 			for t in _trails:
-				(t["node"] as GPUParticles3D).emitting = false
+				(t["node"] as RibbonTrail).emitting = false
 				t["key"] = -1
 
 
@@ -88,8 +94,15 @@ func _ready() -> void:
 
 func _build_trails() -> void:
 	for i in trail_count:
-		var node: GPUParticles3D = TRAIL_SCENE.instantiate()
+		var node: RibbonTrail = TRAIL_SCENE.instantiate()
 		node.emitting = false
+		# This pool positions its emitters itself (see _update_trails), so the
+		# trail must NOT capture this node as its follow target. Assigned
+		# before add_child() because add_child() runs _ready() immediately,
+		# which is where that capture happens — the same standing rule that
+		# once cost this project a completely undamageable player.
+		node.inherit_parent_as_follow = false
+		node.auto_free = false
 		add_child(node)
 		_trails.append({"node": node, "key": -1})
 
@@ -160,7 +173,7 @@ func _free_trail() -> Dictionary:
 
 func _update_trails() -> void:
 	for t in _trails:
-		var node: GPUParticles3D = t["node"]
+		var node: RibbonTrail = t["node"]
 		var key: int = t["key"]
 
 		if key < 0 or not _battle.is_ship_alive_by_key(key):
@@ -181,5 +194,5 @@ func _update_trails() -> void:
 
 		# Park the emitter behind the ship, at its engine end, so the plume
 		# reads as coming out of the exhaust rather than the hull's centre.
-		node.global_position = _battle.get_ship_position_by_key(key) - vel.normalized() * nozzle_offset
+		node.emit_position = _battle.get_ship_position_by_key(key) - vel.normalized() * nozzle_offset
 		node.emitting = true

@@ -1274,7 +1274,7 @@ compensating flip.
   instant U-turn either, and endlessly circling back would look wrong. It
   can still score a hit via the ordinary swept-segment check if something
   crosses its path.
-- **Smoke trail** (`scenes/MissileTrail.tscn` / `scripts/missile_trail.gd`)
+- **Smoke trail** (`scenes/MissileTrail.tscn` / `scripts/ribbon_trail.gd`)
   — at 400 m/s the missile body is out of view almost immediately, so the
   trail is what actually lets you see and track your own shot.
 
@@ -3318,6 +3318,92 @@ frees itself after `CRASH_SITE_LIFETIME` (60s). **What was actually worth
 keeping is untouched** — the moment of impact, which the player definitely
 does see, since they sit frozen in the wreck for a couple of seconds before
 the death screen. Only the "forever" part is gone.
+
+### Two standing rules that came out of live play
+
+**1. Ribbons, not particles, for anything that trails behind a moving
+object.** `scripts/ribbon_trail.gd` (`class_name RibbonTrail`) is now THE
+smoke technique for trails — missiles and afterburners both. The particle
+version was replaced after being reported as "hundreds of pictures of
+pictures of smoke"; the ribbon result was reported back as "perfect". Prefer
+it for any future trail. It is also cheaper than what it replaced.
+
+Generalising it from the missile-only version needed three things:
+
+- **The node's own transform must stay at identity**, because the geometry is
+  world-space. `top_level` is forced on in `_ready()`, so the emitter position
+  cannot come from the node itself. It arrives either from `follow` +
+  `follow_offset` (tracking a node at a fixed local offset) or from
+  `emit_position` (set externally each frame).
+- **`inherit_parent_as_follow`** captures both automatically from the scene's
+  own parenting, which is how the player's afterburner keeps the nozzle offset
+  authored in `Player.tscn` without any script hard-coding it. It must be set
+  **false before `add_child()`** by consumers that position trails themselves
+  — the standing before-`add_child()` rule again.
+- **A break-on-jump, which is a genuine behavioural difference from
+  particles.** `thruster_trails.gd`'s pool hands emitters between ships.
+  World-space particles could be teleported freely — the old smoke just hung
+  in the air — and `CLAUDE.md` specifically called that out as what made
+  reassignment safe. A ribbon is CONNECTED, so the same teleport draws one
+  continuous streak from the old ship to the new one straight across the map.
+  `_points` now carries a `break` flag: a jump beyond `break_distance` starts
+  a new strip instead of joining, so the abandoned plume still fades out
+  naturally. That preserves the pool's no-pop property rather than clearing
+  the old geometry outright. Verified: after a 4km handoff the longest
+  triangle edge in the mesh is 11m.
+
+**2. Nothing is permanent.** Direct instruction: *"anything that's persistent
+like the crash sites doesn't need to exist any more."* Persistent effects are
+a cost paid every frame for the rest of the session against something the
+player has usually already flown away from. Crash sites were the last of
+them and are now `MAX_CRASH_SITES` 2, freed after `CRASH_SITE_LIFETIME`
+(30s). The one deliberate accumulator left is `flak_burst.gd`'s 20s smoke
+puffs, which is the explicitly-requested WWII flak-field look and does
+self-clean.
+
+### Tracer readability at range — the distant-laser fix
+
+Reported: *"With VR, it's hard to see the lasers off in the distance."* The
+cause is arithmetic, not taste.
+
+The ambient bolt mesh is 26m long and 1.1m across. At 3km that width subtends
+0.021 degrees — against roughly 20.6 pixels per degree per eye at this
+headset's resolution, **0.43 of a pixel**. At 6km, 0.22. Sub-pixel geometry
+cannot render reliably: it aliases away and flickers. So most of a battle
+fought across an 8km dome was firing tracers that physically could not appear.
+
+`_bolt_transform()` now scales each bolt only as much as it needs to hold a
+**minimum angular size** — untouched below that range, clamped above it. Same
+"fixed apparent size" reasoning `target_lock.gd`'s visor-anchored readouts and
+`friendly_tags.gd`'s callsigns already use: past a certain distance,
+world-space size stops being what the player perceives.
+
+| range | before | after |
+|---|---|---|
+| 500m | 2.60 px | 2.60 px (x1.0, untouched) |
+| 3000m | **0.43 px** | 2.47 px (x5.7) |
+| 6000m | **0.22 px** | 2.47 px (x11.4) |
+
+- **Length gets its own floor as well as width.** With width alone a distant
+  bolt clamps to a few pixels wide while its length keeps shrinking, and it
+  degenerates into a square dot — the streak is what reads as gunfire.
+- **`bolt_min_angular_width_deg` / `_length_deg` are exported in DEGREES**,
+  not pixels, because degrees stay true across headsets and render-scale
+  settings. Set to 0 to disable and get true world-space scale back.
+- Compensation is measured against the **`XRCamera3D`**, not the `XROrigin3D`
+  rig — in VR the two can be metres apart.
+- **Muzzle flash**: a brief flare (`BOLT_FLASH_SCALE` 3.4 over
+  `BOLT_FLASH_TIME` 0.09s) at the start of a bolt's flight, so firing reads as
+  an event rather than a bolt merely existing. One compare per bolt, no extra
+  draw.
+
+**A separate real bug found while in there: every tracer bloomed WHITE.** The
+bolt material had `emission_energy_multiplier = 6.0` with the default
+`EMISSION_OP_ADD`, which adds flat white emission on top of the per-instance
+faction tint and completely swamps it — so friendly and hostile fire were
+indistinguishable at exactly the ranges where telling them apart matters most.
+Now `EMISSION_OP_MULTIPLY`, which modulates the glow BY the vertex colour, so
+friendly fire blooms cyan and hostile fire blooms red.
 
 ### `perf_logger.gd` — the in-headset profiler
 

@@ -280,6 +280,19 @@ const ENEMY_COLOR := Color(0.85, 0.1, 0.85)
 const FRIENDLY_BOLT_COLOR := Color(0.35, 0.8, 1.0)
 const ENEMY_BOLT_COLOR := Color(1.0, 0.25, 0.15)
 
+# --- Tracer readability at range (see _bolt_transform) ----------------------
+
+## The bolt mesh's own dimensions, kept next to the sizes they are built from
+## in _build_multimesh_nodes() so the distance compensation can't drift out of
+## step with the mesh it is compensating.
+const BOLT_MESH_LENGTH := 26.0
+const BOLT_MESH_WIDTH := 1.1  # 2 x bottom_radius
+
+## How long after firing the muzzle flare lasts, and how much wider the bolt
+## is at the instant of the shot.
+const BOLT_FLASH_TIME := 0.09
+const BOLT_FLASH_SCALE := 3.4
+
 const KILL_FEED_MAX_ENTRIES := 6
 const KILL_FEED_ENTRY_LIFETIME := 8.0
 
@@ -342,6 +355,17 @@ const KILL_FEED_ENTRY_LIFETIME := 8.0
 ## nearer (the player flies with the friendly fleet, so that was almost
 ## always the case).
 @export var player_target_bias: float = 0.55
+
+@export_group("Tracer readability")
+## Minimum on-screen size a tracer is allowed to shrink to, in DEGREES of
+## visual angle. Exported in degrees rather than pixels because that is the
+## unit that stays true across headsets and render-scale settings; at roughly
+## 20.6 px/degree per eye here, 0.12 deg is about 2.5 pixels of width and 0.5
+## deg about 10 pixels of length. Raise for a more stylised, tracer-heavy
+## look; set to 0 to disable the compensation entirely and get true
+## world-space scale back.
+@export var bolt_min_angular_width_deg: float = 0.12
+@export var bolt_min_angular_length_deg: float = 0.5
 
 @export_group("Ground objective doctrine")
 ## What fraction of the ATTACKING faction's squads fly ground strikes against
@@ -443,6 +467,14 @@ var _player: Node3D
 ## test scene may not).
 var _tank_objective: Node
 
+## The actual camera, not the XROrigin3D rig — bolt sizes are compensated
+## against the distance to the player's EYE, and in VR the rig and the head
+## can be metres apart. Resolved once; every use is null-guarded so the
+## battle still runs headless with no camera at all.
+var _view_point: Node3D
+var _bolt_min_width_rad: float = 0.0
+var _bolt_min_length_rad: float = 0.0
+
 var _friendly_mmi: MultiMeshInstance3D
 var _enemy_mmi: MultiMeshInstance3D
 var _bolt_mmi: MultiMeshInstance3D
@@ -460,6 +492,12 @@ func _ready() -> void:
 	_terrain = get_node_or_null("../Terrain")
 	_player = get_tree().current_scene.get_node_or_null("Player")
 	_tank_objective = get_node_or_null("../TankObjective")
+	if _player:
+		_view_point = _player.get_node_or_null("XRCamera3D") as Node3D
+	if _view_point == null:
+		_view_point = _player
+	_bolt_min_width_rad = deg_to_rad(bolt_min_angular_width_deg)
+	_bolt_min_length_rad = deg_to_rad(bolt_min_angular_length_deg)
 
 	var city := get_node_or_null("../City")
 	if city and "city_center" in city:
@@ -580,6 +618,14 @@ func _build_multimesh_nodes() -> void:
 	bolt_mat.emission_enabled = true
 	bolt_mat.emission = Color(1.0, 1.0, 1.0, 1.0)
 	bolt_mat.emission_energy_multiplier = 6.0
+	# MULTIPLY, not the default ADD — and this is a real fix, not a tweak.
+	# With ADD, a flat white emission at 6x energy is ADDED on top of the
+	# per-instance faction tint, which completely swamps it: every tracer in
+	# the battle bloomed the same white regardless of who fired it, so the two
+	# fleets' fire was indistinguishable at exactly the ranges where telling
+	# them apart matters most. Multiplying modulates the glow BY the vertex
+	# colour instead, so friendly fire blooms cyan and hostile fire blooms red.
+	bolt_mat.emission_operator = BaseMaterial3D.EMISSION_OP_MULTIPLY
 
 	_bolt_mmi = MultiMeshInstance3D.new()
 	# Bolts are unshaded emissive tracers — a shadow from one would be both
@@ -2072,11 +2118,58 @@ func _combatant_transform(c: Combatant) -> Transform3D:
 ## CylinderMesh's long axis is Y by default; the bolt travels along -Z),
 ## baked in here too so the pooled ambient bolts match the player's bolt
 ## visually.
+## Bolt sizes are DISTANCE-COMPENSATED so a tracer never falls below a
+## readable size on screen. This is the fix for "with VR, it's hard to see the
+## lasers off in the distance", and the problem is arithmetic rather than
+## taste.
+##
+## The bolt mesh is 26m long and 1.1m across. At 3km that subtends 0.021
+## degrees of width — against roughly 20.6 pixels per degree per eye at this
+## headset's resolution, **0.43 of a pixel**. Sub-pixel geometry cannot render
+## reliably: it aliases away, flickers between frames, and mostly just is not
+## there. At 6km it is 0.22 of a pixel. So the great majority of a battle
+## fought across an 8km dome was firing tracers that physically could not
+## appear, which is exactly what was reported.
+##
+## Rather than inflate every bolt (which would look absurd up close, where
+## they are already correct), each bolt is scaled only as much as it needs to
+## hold a MINIMUM ANGULAR SIZE — normal below that range, clamped above it.
+## This is the same "fixed apparent size" reasoning `target_lock.gd`'s
+## visor-anchored readouts and `friendly_tags.gd`'s callsigns already use, and
+## for the same reason: past a certain distance, world-space size stops being
+## what the player perceives and screen-space size is all that is left.
+##
+## Length gets its own floor as well as width. With width alone, a distant
+## bolt clamps to a few pixels wide while its length keeps shrinking, and it
+## degenerates into a square dot rather than a tracer — the streak is what
+## reads as gunfire.
 func _bolt_transform(b: Dictionary) -> Transform3D:
 	var dir: Vector3 = (b["velocity"] as Vector3).normalized()
 	var up_ref := Vector3.FORWARD if absf(dir.dot(Vector3.UP)) > 0.99 else Vector3.UP
 	var mesh_correction := Basis(Vector3.RIGHT, deg_to_rad(-90.0))
-	return Transform3D(Basis.looking_at(dir, up_ref) * mesh_correction, b["position"] as Vector3)
+	var pos: Vector3 = b["position"]
+
+	var scale_w := 1.0
+	var scale_l := 1.0
+	if _view_point:
+		var d: float = _view_point.global_position.distance_to(pos)
+		# Small-angle approximation: at these distances the error is far below
+		# a pixel, and it saves a tan() per bolt per frame on up to 320 bolts.
+		scale_w = maxf(1.0, (d * _bolt_min_width_rad) / BOLT_MESH_WIDTH)
+		scale_l = maxf(1.0, (d * _bolt_min_length_rad) / BOLT_MESH_LENGTH)
+
+	# Muzzle flash: a brief flare in the first fraction of a second of flight,
+	# so the moment of firing reads as an event rather than a bolt simply
+	# existing. Costs one compare per bolt and no extra draw.
+	var age: float = BOLT_LIFETIME - float(b["life"])
+	if age < BOLT_FLASH_TIME:
+		scale_w *= lerpf(BOLT_FLASH_SCALE, 1.0, age / BOLT_FLASH_TIME)
+
+	# Scale in MESH space (the cylinder's height runs along local Y), so it
+	# applies after the orientation rather than skewing it.
+	var basis := Basis.looking_at(dir, up_ref) * mesh_correction \
+			* Basis().scaled(Vector3(scale_w, scale_l, scale_w))
+	return Transform3D(basis, pos)
 
 
 # ---------------------------------------------------------------------------

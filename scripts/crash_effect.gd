@@ -4,12 +4,18 @@ extends Node3D
 ## billowing hundreds of meters into the air. Spawned once per crash by
 ## crash_handler.gd / enemy_ai.gd.
 ##
-## Intentionally permanent — no emission cutoff, no self-destruct timer.
-## The GPUParticles3D loops forever (emitting stays true, particles recycle
-## on their own per-particle lifetime), so the column stays continuously
-## topped-up rather than dissipating. Every crash adds a new one of these
-## and it just stays, same permanence contract as the debris field
-## (crash_effects.gd) — nothing here ever calls queue_free() *itself*.
+## NOTHING IN THIS PROJECT IS PERMANENT ANY MORE. Standing rule, set after
+## this effect specifically was reported as never being seen: *"anything
+## that's persistent like the crash sites doesn't need to exist any more."*
+## Persistent effects are a cost paid every frame for the rest of the session
+## against something the player has usually flown away from, and this one was
+## the last of them.
+##
+## This node still never frees ITSELF — the GPUParticles3D loops and stays
+## topped-up rather than dissipating — because the whole crash site (column
+## plus its debris field) is owned and freed together by crash_effects.gd
+## after CRASH_SITE_LIFETIME. Freeing the column independently would leave
+## orphaned wreckage standing around nothing.
 ##
 ## It is NOT unbounded, though, and that distinction cost real frame rate.
 ## Because this effect never dissipates, its cost is paid on every frame for

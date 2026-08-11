@@ -14,16 +14,12 @@ const DEBRIS_COUNT_MAX := 8
 const DEBRIS_SCATTER_MIN := 4.0  # meters from impact point
 const DEBRIS_SCATTER_MAX := 25.0
 
-## How many crash sites may exist at once. Crash markers are deliberately
-## PERMANENT (see crash_effect.gd) — they never dissipate — so without a cap
-## their cost is cumulative and monotonic for the whole session: every crash
-## adds a looping smoke column plus ~8 wreck meshes that are re-simulated
-## and re-drawn on every frame from then on, forever. Bounding the count
-## keeps the "visible trail of where you've died" idea intact while giving
-## it a fixed ceiling, the same budgeted-pool convention this project already
-## applies to kill fireballs (max_concurrent_explosions), battle audio
+## How many crash sites may exist at once — a hard ceiling on top of the
+## lifetime below, covering the case where the player crashes several times
+## inside one lifetime window. Same budgeted-pool convention this project
+## already applies to kill fireballs (max_concurrent_explosions), battle audio
 ## (max_battle_sounds), thruster trails (trail_count) and flak bursts.
-const MAX_CRASH_SITES := 3
+const MAX_CRASH_SITES := 2
 
 ## Crash sites used to be genuinely PERMANENT — "a visible trail of every
 ## crash so far" — and were only ever bounded (to 5) because that permanence
@@ -45,7 +41,7 @@ const MAX_CRASH_SITES := 3
 ## definitely does see — they are frozen in the wreck for a couple of seconds
 ## before the death screen. That is preserved exactly; only the "forever"
 ## part is gone.
-const CRASH_SITE_LIFETIME := 60.0
+const CRASH_SITE_LIFETIME := 30.0
 
 ## Live crash sites, oldest first. Each entry is the Array of nodes that
 ## make up one site (its smoke column plus every debris piece), so recycling
