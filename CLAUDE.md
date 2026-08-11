@@ -1276,54 +1276,91 @@ compensating flip.
   crosses its path.
 - **Smoke trail** (`scenes/MissileTrail.tscn` / `scripts/missile_trail.gd`)
   — at 400 m/s the missile body is out of view almost immediately, so the
-  trail is what actually lets you see and track your own shot. Thick white
-  smoke (280 particles, 4.5s lifetime, `smoke_flipbook.png` like the rest of
-  this project's smoke), which at 400 m/s lays down a trail well over a
-  kilometre long.
-  It is deliberately **not a child of the missile**, for two reasons that
-  both matter: the particles emit in world space (`local_coords = false`)
-  so they stay where they were laid down instead of being dragged along
-  with the emitter, and a missile `queue_free()`s the instant it hits
-  something — freeing the emitter would take the entire existing trail with
-  it, popping a kilometre of smoke out of the sky in one frame. Instead the
-  trail lives at scene level and merely *follows* the missile; when the
-  missile dies it stops emitting and dissipates naturally.
-  **Reported as "looks like pictures of smoke, but in pixels" — two real
-  bugs, not a design complaint.** First, `smoke_flipbook.png.import` was
-  committed with `detect_3d/compress_to=1`, which tells Godot to silently
-  re-encode the texture to VRAM block compression (S3TC/BPTC) the instant
-  it detects 3D usage — which happens on every real launch, editor or
-  exported build alike, regardless of what's committed. Block compression
-  is genuinely bad at soft alpha gradients, exactly what a translucent
-  smoke sprite sheet is, so the actual game had been rendering a visibly
-  blockier texture than the committed lossless source the whole time —
-  this had been silently happening on every headless reimport too, and had
-  been (wrongly) treated as harmless import-cache churn and reverted before
-  each commit rather than diagnosed. Fixed for good, not just reverted
-  this time: `compress/mode=0` (Lossless) **and** `detect_3d/compress_to=0`
-  (Disabled) together, so Godot's own auto-detection can't silently
-  re-clobber the choice on a future reimport the way it had been.
-  Second, `particles_anim_loop` was `false` against an `anim_speed` of only
-  0.5-0.9 (i.e., 50-90% of one pass through the 64-frame flipbook over the
-  4.5s lifetime) — meaning most particles finished animating and froze on
-  their last frame for the remainder of their life, which is exactly what
-  "a picture of smoke" describes: a static image hanging in the air rather
-  than moving smoke. Set to loop continuously instead, so a particle is
-  never seen holding a single frame.
-  **Also genuinely denser and whiter**, addressing "thick, volumetric":
-  particle count 140 -> 280 (more overlap along the trail instead of
-  visible gaps between discrete quads), `scale_min`/`_max` and
-  `emission_sphere_radius` both increased for a wider, puffier
-  cross-section, `angle_min`/`_max` randomized 0-360° so overlapping quads
-  don't all show the same billboard orientation (which read as "stamped"
-  copies rather than an organic cloud), and the color ramp brightened
-  toward white throughout its life instead of settling into mid-gray.
+  trail is what actually lets you see and track your own shot.
+
+  **It is a RIBBON MESH, not a particle system, and that was a rewrite after
+  three failed passes of tuning the particle version.** Reported from the
+  headset: *"it looks like complete trash. It looks like a pixelated cloud...
+  if you get close to the pixels in the smoke, you can see that they look
+  like shapes of smoke, but we're just doing hundreds of pictures of pictures
+  of smoke. There has to be a better way to do this. Like, can we use some
+  sort of glow shader, a gray streak as opposed to actual texture?"* Both the
+  diagnosis and the proposed fix were correct.
+
+  That description is the technique's own ceiling, not a tuning problem. A
+  particle trail **is** a row of discrete camera-facing sprites — get close,
+  or look along it, and you see the individual quads and the repeated
+  texture, because that is literally what is on screen. Every available dial
+  had already been turned across earlier passes (count 140→280, sizes,
+  opacity, randomized billboard angles, a lossless flipbook, continuous
+  animation) and none of them can stop a sprite from being a sprite.
+
+  A ribbon is a single connected surface swept along the missile's real
+  flight path: nothing to recognise as a sprite, nothing to repeat, nothing
+  to look "stamped". **No texture at all** — the softness comes from vertex
+  alpha and the material.
+
+  - **Soft edges without a texture.** Each cross-section is three vertices —
+    left edge, centre, right edge — with the outer two at **zero alpha** and
+    the centre at full, giving a feathered band across the width.
+  - **Glow, as asked for.** Unshaded material with emission pushed above 1.0,
+    so `Town.tscn`'s existing Glow pass blooms it — the same trick already
+    used for HUD text and tracer bolts. Bloom is what makes it read as hot
+    exhaust rather than a flat grey polygon.
+  - **Widens and fades with age** (2.5m → 22m over 4.5s, on a `sqrt` ramp so
+    it flares fast behind the nozzle then broadens slowly), which is what
+    reads as smoke dissipating.
+  - **Vertex count is bounded by DISTANCE, not frame rate** —
+    `min_point_spacing` (10m) means a section is only added once the missile
+    has actually moved, so the trail costs the same at 45fps as at 90.
+
+  **CROSSED RIBBONS — a single ribbon is genuinely broken, and a headless
+  test caught it.** The obvious construction orients each cross-section
+  perpendicular to both the flight direction and the direction to the camera,
+  so it always faces the viewer. That **degenerates to the zero vector
+  exactly when the missile flies directly away from you** — which is the
+  single most common way the player will ever see their own missile. The
+  whole trail silently vanishes. The test happened to fly its missile straight
+  down the camera axis and got an empty mesh with `ImmediateMesh` complaining
+  "No vertices were added".
+  Fixed by building **two ribbons at 90° to each other** around the flight
+  axis, oriented from a stable world reference (`UP`, swapped to `RIGHT` when
+  near-vertical — the same guard used for `Basis.looking_at()` elsewhere in
+  this project) rather than from the camera. No view angle can make both
+  edge-on; it cannot degenerate; and because the frame is world-stable rather
+  than camera-derived it cannot swim or shimmer as the player turns their
+  head, which matters more in VR than anywhere else. `max_alpha` is 0.62 per
+  ribbon rather than 1.0 so the overlap along the centreline doesn't read as
+  a bright seam down the middle.
+
+  **Still not a child of the missile**, for the same two reasons as the
+  particle version: the geometry is built in world space so it stays where it
+  was laid down, and a missile `queue_free()`s the instant it hits something
+  — freeing the emitter would take the whole existing trail with it and pop a
+  kilometre of smoke out of the sky in one frame. It lives at scene level and
+  merely *follows*.
+
+  **Cost went down, not up.** The old emitter measured **14.7x the entire
+  per-eye screen** in alpha blending at its worst and ~1.7x after the
+  overdraw audit trimmed it. The ribbon is ~500 triangles in one draw call
+  averaging ~22m wide over its 1800m length, with no per-particle overdraw
+  stacking — several times cheaper again, and with no texture sampling at
+  all. `flak_missile.gd`'s dial changed from `trail_particle_amount` to
+  `trail_width_scale` (0.55) accordingly.
+
+  Verified headlessly (16/16): it is a `MeshInstance3D` with an
+  `ImmediateMesh` and no texture, points accumulate and stay bounded,
+  geometry is emitted at exactly 24 verts/segment, zero-alpha edge and
+  opaque centre vertices are both present, width grows and alpha falls with
+  age, `width_scale` narrows it, and the trail survives the missile's death
+  with its smoke still in the air.
+
   **True volumetric (raymarched) smoke was deliberately not attempted** —
   this project already tried and rejected real volumetric fog three times
   for cost and jitter reasons (see "Volumetric fog is deliberately not
-  used" above); a denser, better-textured, continuously-animating particle
-  trail is the practical equivalent within that same established
-  performance ceiling, and unlike the AI's pooled thruster trails, only
+  used" above); a glowing ribbon is the practical equivalent within that same
+  established performance ceiling, and unlike the AI's pooled thruster
+  trails, only
   one or two missile trails typically exist at once, so the higher particle
   count here doesn't fight the same concurrent-cost budget.
 - **Terrain and buildings now stop a missile** like they stop everything
@@ -3258,11 +3295,86 @@ live playtest" better than any static cost in the scene does, and no
 headless test had ever caught it because **the sims never crash the
 player.**
 
-Fixed without giving up permanence: `CrashEffects.MAX_CRASH_SITES` (5)
+First fix, without giving up permanence: `CrashEffects.MAX_CRASH_SITES` (5)
 recycles the oldest site — column and its debris together, so no orphaned
 wreckage is left standing around a freed column — exactly the budgeted-pool
 convention already used for kill fireballs, battle audio, thruster trails
 and flak bursts. Verified: 9 consecutive crashes leave exactly 5 live.
+
+**Then permanence was dropped entirely, because nobody was ever looking at
+it.** Reported from the headset: *"I don't ever see any crash sites. It's
+almost overkill to have them at all."* That is correct, and there's a
+concrete reason the original design stopped paying off — **it predates the
+motherships.** The player used to respawn a few kilometres from where they
+died, so a permanent smoke column was a landmark they would fly back past.
+Respawn now puts them on a flight deck **22km away**, so they never return to
+the site at all, and it is already out of sight behind them before the death
+screen has finished fading.
+
+So the permanence was pure cost against something unobserved: 5 concurrent
+420-particle alpha-blended smoke columns, re-simulated and re-drawn every
+frame for the rest of the session. Now `MAX_CRASH_SITES` is 3 and each site
+frees itself after `CRASH_SITE_LIFETIME` (60s). **What was actually worth
+keeping is untouched** — the moment of impact, which the player definitely
+does see, since they sit frozen in the wreck for a couple of seconds before
+the death screen. Only the "forever" part is gone.
+
+### `perf_logger.gd` — the in-headset profiler
+
+`PerfLogger` (a `Node` in `Town.tscn`, **`mode = OFF` by default so it costs
+nothing in normal play**). Exists because the frame-rate question cannot be
+answered any other way: headless testing genuinely cannot measure GPU fill,
+draw-call cost, or VR stereo render time, so the only real instrument is the
+running game on the actual headset.
+
+**Two modes, and the difference is the whole point.**
+
+- **PASSIVE** just records. That yields CORRELATION only — "frames got long
+  while 9 flak bursts were up" — which is weak evidence here, because every
+  suspect co-varies: flak, crash sites, missile trails and heavy combat all
+  happen over the city at the same time and are close to statistically
+  inseparable by observation.
+- **SWEEP** switches one suspect off at a time on a timer while the player
+  flies normally, tagging every frame with the live configuration. Comparing
+  the same suspect on vs off is a controlled experiment, so the result is
+  CAUSAL. Configurations: `BASELINE`, `NO_FLAK`, `NO_PARTICLES`,
+  `NO_SHADOWS`, `NO_GLOW`, `NO_CLOUDS`, `SCALE_85`.
+
+Details that matter:
+
+- **`BASELINE` is re-measured every cycle**, not once at the start. The scene
+  changes constantly as the player flies, so a baseline taken at t=0 would be
+  compared against configurations measured under completely different
+  conditions. Interleaving gives every config a near-in-time control.
+- **`settle_seconds` (1.5) is discarded after each switch** — toggling
+  shadows or render scale forces reallocation that spikes for a moment, and
+  that spike would otherwise be charged to the configuration itself.
+- **Frame time is accumulated EVERY frame**, not on the sample tick; a median
+  over every frame in a configuration is a far better statistic than four
+  spot readings a second, and costs one array append.
+- **Median and p95, never mean.** Frame time is long-tailed — a handful of
+  200ms hitches drags a mean far enough to hide a real 2ms difference between
+  configurations.
+- **Configurations are applied from CAPTURED baseline values**, never toggled
+  relative to current state, so an interrupted sweep can't leave a setting
+  stuck off.
+- **`NO_PARTICLES` hides rather than stops** emitters: `emitting = false`
+  would drain existing trails over their lifetime, fading the effect in over
+  several seconds and smearing the measurement into the next configuration.
+
+Output goes to `user://` — on Windows,
+`%APPDATA%\Godot\app_userdata\JuggyVRGame\`:
+`perf_summary.txt` (the short per-configuration table, the one to read) and
+`perf_log.csv` (every raw sample, plus live counts of flak bolts/shells/
+bursts/missiles, crash sites, explosions, sparks, ambient bolts, particle
+budget, altitude, distance to the city, and whether the player is inside the
+cloud band).
+
+**A stated limitation:** Godot 4.4 exposes no GPU frame time, so this measures
+frame time, not GPU time. That is fine for the question — if switching a
+suspect off makes frames measurably shorter, it was costing you — and
+`PROC`/`PHYS` are logged alongside, so if frame time is long while both are
+small, the time is going to the GPU.
 
 ### Static render costs found
 

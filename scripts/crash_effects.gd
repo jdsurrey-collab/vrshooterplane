@@ -23,7 +23,29 @@ const DEBRIS_SCATTER_MAX := 25.0
 ## it a fixed ceiling, the same budgeted-pool convention this project already
 ## applies to kill fireballs (max_concurrent_explosions), battle audio
 ## (max_battle_sounds), thruster trails (trail_count) and flak bursts.
-const MAX_CRASH_SITES := 5
+const MAX_CRASH_SITES := 3
+
+## Crash sites used to be genuinely PERMANENT — "a visible trail of every
+## crash so far" — and were only ever bounded (to 5) because that permanence
+## made a session's frame rate degrade monotonically.
+##
+## Reported from the headset: "I don't ever see any crash sites. It's almost
+## overkill to have them at all." That is correct, and there is a concrete
+## reason the original design stopped paying off: it predates the motherships.
+## The player used to respawn a few kilometres from where they died, so a
+## permanent smoke column was something they would fly back past. Respawn now
+## puts them on a flight deck **22km away** (see spawn_distance_from_city), so
+## they never return to the site at all — and the column is behind them,
+## already out of sight, before the death screen has even faded.
+##
+## So the permanence was pure cost against an effect nobody was looking at: 5
+## concurrent 420-particle smoke columns, each large and alpha-blended,
+## re-simulated and re-drawn every frame for the rest of the session. What
+## still earns its keep is the moment of impact itself, which the player
+## definitely does see — they are frozen in the wreck for a couple of seconds
+## before the death screen. That is preserved exactly; only the "forever"
+## part is gone.
+const CRASH_SITE_LIFETIME := 60.0
 
 ## Live crash sites, oldest first. Each entry is the Array of nodes that
 ## make up one site (its smoke column plus every debris piece), so recycling
@@ -53,11 +75,10 @@ static func _retire_oldest_sites() -> void:
 		_crash_sites.remove_at(0)
 
 
-## Spawns the smoke/main-crater effect (permanent — never cleans itself up,
-## see crash_effect.gd) plus scattered wreckage chunks, each in their own
-## small scorch crater. The debris is added with no lifetime either — it's
-## meant to persist for the rest of the session, a visible trail of every
-## crash so far.
+## Spawns the smoke/main-crater effect plus scattered wreckage chunks, each in
+## their own small scorch crater. The whole site is freed together after
+## CRASH_SITE_LIFETIME — see that constant for why this stopped being
+## permanent.
 ##
 ## Debris does NOT spawn pre-settled on the ground — a ship's gravity
 ## compensator (flight_controller.gd's GRAVITY COMPENSATOR STANDARD) is
@@ -110,6 +131,17 @@ static func spawn(scene_root: Node, terrain: Node, impact: Vector3) -> void:
 			chunk.position.y = s * 0.5  # rest roughly on the ground, not half-buried
 
 	_crash_sites.append(site)
+
+	# Self-cleaning now rather than permanent — see CRASH_SITE_LIFETIME. The
+	# cap above still exists as a hard ceiling for the case where a player
+	# crashes several times inside one lifetime window; this timer is what
+	# stops a site outliving the player's interest in it.
+	scene_root.get_tree().create_timer(CRASH_SITE_LIFETIME).timeout.connect(
+			func() -> void:
+				for n in site:
+					if is_instance_valid(n):
+						n.queue_free()
+				_crash_sites.erase(site))
 
 
 ## Small, self-cleaning explosion/crater/smoke for a single laser hit —

@@ -1,4 +1,4 @@
-[gd_scene load_steps=18 format=3 uid="uid://ceaei3xynkod2"]
+[gd_scene load_steps=19 format=3 uid="uid://ceaei3xynkod2"]
 
 [ext_resource type="PackedScene" uid="uid://c2dyoeywkgf30" path="res://scenes/Player.tscn" id="1_player"]
 [ext_resource type="Texture2D" uid="uid://neat1aug36g3" path="res://Assets/Skybox/panorama.tga" id="4_panorama"]
@@ -14,6 +14,7 @@
 [ext_resource type="Script" uid="uid://dex42byg4lhxr" path="res://scripts/ground_flak.gd" id="14_groundflak"]
 [ext_resource type="Script" uid="uid://k3g26ysl12mj" path="res://scripts/tank_objective.gd" id="15_tankobjective"]
 [ext_resource type="Script" uid="uid://1wgta10o6w0v" path="res://scripts/friendly_tags.gd" id="16_friendlytags"]
+[ext_resource type="Script" uid="uid://cv0ubfryy7x2w" path="res://scripts/perf_logger.gd" id="17_perflogger"]
 
 [sub_resource type="PanoramaSkyMaterial" id="SkyMat_1"]
 panorama = ExtResource("4_panorama")
@@ -116,3 +117,6 @@ script = ExtResource("16_friendlytags")
 
 [node name="GameFlow" type="Node" parent="."]
 script = ExtResource("8_gameflow")
+
+[node name="PerfLogger" type="Node" parent="."]
+script = ExtResource("17_perflogger")
