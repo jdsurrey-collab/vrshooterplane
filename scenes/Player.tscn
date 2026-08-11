@@ -46,7 +46,7 @@
 [ext_resource type="AudioStream" uid="uid://be0nyy8fmopa6" path="res://Assets/Audio/afterburner.ogg" id="51_afterburnersound"]
 [ext_resource type="Script" path="res://scripts/role_stamp.gd" id="52_rolestamp"]
 [ext_resource type="AudioStream" path="res://Assets/Audio/hit_confirm.tres" id="53_hitconfirm"]
-[ext_resource type="Script" path="res://scripts/gunnery.gd" id="54_gunnery"]
+[ext_resource type="Script" uid="uid://rumqn6nkdcy0" path="res://scripts/gunnery.gd" id="54_gunnery"]
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_fade"]
 render_priority = -1

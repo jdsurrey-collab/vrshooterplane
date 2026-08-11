@@ -3757,8 +3757,84 @@ bolt material had `emission_energy_multiplier = 6.0` with the default
 `EMISSION_OP_ADD`, which adds flat white emission on top of the per-instance
 faction tint and completely swamps it — so friendly and hostile fire were
 indistinguishable at exactly the ranges where telling them apart matters most.
-Now `EMISSION_OP_MULTIPLY`, which modulates the glow BY the vertex colour, so
-friendly fire blooms cyan and hostile fire blooms red.
+Fixed at the time with `EMISSION_OP_MULTIPLY` on a plain `StandardMaterial3D`
+— since superseded by `laser_bolt.gdshader` below, which expresses the
+identical multiply directly in its own fragment shader rather than via that
+material flag, but carries the fix forward unchanged.
+
+### Glowing energy bolts — replacing the flat emissive cylinder
+
+Reported live: *"the lasers... feel kind of old fashioned."* The cause was
+literal, not a matter of taste: every bolt — the player's own and the
+ambient mass-battle tracers alike — was a plain 8-sided `CylinderMesh` with
+one flat `StandardMaterial3D` colour. No gradient, no soft edge, no glow
+shader beyond the scene's own bloom threshold. That reads as a solid
+physical object — a dart or a tracer round — not as a beam of energy.
+
+**`Assets/Shaders/laser_bolt.gdshader` applies the same two ideas already
+proven by this project's other two "hot glowing thing" effects**, rather
+than inventing a third visual language:
+
+- **View-facing density falloff**, identical to `explosion_orb.gdshader`:
+  `dot(NORMAL, VIEW)` is 1.0 at the point of the surface facing the camera
+  and 0.0 at the silhouette, so using it as density makes the bolt brightest
+  through its centre and feather to nothing at the rim — a soft glowing rod
+  instead of a hard-edged tube. Works correctly even viewed nearly end-on
+  (a shot flying straight at the player), where the cylinder's own end caps
+  take over and read as a bright point growing toward the camera — the
+  physically correct read for that case.
+- **Hot-core-to-cool-tail gradient**, identical in spirit to
+  `ribbon_trail.gd`'s head/tail colour. The bolt mesh already tapers —
+  narrow "top_radius" at the leading tip, wide "bottom_radius" at the
+  trailing end (this project's own header already called it "a tapered/
+  arrow-shaped bolt") — so the gradient is driven directly off the LOCAL
+  RADIUS at each vertex (`length(VERTEX.xz)` against `top_radius`/
+  `bottom_radius` uniforms), not off which axis sign happens to be "front".
+  That's correct regardless of the mesh's exact orientation and can't drift
+  out of sync with the geometry the way a separately-tracked "which end is
+  the tip" flag could.
+
+**One shader, two consumers, one consistent look.** `LaserBolt.tscn` (the
+player's own bolts, and alien fire aimed at the player via the same scene)
+sets a fixed `tail_color` (its own red). `faction_battle.gd`'s ambient
+MultiMesh bolt pool leaves `tail_color` **neutral white**, so
+`tail_color * COLOR` passes the per-instance faction tint straight through
+unmodified — the shader-level expression of the `EMISSION_OP_MULTIPLY` fix
+above, now built into the blend itself rather than a material flag. Only
+the leading tip is shared and faction-neutral (hot white on every bolt in
+the battle); the trailing colour is what actually carries the who-fired-it
+information. Additive blending, no depth write (matching the fireball's own
+reasoning — a bolt emits light rather than occluding, and additive needs no
+sort order, which matters with up to `max_ambient_bolts` (320) potentially
+overlapping at once); depth *testing* stays on so terrain and buildings
+still occlude a bolt passing behind them.
+
+**A real correctness trap, caught before it shipped rather than after.**
+`laser_bolt.gd`'s existing `_thin_player_mesh()` swaps in a slimmer mesh for
+the player's own bolts (see that function's own header — a brand-new
+`CylinderMesh`, never editing the scene's shared SubResource in place, so
+alien-fired bolts keep the original thicker geometry). The new shader's
+gradient reads `top_radius`/`bottom_radius` as **uniforms** to know where
+along the bolt's length each vertex sits — thinning only the mesh and
+leaving those uniforms pointing at the old, thicker dimensions would
+compute the gradient against the wrong radii. Worse, since the material is
+a shared `SubResource`, mutating those uniforms in place would silently
+corrupt the gradient on every *other* live bolt sharing that material,
+alien-fired ones included. `_thin_player_mesh()` now duplicates the
+material the same way it already duplicates the mesh, and only then updates
+the duplicate's radius uniforms — verified: a second alien bolt fired after
+a player bolt has been thinned still reads the original, unmutated 0.28
+`bottom_radius`.
+
+Verified headlessly (24/24): the shader loads without a compile error and
+carries the expected `render_mode` flags; the default (alien-fired) bolt
+keeps the shared material and its original radii; a player-fired bolt gets
+a duplicated material with radii matching its thinned mesh; a subsequent
+alien bolt proves the shared material was never mutated; the ambient pool's
+material shares the identical shader, head colour, and gradient formula,
+with `tail_color` confirmed neutral so per-instance faction `COLOR` still
+carries through unmodified. Not yet confirmed in the headset, like every
+other visual first pass in this project.
 
 ### `perf_logger.gd` — the in-headset profiler
 

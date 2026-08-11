@@ -103,6 +103,7 @@ extends Node3D
 ## — not an explicit exclusion check, just a consequence of the split.
 
 const LASER_BOLT := preload("res://scenes/LaserBolt.tscn")
+const LASER_BOLT_SHADER := preload("res://Assets/Shaders/laser_bolt.gdshader")
 const SHIP_EXPLOSION := preload("res://scenes/ShipExplosion.tscn")
 const FLARE := preload("res://scenes/Flare.tscn")
 const MISSILE := preload("res://scenes/Missile.tscn")
@@ -608,29 +609,41 @@ func _build_multimesh_nodes() -> void:
 
 	# Long and fat compared to the player's own bolt. These are being viewed
 	# from hundreds or thousands of meters away across a whole battle, where
-	# the original 2.5m x 0.06m sliver was far below one pixel. Vertex colour
-	# carries the per-bolt faction tint (see _bolt_transform / set_instance_color).
+	# the original 2.5m x 0.06m sliver was far below one pixel. Per-instance
+	# COLOR carries the faction tint (see _bolt_transform / MultiMesh's
+	# use_colors below), read directly by laser_bolt.gdshader.
 	var bolt_mesh := CylinderMesh.new()
 	bolt_mesh.top_radius = 0.15
 	bolt_mesh.bottom_radius = 0.55
 	bolt_mesh.height = 26.0
 	bolt_mesh.radial_segments = 6
 
-	var bolt_mat := StandardMaterial3D.new()
-	bolt_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	bolt_mat.vertex_color_use_as_albedo = true
-	bolt_mat.albedo_color = Color(1.0, 1.0, 1.0, 1.0)
-	bolt_mat.emission_enabled = true
-	bolt_mat.emission = Color(1.0, 1.0, 1.0, 1.0)
-	bolt_mat.emission_energy_multiplier = 6.0
-	# MULTIPLY, not the default ADD — and this is a real fix, not a tweak.
-	# With ADD, a flat white emission at 6x energy is ADDED on top of the
-	# per-instance faction tint, which completely swamps it: every tracer in
-	# the battle bloomed the same white regardless of who fired it, so the two
-	# fleets' fire was indistinguishable at exactly the ranges where telling
-	# them apart matters most. Multiplying modulates the glow BY the vertex
-	# colour instead, so friendly fire blooms cyan and hostile fire blooms red.
-	bolt_mat.emission_operator = BaseMaterial3D.EMISSION_OP_MULTIPLY
+	# laser_bolt.gdshader — see that file's header. Same glowing hot-core/
+	# cool-tail energy-bolt look as the player's own LaserBolt.tscn, so the
+	# whole battle's tracers read as one consistent weapon rather than the
+	# player firing something visually unrelated to the AI's own guns.
+	var bolt_mat := ShaderMaterial.new()
+	bolt_mat.shader = LASER_BOLT_SHADER
+	bolt_mat.set_shader_parameter("top_radius", bolt_mesh.top_radius)
+	bolt_mat.set_shader_parameter("bottom_radius", bolt_mesh.bottom_radius)
+	bolt_mat.set_shader_parameter("energy", 6.0)
+	# Set explicitly rather than left to the shader's own GLSL default, even
+	# though the two happen to match — an implicit reliance here would be a
+	# silent trap for a future edit to the shader's default, and
+	# get_shader_parameter() (unlike the shader itself at render time) does
+	# NOT fall back to the GLSL default for anything never explicitly set.
+	bolt_mat.set_shader_parameter("head_color", Color(1.0, 0.97, 0.9))
+	# Neutral WHITE, deliberately — this is what carries forward the earlier
+	# "every tracer bloomed the same flat white, swamping the faction tint"
+	# fix (see CLAUDE.md's tracer-readability section) into the new shader's
+	# own blend: the fragment shader computes `tail_color * COLOR`, so a
+	# white tail_color makes that multiply a pass-through and the per-bolt
+	# faction COLOR (cyan friendly / red hostile) is what actually shows at
+	# the tail, unmodified. Only the LEADING TIP is a shared, faction-neutral
+	# hot white — every bolt in the battle now has the identical two-tier
+	# "white-hot punch, faction-coloured cooling tail" look, matching the
+	# player's own weapon exactly.
+	bolt_mat.set_shader_parameter("tail_color", Color(1.0, 1.0, 1.0))
 
 	_bolt_mmi = MultiMeshInstance3D.new()
 	# Bolts are unshaded emissive tracers — a shadow from one would be both

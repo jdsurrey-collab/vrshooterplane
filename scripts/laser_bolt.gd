@@ -100,6 +100,18 @@ func _ready() -> void:
 ## radial_segments are read off the existing mesh rather than duplicated
 ## here, so the length (already tuned for player-fire visibility/timing)
 ## can't silently drift out of sync between the two.
+##
+## The MATERIAL needs the identical treatment now, for a reason the mesh
+## swap alone didn't have: laser_bolt.gdshader's hot-core/cool-tail gradient
+## reads `top_radius`/`bottom_radius` as UNIFORMS to know where along the
+## bolt's length each vertex sits. Thinning only the mesh and leaving those
+## uniforms pointing at the old (thicker) dimensions would compute the
+## gradient against the wrong radii — and since the material is a shared
+## SubResource, mutating those uniforms in place would silently corrupt the
+## gradient on every OTHER live bolt using the same material, alien-fired
+## ones included. So the material is duplicated here too, the same
+## don't-touch-the-shared-resource discipline as the mesh above, and only
+## then are its radius uniforms updated to match the new thin geometry.
 func _thin_player_mesh() -> void:
 	var mesh_instance := get_node_or_null("Mesh") as MeshInstance3D
 	if not mesh_instance or not (mesh_instance.mesh is CylinderMesh):
@@ -111,6 +123,13 @@ func _thin_player_mesh() -> void:
 	thin.height = base.height
 	thin.radial_segments = base.radial_segments
 	mesh_instance.mesh = thin
+
+	var base_mat := mesh_instance.get_surface_override_material(0)
+	if base_mat is ShaderMaterial:
+		var thin_mat: ShaderMaterial = base_mat.duplicate()
+		thin_mat.set_shader_parameter("top_radius", player_bolt_top_radius)
+		thin_mat.set_shader_parameter("bottom_radius", player_bolt_bottom_radius)
+		mesh_instance.set_surface_override_material(0, thin_mat)
 
 
 func _resolve_player_refs() -> void:

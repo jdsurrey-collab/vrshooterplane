@@ -15,7 +15,7 @@
 [ext_resource type="Script" uid="uid://k3g26ysl12mj" path="res://scripts/tank_objective.gd" id="15_tankobjective"]
 [ext_resource type="Script" uid="uid://1wgta10o6w0v" path="res://scripts/friendly_tags.gd" id="16_friendlytags"]
 [ext_resource type="Script" uid="uid://cv0ubfryy7x2w" path="res://scripts/perf_logger.gd" id="17_perflogger"]
-[ext_resource type="Script" path="res://scripts/damage_smoke.gd" id="18_damagesmoke"]
+[ext_resource type="Script" uid="uid://bmjbu78sbyk2x" path="res://scripts/damage_smoke.gd" id="18_damagesmoke"]
 
 [sub_resource type="PanoramaSkyMaterial" id="SkyMat_1"]
 panorama = ExtResource("4_panorama")
