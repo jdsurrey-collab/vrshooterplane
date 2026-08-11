@@ -2859,6 +2859,46 @@ All of it is first-pass and unverified in the headset, like every other
 visual tuning in this project. The exported roughness knobs and the
 Environment's grade values are the dials.
 
+### The skybox now drifts — `addons/flowing-sky`
+
+A drop-in third-party `shader_type sky` shader (ELF32bit, MIT-style asset
+pack — no `EditorPlugin` script, so it needs no entry in `project.godot`'s
+`[editor_plugins]` list; the `.gdshader` loads like any other project
+resource). `Town.tscn`'s `SkyMat_1` sub-resource changed from a static
+`PanoramaSkyMaterial` to a `ShaderMaterial` running
+`addons/flowing-sky/shaders/panorama.gdshader`, wired to the exact same
+`Assets/Skybox/panorama.tga` texture that was already there — this is
+purely a material swap, no new art.
+
+The technique: it pans the panorama's UV coordinates over time along a
+`wind_direction`, but crossfades between two time-offset samples of the
+same texture (`phase1_uv`/`phase2_uv`, mixed by how far through the cycle
+each is) rather than panning a single sample — a naive single-phase pan
+would show the texture visibly sliding back to its start every time it
+wrapped; the two-phase cross-fade hides that seam. It also has dedicated
+handling for the sphere's poles (`pole_whirlwind`), where a plain UV pan
+degenerates into visible seams/holes.
+
+Left at the addon's own stock defaults (`wind_speed` 0.15, `wind_intensity`
+0.05, both `ground_enabled`/`sun_enabled` off) rather than hand-tuned —
+first-pass, like every other visual choice in this project, and specifically
+because the actual pixel content of `panorama.tga` (whether it has a baked
+sun disc, where the horizon sits) was never inspected before this change.
+`ground_enabled`/`sun_enabled` exist specifically to mask the flow near the
+horizon or a sun disc if either turns out to show a visible seam or
+smear in the headset — the first two dials to reach for if so.
+
+Only the distant backdrop changes. This is unrelated to and does not
+replace `cloud_deck.gd`/`cloud_top.gd` below — those are the actual
+gameplay cloud LAYER (a real altitude band with collision-relevant fog and
+building shadows); this is the painted sky far behind and above it.
+
+Verified headlessly (6/6): the shader compiles, the sky material is the new
+`ShaderMaterial`, and it reads the existing panorama texture rather than a
+new asset. Whether the motion itself reads as convincing wind (speed, any
+visible seam at the poles or horizon) needs the headset, like every other
+visual first pass here.
+
 ### Altitude-driven cloud band + lit deck (`atmosphere.gd` + `cloud_deck.gd`)
 
 Fog as a genuine **cloud layer at a fixed absolute altitude, covering the

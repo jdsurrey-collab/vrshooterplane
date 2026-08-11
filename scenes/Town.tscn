@@ -1,4 +1,4 @@
-[gd_scene load_steps=20 format=3 uid="uid://ceaei3xynkod2"]
+[gd_scene load_steps=21 format=3 uid="uid://ceaei3xynkod2"]
 
 [ext_resource type="PackedScene" uid="uid://c2dyoeywkgf30" path="res://scenes/Player.tscn" id="1_player"]
 [ext_resource type="Texture2D" uid="uid://neat1aug36g3" path="res://Assets/Skybox/panorama.tga" id="4_panorama"]
@@ -16,9 +16,25 @@
 [ext_resource type="Script" uid="uid://1wgta10o6w0v" path="res://scripts/friendly_tags.gd" id="16_friendlytags"]
 [ext_resource type="Script" uid="uid://cv0ubfryy7x2w" path="res://scripts/perf_logger.gd" id="17_perflogger"]
 [ext_resource type="Script" uid="uid://bmjbu78sbyk2x" path="res://scripts/damage_smoke.gd" id="18_damagesmoke"]
+[ext_resource type="Shader" uid="uid://c0fps8o31p6kc" path="res://addons/flowing-sky/shaders/panorama.gdshader" id="19_flowingsky"]
 
-[sub_resource type="PanoramaSkyMaterial" id="SkyMat_1"]
-panorama = ExtResource("4_panorama")
+[sub_resource type="ShaderMaterial" id="SkyMat_1"]
+shader = ExtResource("19_flowingsky")
+shader_parameter/sky_color = Color(1, 1, 1, 1)
+shader_parameter/sky_texture = ExtResource("4_panorama")
+shader_parameter/wind_direction = Vector2(-1, 1)
+shader_parameter/wind_intensity = 0.05
+shader_parameter/wind_speed = 0.15
+shader_parameter/ground_enabled = false
+shader_parameter/ground_threshold = 0.0
+shader_parameter/ground_blend = 0.2
+shader_parameter/sun_enabled = false
+shader_parameter/sun_rotation = Vector2(60, 30)
+shader_parameter/sun_threshold = 0.98
+shader_parameter/sun_blend = 0.02
+shader_parameter/sun_show = false
+shader_parameter/pole_threshold = 0.96
+shader_parameter/pole_whirlwind = true
 
 [sub_resource type="Sky" id="Sky_1"]
 sky_material = SubResource("SkyMat_1")
