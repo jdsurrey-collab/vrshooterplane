@@ -137,7 +137,12 @@ const RETARGET_STAGGER := 8
 ## size for this workload on its own, and there's no requirement that the
 ## two agree.
 const GRID_CELL_SIZE := 450.0
-const ENGAGE_RANGE := 800.0  # inside this a pilot will actually shoot
+## 800 -> 1200, unifying the AI onto the same lethal range the player's own
+## guns now use (gunnery.gd's `lethal_range`) — a confirmed decision from the
+## gunnery overhaul rather than an oversight: one range model governs
+## everyone instead of the player out-ranging the AI or vice versa. Verified
+## against a fresh 600s pacing sim after the change (see CLAUDE.md).
+const ENGAGE_RANGE := 1200.0  # inside this a pilot will actually shoot
 const MAX_ACQUISITION_RANGE := 3000.0  # targets beyond this aren't acquired at all — see _retarget_if_needed
 const FIRE_CONE := deg_to_rad(14.0)  # must have the target roughly ahead, not abeam, to fire
 
@@ -1703,35 +1708,15 @@ func _aim_point(c: Combatant, target_pos: Vector3, target_vel: Vector3, range_to
 
 
 ## Where to shoot so a bolt at `bolt_speed` meets a target moving at
-## `target_vel`. Same quadratic firing solution target_lock.gd's PIP ring
-## uses for the player — see docs/gunnery-reference.md. Falls back to the
-## target's current position when there's no valid positive-time solution.
+## `target_vel`. Thin wrapper around the single shared solver now —
+## Gunnery.solve_intercept() (gunnery.gd) — which replaced what used to be
+## THREE separately-maintained copies of the identical quadratic (this one,
+## target_lock.gd's PIP, and a fourth ad hoc calculation in
+## weapon_system.gd). Kept as a wrapper rather than replacing both call
+## sites directly, so nothing about the AI's own gunnery call sites had to
+## change — only the maths underneath got de-duplicated.
 func _lead_point(shooter_pos: Vector3, target_pos: Vector3, target_vel: Vector3, bolt_speed: float) -> Vector3:
-	var rel := target_pos - shooter_pos
-	var a := target_vel.dot(target_vel) - bolt_speed * bolt_speed
-	var b := 2.0 * rel.dot(target_vel)
-	var cc := rel.dot(rel)
-
-	var t := -1.0
-	if absf(a) < 0.0001:
-		if absf(b) > 0.0001:
-			t = -cc / b
-	else:
-		var disc := b * b - 4.0 * a * cc
-		if disc >= 0.0:
-			var sqrt_d := sqrt(disc)
-			var t1 := (-b + sqrt_d) / (2.0 * a)
-			var t2 := (-b - sqrt_d) / (2.0 * a)
-			if t1 > 0.0 and t2 > 0.0:
-				t = minf(t1, t2)
-			elif t1 > 0.0:
-				t = t1
-			elif t2 > 0.0:
-				t = t2
-
-	if t <= 0.0:
-		return target_pos
-	return target_pos + target_vel * t
+	return Gunnery.solve_intercept(shooter_pos, target_pos, target_vel, bolt_speed)
 
 
 func _fire_at_player(c: Combatant, aim_point: Vector3) -> void:

@@ -1323,11 +1323,166 @@ including that locking genuinely isn't blocked by an active cooldown, that a
 launch attempt inside the cooldown is actually refused, and that both reset
 points (respawn, return to menu) actually clear `reload_remaining`.
 
-**Not yet built** (later phases of the same overhaul, deferred for session
-time): the shared `Gunnery` solver, dynamic per-frame convergence, the
-gimbal assist and its 1200m/2000m range bands, the range-coded PIP, and
-boresight/seat calibration. `enemy_hit_radius` (4.0) also still doesn't
-match the AI's own `BOLT_HIT_RADIUS` (6.0) — a fairness gap, not yet closed.
+## Gunnery overhaul — Phase 2/3: the shared solver, dynamic convergence, gimbal assist
+
+Closes what Phase 1 explicitly left open: feedback alone doesn't fix whether
+a shot actually lands. This is the part that does.
+
+### The real bug, precisely stated
+
+Before this: `target_lock.gd`'s PIP ring **already** solved its intercept
+from the gun mounts' own midpoint, not the camera — only the PIP's
+on-screen *display* direction used the camera, the same visor-anchored
+technique every HUD element in this project already uses, and that part was
+always correct. The actual gap was that `weapon_system.gd`'s guns never read
+that solution at all: `_setup_convergence()` toed both mounts in **once**,
+in `_ready()`, at a fixed 229m, and never touched them again. So even a shot
+lined up perfectly on the PIP only truly landed if the target happened to be
+at almost exactly 229m — at any other range the two barrels crossed at the
+wrong point in space and straddled the target regardless of where the
+ship's nose pointed. **Dynamic, per-frame convergence is the actual fix**;
+everything else in this phase either enables it or builds on top of it.
+
+Along the way, the identical intercept quadratic had been independently
+copied **three times** — `target_lock.gd`'s PIP, `faction_battle.gd`'s AI
+gunnery, and (implicitly) the fixed-229m gun aim that should have been using
+it and wasn't. All three now read one canonical implementation.
+
+### `scripts/gunnery.gd` — `class_name Gunnery`
+
+A node under `Player` (`Ship`'s sibling, positioned **before**
+`WeaponSystem` in the scene tree specifically so its `_physics_process`
+computes first within the same frame — same-callback-group sibling order is
+what determines same-frame read freshness in Godot, and `WeaponSystem` needs
+this frame's solution, not last frame's). Computes one firing solution per
+physics frame:
+
+- `static solve_intercept()` — the single shared quadratic. `target_lock.gd`
+  and `faction_battle.gd._lead_point()` (kept as a one-line wrapper, so
+  neither of that file's two call sites had to change) both delegate to it
+  now.
+- `bore_direction` — the ship's true forward (`XROrigin3D`'s own `-Z`, the
+  same rig-not-`Ship`-basis convention already established for the reasons
+  `missile_system.gd`'s header documents at length).
+- `lead_point` / `range_to_target` / `aim_error_deg` — the Y-locked target's
+  true intercept point, range, and how far the ship's own bore currently is
+  from actually pointing at it.
+- `range_band` — `LETHAL` / `DEGRADED` / `OUT_OF_RANGE` against
+  `lethal_range` (1200m) / `max_range` (2000m).
+- `assist_active` — true only inside `lethal_range` **and** within
+  `gimbal_cone_deg` (2°) of the true lead direction.
+- `gun_aim_point` / `convergence_distance` — where the guns should actually
+  converge this frame; every other consumer reads this rather than
+  recomputing anything.
+
+### Dynamic convergence — always on, not an assist
+
+`weapon_system.gd`'s `_setup_convergence()` split into `_position_crosshair()`
+(still one-shot — the **glass crosshair symbol** stays a fixed boresight
+mark at its authored 0.9m "on the glass" depth, deliberately untouched; see
+that section's own header for why the symbol and the real gun aim were
+already separated) and `_update_gun_convergence()`, which now runs **every
+physics frame**, re-aiming both mounts at `Gunnery.gun_aim_point` via
+`look_at()`. With no target this reduces to exactly the old fixed-229m
+point along the ship's own bore — behaviourally identical to before,
+whenever nothing is locked.
+
+**A genuinely new failure mode from going per-frame, caught before it
+shipped rather than after.** The old version only ever ran once, at spawn,
+when the ship's bore is always roughly level — `look_at(..., Vector3.UP)`
+was safe by construction. This ship can dive or climb steeply at any time,
+and Godot's `look_at()` degenerates ("Target and up vectors are colinear")
+once the aim direction approaches vertical — the exact class of bug this
+project already hit and fixed in `ground_flak.gd`/`faction_battle.gd`'s own
+up-vector logic. `_update_gun_convergence()` carries the identical guard:
+swap the up-hint to `FORWARD` once the bore is within 1% of vertical.
+
+### Gimbal assist — gated, and this is the Star Citizen behaviour
+
+Confirmed directly: tracks the **Y-locked target only**, never an unlocked
+one. A furball of 200 ships makes "whatever's nearest the nose" an unstable
+thing to gimbal onto, and gating behind a deliberate lock keeps the assist a
+deliberate act rather than free aim-lock — the player still has to do the
+work of designating a target.
+
+Inside `gimbal_cone_deg` (2°) of the true lead direction, **and** inside
+`lethal_range`, the guns deflect fully onto the true lead point
+(`Gunnery._deflected_direction()`, a capped slerp — hard-limited to
+`gimbal_max_deflection_deg`, 6°, as a safety net that in practice is never
+actually reached since `assist_active` only ever goes true well inside that
+cap). Outside the cone, past lethal range, or with no lock at all, the guns
+hold the ship's own bore line and the player leads entirely by hand. The
+cone is what keeps this a skill check: the player must still put the pipper
+on the solution; the system only removes the residual convergence/parallax
+error once they already have.
+
+### Range bands and dispersion
+
+`lethal_range` (1200m, full accuracy) / `max_range` (2000m, degraded).
+Dispersion is deliberately driven off **`convergence_distance` itself**,
+not a separate target-range lookup: with no lock, convergence sits at the
+default 229m (well under `lethal_range`), so dispersion is naturally zero
+with nothing designated — the guns read as "zeroed" at their default
+distance, exactly matching the old fixed-229m behaviour absent a lock.
+Ramps 0 → `max_dispersion_deg` (3.5°) across the degraded band, applied in
+`weapon_system.gd._apply_dispersion()` as a random cone perturbation of the
+fired bolt's own direction — the identical tilt-then-spin construction
+`ground_flak.gd`'s `_cone_direction()` already uses for the same "random
+direction within a cone" problem, reused rather than reinvented.
+
+`laser_bolt.gd` gained a hard `max_range` (2000m) despawn, independent of
+`speed * lifetime` — `lifetime` was raised 3.0 → 3.5s specifically so that
+product (2100m) comfortably clears `max_range`, since the shorter of the two
+independent despawn paths always wins and a lifetime that clipped
+`max_range` would make the explicit check pointless.
+
+### Range-coded PIP — Star Citizen style
+
+Direct request, extended by one state: *red beyond `max_range` (shots will
+not reach), amber in the degraded band (in range, but expect misses), green
+inside `lethal_range` (optimal, gimbal live)*. Purely informational — it
+changes no accuracy, it only makes a band that already existed in the
+flight model actually *perceivable*; nothing on the HUD used to distinguish
+1199m from 1201m. `target_lock.gd` reads `Gunnery.lethal_range`/`max_range`
+directly (a sibling `NodePath`, not duplicated constants) so the PIP's
+colour bands can never drift out of step with the gun bands they describe.
+Colour is applied via `emission_energy_multiplier`, matching this exact
+ring's own pre-existing convention, rather than pushing base channels above
+1.0 the way this project's HUD *text* does elsewhere.
+
+### Consistency pass
+
+- `enemy_hit_radius` 4.0 → **6.0**, now matching the AI's own
+  `BOLT_HIT_RADIUS` exactly — a fairness correction, not an assist: the
+  player's gun was being held to a tighter hit standard than the AI already
+  enjoys against itself.
+- `faction_battle.gd`'s `ENGAGE_RANGE` 800 → **1200**, per the confirmed
+  decision to unify the AI onto the player's own new lethal range rather
+  than have the player permanently out-range them. Re-verified against a
+  fresh 600s/100v100 pacing run rather than assumed safe, since engagement
+  distances change fleet-wide: **92-100 alive per side held through the
+  full 600s** (the original baseline only confirmed pacing through t=300s —
+  this run covers a longer window and still holds), first shot at **t=39.1s**
+  (matches the documented 40-60s baseline), no auto-win, and the same
+  healthy formation/pursue/break-off/retreat mix throughout, ground-strike
+  squads included. No degradation from the wider engagement range.
+
+Verified headlessly (29/29): the shared solver agrees with an independently
+reproduced copy of the old quadratic on three known cases (a real
+regression check, not the same function called twice); dynamic convergence
+tracks true target range instead of holding at 229m; the gimbal assist
+activates and correctly aims the physical gun mounts inside the cone, and
+provably does **not** activate (bore held, no deflection) outside it; range
+classification and dispersion ramp correctly at 900/1600/2500m; the PIP
+reads red/amber/green at exactly those three ranges; and `laser_bolt.gd`'s
+effective despawn distance is capped at 2000m rather than the longer
+`speed * lifetime` product.
+
+**Not yet built** (Phase 4 of the same overhaul, deferred for session time):
+the collimated visor-anchored pipper and the boresight/seat calibration
+(3-axis seat offset + recenter). The glass crosshair remains the only
+gunsight element for now — first-pass, like every other cockpit placement in
+this project, and not yet confirmed in the headset.
 
 ## Homing missiles
 

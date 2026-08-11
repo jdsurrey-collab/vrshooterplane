@@ -47,12 +47,29 @@ extends Node
 ## fixed speed, solves the quadratic for the smallest positive time t where
 ## a bolt fired now would meet the target's projected position:
 ##   |target_pos + target_vel*t - shooter_pos| = bolt_speed * t
-## See _solve_intercept(). Falls back to the target's current position if
-## there's no valid positive-time solution (e.g. it's outrunning the bolt).
+## Now via the shared Gunnery.solve_intercept() static (gunnery.gd) — this
+## file used to carry its own private copy of the identical quadratic,
+## duplicated a third time again in faction_battle.gd's own AI gunnery. One
+## canonical implementation now, read by all three. Falls back to the
+## target's current position if there's no valid positive-time solution
+## (e.g. it's outrunning the bolt).
+##
+## PIP COLOUR now range-codes against gunnery.gd's `lethal_range`/
+## `max_range` — red beyond max_range (shots will not reach), amber in the
+## degraded band (in range, but expect misses), green inside lethal_range
+## (optimal, gimbal assist live). Purely informational: it changes no
+## accuracy, it only makes a band that already existed in the flight model
+## actually PERCEIVABLE — nothing on the HUD used to distinguish 1199m from
+## 1201m.
 
 @export var battle_path: NodePath = ^"../../FactionBattle"
 @export var gun_left_path: NodePath = ^"../Ship/GunMountLeft"
 @export var gun_right_path: NodePath = ^"../Ship/GunMountRight"
+## Sibling reference rather than duplicating lethal_range/max_range as
+## separate exports here — Gunnery is the single source of truth for both,
+## so the PIP's colour bands can never drift out of step with the gun
+## dispersion/gimbal bands they're describing.
+@export var gunnery_path: NodePath = ^"../Gunnery"
 @export var bolt_speed: float = 600.0  # must match laser_bolt.gd's `speed` — both were lowered from 900 so bolts are actually visible in flight
 @export var max_lock_range: float = 12000.0  # meters — auto-unlocks past this
 
@@ -64,12 +81,22 @@ extends Node
 const EDGE_THICKNESS := 0.00125
 const BOX_EDGES := [[0, 1], [1, 2], [2, 3], [3, 0]]
 
+## Base 0..1 colours, matching this file's existing convention of pushing
+## brightness via `emission_energy_multiplier` rather than pushing the base
+## channels above 1.0 (the convention the rest of this project's HUD text
+## uses) — kept consistent with how this exact PIP ring was already built.
+const PIP_COLOR_OPTIMAL := Color(0.15, 1.0, 0.2, 1.0)  # inside lethal_range — gimbal live
+const PIP_COLOR_DEGRADED := Color(1.0, 0.65, 0.05, 1.0)  # lethal_range..max_range — expect misses
+const PIP_COLOR_OUT_OF_RANGE := Color(1.0, 0.15, 0.1, 1.0)  # beyond max_range — shots will not reach
+
 var _player: Node3D
 var _camera: Node3D
 var _battle: Node
+var _gunnery: Node
 var _left_controller: XRController3D
 var _targeting_box: Node3D
 var _pip_ring: MeshInstance3D
+var _pip_material: StandardMaterial3D
 var _info_label: Label3D
 
 var locked: bool = false
@@ -82,6 +109,7 @@ func _ready() -> void:
 	_player = get_parent()
 	_camera = _player.get_node_or_null("XRCamera3D")
 	_battle = get_node_or_null(battle_path)
+	_gunnery = get_node_or_null(gunnery_path)
 	_left_controller = _player.get_node_or_null("LeftHand")
 
 	_targeting_box = _build_targeting_box()
@@ -184,10 +212,10 @@ func _update_lock_display(delta: float) -> void:
 	# stays correctly positioned relative to the box regardless of head tilt.
 	_info_label.global_position = box_pos - cam_basis.y * label_offset
 
-	_update_pip(cam_pos, target_pos)
+	_update_pip(cam_pos, target_pos, distance)
 
 
-func _update_pip(cam_pos: Vector3, target_pos: Vector3) -> void:
+func _update_pip(cam_pos: Vector3, target_pos: Vector3, distance: float) -> void:
 	var gun_left := get_node_or_null(gun_left_path)
 	var gun_right := get_node_or_null(gun_right_path)
 	var shooter_pos: Vector3 = _player.global_position
@@ -195,42 +223,30 @@ func _update_pip(cam_pos: Vector3, target_pos: Vector3) -> void:
 		shooter_pos = (gun_left.global_position + gun_right.global_position) * 0.5
 
 	var target_vel: Vector3 = _battle.get_velocity(locked_index)
-	var intercept := _solve_intercept(shooter_pos, target_pos, target_vel, bolt_speed)
+	var intercept := Gunnery.solve_intercept(shooter_pos, target_pos, target_vel, bolt_speed)
 
 	var pip_dir := (intercept - cam_pos).normalized()
 	_pip_ring.global_position = cam_pos + pip_dir * hud_distance
 
+	if _pip_material:
+		var c := _pip_color_for_range(distance)
+		_pip_material.albedo_color = c
+		_pip_material.emission = c
 
-## Solves a*t^2 + b*t + c = 0 for the smallest positive t, derived from
-## |rel_pos + target_vel*t| = bullet_speed*t. Returns the target's current
-## position if there's no valid positive-time solution.
-func _solve_intercept(shooter_pos: Vector3, target_pos: Vector3, target_vel: Vector3, bullet_speed: float) -> Vector3:
-	var rel_pos := target_pos - shooter_pos
-	var a := target_vel.dot(target_vel) - bullet_speed * bullet_speed
-	var b := 2.0 * rel_pos.dot(target_vel)
-	var c := rel_pos.dot(rel_pos)
 
-	var t := -1.0
-	if absf(a) < 0.0001:
-		if absf(b) > 0.0001:
-			t = -c / b
-	else:
-		var discriminant := b * b - 4.0 * a * c
-		if discriminant >= 0.0:
-			var sqrt_d := sqrt(discriminant)
-			var t1 := (-b + sqrt_d) / (2.0 * a)
-			var t2 := (-b - sqrt_d) / (2.0 * a)
-			if t1 > 0.0 and t2 > 0.0:
-				t = minf(t1, t2)
-			elif t1 > 0.0:
-				t = t1
-			elif t2 > 0.0:
-				t = t2
-
-	if t <= 0.0:
-		return target_pos
-
-	return target_pos + target_vel * t
+## Star-Citizen-style range coding — see the class comment. Reads
+## gunnery.gd's own thresholds so this can never drift from the gun
+## dispersion/gimbal bands it's describing; falls back to always-optimal if
+## Gunnery is somehow absent, matching how this ring already behaved before
+## range coding existed.
+func _pip_color_for_range(distance: float) -> Color:
+	if not _gunnery:
+		return PIP_COLOR_OPTIMAL
+	if distance > _gunnery.max_range:
+		return PIP_COLOR_OUT_OF_RANGE
+	if distance > _gunnery.lethal_range:
+		return PIP_COLOR_DEGRADED
+	return PIP_COLOR_OPTIMAL
 
 
 ## A flat square (local XY plane, Z=0) — the whole node's rotation is set
@@ -288,14 +304,15 @@ func _build_pip_ring() -> MeshInstance3D:
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.no_depth_test = true
-	mat.albedo_color = Color(1.0, 0.9, 0.1, 1.0)
+	mat.albedo_color = PIP_COLOR_OPTIMAL
 	mat.emission_enabled = true
-	mat.emission = Color(1.0, 0.9, 0.1, 1.0)
+	mat.emission = PIP_COLOR_OPTIMAL
 	mat.emission_energy_multiplier = 5.0
 	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
 
 	ring.mesh = torus
 	ring.material_override = mat
+	_pip_material = mat
 	return ring
 
 

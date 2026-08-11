@@ -1,4 +1,4 @@
-[gd_scene load_steps=52 format=3 uid="uid://c2dyoeywkgf30"]
+[gd_scene load_steps=53 format=3 uid="uid://c2dyoeywkgf30"]
 
 [ext_resource type="PackedScene" uid="uid://diyu06cw06syv" path="res://addons/godot-xr-tools/player/player_body.tscn" id="1_body"]
 [ext_resource type="PackedScene" uid="uid://clc5dre31iskm" path="res://addons/godot-xr-tools/xr/start_xr.tscn" id="4_startxr"]
@@ -46,6 +46,7 @@
 [ext_resource type="AudioStream" uid="uid://be0nyy8fmopa6" path="res://Assets/Audio/afterburner.ogg" id="51_afterburnersound"]
 [ext_resource type="Script" path="res://scripts/role_stamp.gd" id="52_rolestamp"]
 [ext_resource type="AudioStream" path="res://Assets/Audio/hit_confirm.tres" id="53_hitconfirm"]
+[ext_resource type="Script" path="res://scripts/gunnery.gd" id="54_gunnery"]
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_fade"]
 render_priority = -1
@@ -339,6 +340,9 @@ script = ExtResource("48_flighthud")
 
 [node name="ThrusterTrail" parent="Ship" instance=ExtResource("50_thrustertrail")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.6, -7)
+
+[node name="Gunnery" type="Node" parent="."]
+script = ExtResource("54_gunnery")
 
 [node name="WeaponSystem" type="Node" parent="."]
 script = ExtResource("14_weapons")

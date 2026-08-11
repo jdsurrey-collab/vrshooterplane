@@ -9,8 +9,19 @@ extends Node
 ## each mount; the guns are "toed in" so their lines of fire cross at a
 ## chosen distance ("harmonization"), concentrating fire on target instead of
 ## two parallel streams that never meet. See docs/gunnery-reference.md for
-## sourced reference distances. `convergence_distance` drives the gun
-## mounts' toe-in angle, computed once in _ready().
+## sourced reference distances.
+##
+## NOW DYNAMIC, computed every physics frame from gunnery.gd's shared
+## solution rather than toed in once in `_ready()` at a fixed 229m. See
+## gunnery.gd's own header for exactly why the fixed version was a real bug,
+## not just a simplification: even a shot lined up perfectly on
+## target_lock.gd's PIP only truly landed when the target happened to be at
+## almost exactly 229m — at any other range the two barrels crossed at the
+## wrong point in space and straddled the target regardless of where the
+## ship's nose pointed. `_update_gun_convergence()` re-aims both mounts at
+## `Gunnery.gun_aim_point` every frame; with no target locked that point
+## falls back to the same fixed 229m point along the ship's own bore,
+## exactly matching the old behaviour.
 ##
 ## The CROSSHAIR SYMBOL is drawn separately, at `crosshair_distance` — NOT
 ## at the real 229m convergence point any more. Direct instruction: "the
@@ -31,7 +42,11 @@ const LASER_BOLT := preload("res://scenes/LaserBolt.tscn")
 @export var gun_left_path: NodePath = ^"../Ship/GunMountLeft"
 @export var gun_right_path: NodePath = ^"../Ship/GunMountRight"
 @export var crosshair_path: NodePath = ^"../Ship/Crosshair"
-@export var convergence_distance: float = 229.0  # meters (250 yards, RAF WWII standard) — GUN AIM only
+@export var gunnery_path: NodePath = ^"../Gunnery"
+## Fallback only, used if `_gunnery` is somehow absent — matches
+## gunnery.gd's own `default_convergence_distance` (229m, the RAF WWII
+## harmonization figure). The live value comes from Gunnery every frame.
+@export var convergence_distance: float = 229.0
 @export var crosshair_distance: float = 0.9  # meters — where the SYMBOL is drawn, on the glass, not at the real convergence point
 ## Local Y for the crosshair symbol — NOT the gun mounts' own Y (1.9).
 ## Matches flight_hud.gd's hud_center.y (2.8): now that the crosshair sits
@@ -68,6 +83,7 @@ var _crosshair: Node3D
 var _audio_left: AudioStreamPlayer3D
 var _audio_right: AudioStreamPlayer3D
 var _hit_audio: AudioStreamPlayer
+var _gunnery: Node
 
 var _crosshair_base_scale: Vector3 = Vector3.ONE
 var _hit_pulse_time: float = -1.0  # negative = idle, no pulse in progress
@@ -97,33 +113,64 @@ func _ready() -> void:
 	if _gun_right:
 		_audio_right = _gun_right.get_node_or_null("Audio")
 	_hit_audio = get_node_or_null(hit_confirm_audio_path)
+	_gunnery = get_node_or_null(gunnery_path)
 	if _crosshair:
 		_crosshair_base_scale = _crosshair.scale
-	print("[Weapon] right_controller=%s gun_left=%s gun_right=%s crosshair=%s" % [
-			_right_controller, _gun_left, _gun_right, _crosshair])
+	print("[Weapon] right_controller=%s gun_left=%s gun_right=%s crosshair=%s gunnery=%s" % [
+			_right_controller, _gun_left, _gun_right, _crosshair, _gunnery])
 
-	_setup_convergence()
+	_position_crosshair()
+	_update_gun_convergence()  # first frame, so the guns aren't at their raw scene orientation before physics starts
 
 
-## Points both gun mounts at a single world-space point straight ahead of
-## the ship at `convergence_distance` — `look_at()` handles the toe-in angle
-## correctly regardless of the mounts' existing orientation, since it works
-## from actual world positions. The crosshair SYMBOL is parked separately,
-## at `crosshair_distance` (see this file's header) — deliberately not the
-## same point the guns are aimed at.
-func _setup_convergence() -> void:
+## Parks the crosshair SYMBOL once — it stays a fixed "glass" mark at
+## `crosshair_distance`/`crosshair_height` regardless of what the guns are
+## doing (see the class comment on why the symbol and the real gun aim were
+## deliberately separated). This does NOT aim the guns; see
+## `_update_gun_convergence()` for that, which runs every frame instead of
+## once.
+func _position_crosshair() -> void:
+	if not _gun_left or not _gun_right or not _crosshair:
+		return
+	var mid_local := (_gun_left.position + _gun_right.position) * 0.5
+	_crosshair.position = Vector3(mid_local.x, crosshair_height, crosshair_distance)
+
+
+## Points both gun mounts at Gunnery's `gun_aim_point` every physics frame —
+## dynamic convergence at the target's true range, deflected further onto
+## the true lead point when the gimbal assist is active (both computed by
+## gunnery.gd; this function only consumes the result). `look_at()` handles
+## the toe-in angle correctly from each mount's own position regardless of
+## its existing orientation.
+##
+## UP-REFERENCE GUARD, a genuinely new failure mode from going per-frame:
+## the old one-shot version only ever ran at spawn, when the ship's bore is
+## always roughly level — `look_at(..., Vector3.UP)` was safe by
+## construction. This ship can dive or climb steeply at any time, and once
+## the bore direction approaches vertical, UP becomes a degenerate up-hint
+## for look_at() (the same "Target and up vectors are colinear" class of
+## warning this project has already hit and fixed elsewhere — see
+## ground_flak.gd/faction_battle.gd's own guards). Swapping to FORWARD near
+## vertical is the same fix already established in both of those.
+func _update_gun_convergence() -> void:
 	if not _gun_left or not _gun_right:
 		return
-	var ship := _gun_left.get_parent() as Node3D
-	var mid_local := (_gun_left.position + _gun_right.position) * 0.5
-	var target_local := mid_local + Vector3(0.0, 0.0, convergence_distance)
-	var target_world: Vector3 = ship.to_global(target_local)
 
-	_gun_left.look_at(target_world, Vector3.UP)
-	_gun_right.look_at(target_world, Vector3.UP)
+	var target_world: Vector3
+	if _gunnery:
+		target_world = _gunnery.gun_aim_point
+	else:
+		# Fallback with no Gunnery node — reproduces the original fixed
+		# convergence exactly, so the weapon still works without it.
+		var ship := _gun_left.get_parent() as Node3D
+		var mid_local := (_gun_left.position + _gun_right.position) * 0.5
+		target_world = ship.to_global(mid_local + Vector3(0.0, 0.0, convergence_distance))
 
-	if _crosshair:
-		_crosshair.position = Vector3(mid_local.x, crosshair_height, crosshair_distance)
+	var bore: Vector3 = _gunnery.bore_direction if _gunnery else Vector3.FORWARD
+	var up_ref := Vector3.FORWARD if absf(bore.dot(Vector3.UP)) > 0.99 else Vector3.UP
+
+	_gun_left.look_at(target_world, up_ref)
+	_gun_right.look_at(target_world, up_ref)
 
 
 ## Called by laser_bolt.gd the instant the player's own bolt lands a hit —
@@ -139,6 +186,7 @@ func notify_hit() -> void:
 
 func _physics_process(delta: float) -> void:
 	_update_hit_pulse(delta)
+	_update_gun_convergence()
 
 	if paused:
 		return
@@ -193,7 +241,32 @@ func _try_fire() -> void:
 	var bolt := LASER_BOLT.instantiate()
 	get_tree().current_scene.add_child(bolt)
 	bolt.global_transform = mount.global_transform
+
+	# RANGE DISPERSION — see gunnery.gd's class comment for why this is
+	# driven off `convergence_distance` rather than a separate range lookup.
+	# Zero with nothing locked (guns zeroed at their default 229m), ramping
+	# up past `lethal_range` so a shot at a target beyond it is genuinely
+	# unreliable rather than just "the guns didn't converge right."
+	if _gunnery and _gunnery.dispersion_deg > 0.0:
+		_apply_dispersion(bolt, _gunnery.dispersion_deg)
+
 	shots_fired += 1
 
 	if audio:
 		audio.play()
+
+
+## Perturbs a freshly-spawned bolt's own firing direction by a random angle
+## within a cone of `max_deg` — tilt off-axis by a random amount up to
+## max_deg, then spin around the axis by a random full turn, the identical
+## two-step construction ground_flak.gd's `_cone_direction()` already uses
+## for exactly this "random direction within a cone" problem, reused here
+## rather than inventing a second version of the same idea.
+func _apply_dispersion(bolt: Node3D, max_deg: float) -> void:
+	var forward := -bolt.global_transform.basis.z
+	var arbitrary := Vector3.RIGHT if absf(forward.dot(Vector3.RIGHT)) < 0.9 else Vector3.FORWARD
+	var perp := forward.cross(arbitrary).normalized()
+	var tilted := forward.rotated(perp, deg_to_rad(randf_range(0.0, max_deg)))
+	var new_forward := tilted.rotated(forward, randf_range(0.0, TAU)).normalized()
+	var up_ref := Vector3.FORWARD if absf(new_forward.dot(Vector3.UP)) > 0.99 else Vector3.UP
+	bolt.global_transform = Transform3D(Basis.looking_at(new_forward, up_ref), bolt.global_position)

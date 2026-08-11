@@ -34,9 +34,24 @@ extends Node3D
 ## making the same mistake.
 
 @export var speed: float = 600.0  # m/s — down from 900. A bolt that crosses the whole engagement in two frames can't be seen; slower + a much longer mesh (see LaserBolt.tscn) is what makes your own fire readable
-@export var lifetime: float = 3.0  # seconds
+## Raised 3.0 -> 3.5s alongside gunnery.gd's range bands: speed*lifetime
+## (2100m) must comfortably clear max_range (2000m) below, since the
+## lifetime timer and the max_range check are two independent despawn paths
+## and the shorter one always wins — a lifetime that clipped max_range would
+## make the explicit range check pointless.
+@export var lifetime: float = 3.5
+## Hard cap on travel distance, independent of speed/lifetime — see
+## gunnery.gd's `max_range` (kept in step by hand, same documented coupling
+## already used elsewhere in this project, e.g. target_lock.gd's bolt_speed
+## comment). Past this the AI's degraded-accuracy dispersion band ends and a
+## shot flat-out cannot connect.
+@export var max_range: float = 2000.0
 @export var damage: float = 10.0  # consumed by enemy_ai.gd's / player_damage.gd's apply_damage()
-@export var enemy_hit_radius: float = 4.0  # meters — approximates the enemy ship's bounding sphere
+## Widened 4.0 -> 6.0 to match faction_battle.gd's own BOLT_HIT_RADIUS
+## exactly — a fairness correction, not an assist: the player's gun was
+## being held to a tighter hit standard than the AI's own gun already enjoys
+## against itself.
+@export var enemy_hit_radius: float = 6.0
 @export var player_hit_radius: float = 4.0  # meters — approximates the player's ShipHull bounding sphere
 @export var fired_by_player: bool = true
 
@@ -61,7 +76,10 @@ var _weapon_system: Node  # player-fired bolts only — see _check_enemy_hit
 
 
 func _ready() -> void:
-	_max_range = speed * lifetime
+	# The tighter of the two independent despawn conditions wins — a bolt
+	# should never travel further than max_range even if speed*lifetime
+	# would technically allow more.
+	_max_range = minf(speed * lifetime, max_range)
 	get_tree().create_timer(lifetime).timeout.connect(queue_free)
 	_terrain = get_tree().current_scene.get_node_or_null("Terrain")
 	_battle = get_tree().current_scene.get_node_or_null("FactionBattle")
