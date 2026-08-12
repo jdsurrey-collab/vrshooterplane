@@ -3028,6 +3028,35 @@ to a paler horizon. **Cannot be verified headlessly**: whether the shading
 and the sky actually read as the reference image in the headset — first
 pass, like every other visual tuning in this project.
 
+**First live pass — real bug: "looked exactly like they did before."**
+Correct diagnosis, and the cause was concrete, not a matter of taste.
+`fragment()` left `ALBEDO` at flat white (`vec3(1.0)`) and never wrote
+`AMBIENT_LIGHT`, so Godot fell back to its automatic ambient computation —
+`ambient_light_energy` (0.85) times that white `ALBEDO`, off a now-bright
+procedural sky. That produced a strong, UNIFORM wash with no lit/shadow
+step of its own, layered on top of the two-tone ramp `light()` builds — at
+this scene's ambient strength, the wash was enough to flatten the contrast
+between the two authored bands into one indistinct value. The toon split
+was genuinely being computed correctly in the direct-light term the whole
+time; it just never reached the screen. The OLD `DIFFUSE_TOON` material had
+the identical structural gap (ambient was always automatic, never
+authored) — which is exactly why the new shader read as unchanged: neither
+version had ever actually controlled this term, so both landed at a
+similarly washed, ambient-dominated result.
+
+Fixed by taking `AMBIENT_LIGHT` over explicitly and tying it to
+`shadow_color` at a controlled floor (`ambient_floor`, 0.3) — the shadow
+side now gets a gentle, ON-THEME blue-grey ambient fill instead of an
+unrelated white wash, while the lit side's real brightness comes from the
+(now comparatively much stronger) direct `DIFFUSE_LIGHT` term. Verified
+headlessly (5/5) that `AMBIENT_LIGHT` is written explicitly and tied to
+`shadow_color` rather than left to the automatic default, and that
+`ambient_floor` is wired through to the live material. Still needs a
+second headset pass to confirm the contrast actually reads now — this is a
+plausible, well-reasoned fix for what the code was doing wrong, not a
+visual confirmation, since a rendering result still can't be seen
+headlessly.
+
 ### Cloud top layer — the "looking down from above" view (`cloud_top.gd`)
 
 `CloudDeck` above is tuned entirely for the **underside** view: baked-once

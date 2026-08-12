@@ -75,6 +75,13 @@ extends Node3D
 ## texture's own GRADIENT_INTERPOLATE_CONSTANT bands below. This just keeps
 ## that step from aliasing/shimmering.
 @export var shadow_edge_softness: float = 0.06
+## How much of shadow_color fills the shader's own AMBIENT_LIGHT term —
+## real bug fix, not a stylistic knob: leaving ambient to Godot's automatic
+## ALBEDO-driven default produced a strong, un-toon-stepped wash that
+## flattened the whole lit/shadow ramp, reported live as the new shading
+## "looking exactly like it did before." See cloud_deck_toon.gdshader's own
+## note on AMBIENT_LIGHT.
+@export var ambient_floor: float = 0.3
 ## Peak opacity of the thickest patches; the noise ramp takes it to fully
 ## transparent elsewhere, which is what makes it read as broken cloud rather
 ## than a lid.
@@ -209,6 +216,7 @@ func _build_material() -> ShaderMaterial:
 	mat.set_shader_parameter("lit_color", lit_color)
 	mat.set_shader_parameter("shadow_color", shadow_color)
 	mat.set_shader_parameter("shadow_edge_softness", shadow_edge_softness)
+	mat.set_shader_parameter("ambient_floor", ambient_floor)
 	mat.set_shader_parameter("opacity_scale", opacity)
 	mat.set_shader_parameter("emission_energy", 0.22)
 	mat.set_shader_parameter("uv1_offset", Vector3.ZERO)

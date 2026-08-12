@@ -40,6 +40,9 @@ uniform vec4 shadow_color : source_color = vec4(0.55, 0.62, 0.8, 1.0);
 uniform float shadow_edge_softness : hint_range(0.001, 0.5, 0.001) = 0.06;
 uniform float opacity_scale : hint_range(0.0, 1.0, 0.01) = 0.8;
 uniform float emission_energy : hint_range(0.0, 2.0, 0.01) = 0.22;
+// How much of shadow_color's own tone fills the ambient term — see the
+// AMBIENT_LIGHT note in fragment() for why this exists at all.
+uniform float ambient_floor : hint_range(0.0, 1.0, 0.01) = 0.3;
 
 uniform vec3 uv1_offset = vec3(0.0, 0.0, 0.0);
 
@@ -53,6 +56,28 @@ void fragment() {
 	// tied to the LIT colour so the glow and the "this side is lit" read
 	// reinforce each other instead of being two separately-tuned colours.
 	EMISSION = tex.rgb * lit_color.rgb * emission_energy;
+
+	// REAL BUG, caught live: "looked exactly like they did before." Leaving
+	// AMBIENT_LIGHT unwritten makes Godot compute it automatically as
+	// ambient_light_energy * ALBEDO — and with ALBEDO left at flat white
+	// (1.0) above, that produced a strong, UNIFORM wash with no lit/shadow
+	// step of its own, on top of the deliberate two-tone ramp light() builds
+	// below. At this scene's ambient_light_energy (0.85) off a bright sky,
+	// that wash was strong enough to flatten the contrast between the two
+	// bands — the toon split was real in the direct-light term, just
+	// swamped by an ambient term that didn't respect it. The old
+	// DIFFUSE_TOON material had the identical structural gap (ambient was
+	// always automatic, never authored), which is exactly why the new
+	// shader still read as unchanged: neither material ever actually
+	// controlled this term.
+	//
+	// Fix: take AMBIENT_LIGHT over explicitly and tie it to shadow_color at
+	// a controlled floor, so the ambient fill reinforces the cool-toned
+	// shadow language instead of washing over it — the shadow side gets a
+	// gentle blue-grey ambient contribution, while the lit side's real
+	// brightness now comes from the (much stronger) direct DIFFUSE_LIGHT
+	// term instead of being pre-flattened by an unrelated white wash.
+	AMBIENT_LIGHT = shadow_color.rgb * ambient_floor;
 }
 
 
