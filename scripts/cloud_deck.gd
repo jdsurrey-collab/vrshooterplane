@@ -1,8 +1,28 @@
 extends Node3D
 
 ## A lit cloud deck covering the ENTIRE MAP at a fixed absolute altitude: a
-## single alpha-blended mesh that the tallest towers punch through, so they
-## cast real shadows across it.
+## small STACK of alpha-blended sheets spanning the band's vertical
+## thickness (not one flat plane) that the tallest towers punch through, so
+## they cast real shadows across it.
+##
+## WHY A STACK, NOT ONE SHEET. A single flat mesh is razor-thin — looking
+## straight up through it, any given pixel's view ray crosses it exactly
+## once at full opacity, which works. But looking toward something far away
+## and only shallowly above you (a distant mothership near the horizon, not
+## overhead), that same ray still only crosses the ONE altitude the sheet
+## sits at, at ONE point, which subtends almost no screen area at a grazing
+## angle — reported live as "I am under the clouds, but I can see the sky
+## above the clouds and the mothership. This should be white." Raising
+## alpha (see `opacity`/`_build_cloud_texture` below) fixed the straight-up
+## case but couldn't fix this one: 100% opacity times a knife-edge crossing
+## is still a knife-edge crossing. Stacking `layer_count` sheets across the
+## real vertical span of the band means a grazing ray crosses several
+## opaque sheets in sequence instead of one, and perspective compresses
+## those successive crossings toward the horizon into what reads as a
+## genuinely thick ceiling. Still 1 material and a handful of draw calls —
+## multiplies the deck's already-cheap cost (previously "1 draw call... for
+## the entire map") by `layer_count`, nowhere near enough to matter against
+## this project's ~870k-triangle whole-scene budget.
 ##
 ## WHY A MESH AND NOT VOLUMETRIC FOG. This is the cheap way to get the one
 ## thing volumetric fog was wanted for. Because the deck is an ordinary LIT
@@ -52,6 +72,21 @@ extends Node3D
 ## gentle undulation below — the shadows come from the light, not from the
 ## geometry, and at world-map scale a coarse grid is imperceptible.
 @export var subdivisions: int = 96
+
+## Number of parallel sheets spread across the band's vertical thickness —
+## see the header comment above for why one sheet isn't enough to block a
+## grazing view. Each layer reuses the same mesh-building code and shares
+## one material; only its altitude and a noise-sample offset (so stacked
+## layers don't look like an obviously repeated pattern when seen nearly
+## straight through) differ per layer.
+@export var layer_count: int = 4
+## World-space offset applied to each successive layer's noise/UV sampling
+## coordinate (not its actual vertex position) so the layers' cloud
+## patterns decorrelate instead of stacking as visibly identical copies.
+## Several multiples of the height noise's own ~2900m wavelength
+## (1.0 / frequency in _build_deck_mesh) is enough to break any visible
+## alignment.
+@export var layer_sample_spacing: float = 7000.0
 
 ## Vertical wobble so the deck isn't a dead-flat plane. Also drives the
 ## per-vertex normals now (see _build_deck_mesh) — raised from an original
@@ -111,22 +146,34 @@ func _ready() -> void:
 
 	var centre: Vector3 = terrain.global_position
 	var half: float = terrain.world_size * 0.5 * coverage_scale
-	var deck_y: float = atmosphere.cloud_base_y + atmosphere.cloud_thickness * 0.5
+	var band_bottom: float = atmosphere.cloud_base_y
+	var band_top: float = atmosphere.cloud_base_y + atmosphere.cloud_thickness
 
-	var mesh_instance := MeshInstance3D.new()
-	mesh_instance.mesh = _build_deck_mesh(centre, half, deck_y)
 	_material = _build_material()
-	mesh_instance.material_override = _material
-	# Receives the sun's shadows — the entire point — but casts none. A
-	# cloud sheet throwing a hard shadow over the whole map would be wrong,
-	# and it would also put everything below it into permanent darkness.
-	mesh_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	add_child(mesh_instance)
+	for i in layer_count:
+		# Centred fractions (0.5, 1.5, 2.5, ... / layer_count) rather than
+		# 0/1/2/.../(n-1) evenly to n-1 — keeps the outermost layers pulled
+		# in slightly from the band's own edges, where atmosphere.gd's own
+		# edge_softness is already fading the fog ramp in/out.
+		var frac := (float(i) + 0.5) / float(layer_count)
+		var layer_y := lerpf(band_bottom, band_top, frac)
+		var sample_offset := float(i) * layer_sample_spacing
+
+		var mesh_instance := MeshInstance3D.new()
+		mesh_instance.mesh = _build_deck_mesh(centre, half, layer_y, sample_offset)
+		mesh_instance.material_override = _material
+		# Receives the sun's shadows — the entire point — but casts none. A
+		# cloud sheet throwing a hard shadow over the whole map would be
+		# wrong, and it would also put everything below it into permanent
+		# darkness. Applies per-layer identically; layering doesn't change
+		# this reasoning.
+		mesh_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(mesh_instance)
 
 	visible = enabled
 
 
-func _build_deck_mesh(centre: Vector3, half: float, deck_y: float) -> ArrayMesh:
+func _build_deck_mesh(centre: Vector3, half: float, deck_y: float, sample_offset: float = 0.0) -> ArrayMesh:
 	var noise := FastNoiseLite.new()
 	noise.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
 	noise.frequency = 0.00035
@@ -149,9 +196,15 @@ func _build_deck_mesh(centre: Vector3, half: float, deck_y: float) -> ArrayMesh:
 		for j in subdivisions + 1:
 			var x := centre.x - half + float(i) * step
 			var z := centre.z - half + float(j) * step
-			var h := noise.get_noise_2d(x, z) * undulation
+			# sample_offset shifts only the noise/UV lookup, never the real
+			# vertex position — each layer still spans the true map extent,
+			# it just samples a different patch of the same noise field so
+			# stacked layers don't look like identical repeated copies.
+			var sx := x + sample_offset
+			var sz := z + sample_offset
+			var h := noise.get_noise_2d(sx, sz) * undulation
 			verts.append(Vector3(x, deck_y + h, z))
-			uvs.append(Vector2(x / pattern_scale, z / pattern_scale))
+			uvs.append(Vector2(sx / pattern_scale, sz / pattern_scale))
 			# REAL per-vertex normals from the noise gradient (central
 			# difference), not a flat Vector3.UP. This used to be
 			# deliberately flat "so the sun's shadow reads cleanly across
@@ -162,10 +215,10 @@ func _build_deck_mesh(centre: Vector3, half: float, deck_y: float) -> ArrayMesh:
 			# Real normals are what make the puffs read as actual 3D
 			# shapes with light/dark facets instead of a flat sheet with a
 			# picture painted on it — see DIFFUSE_TOON in _build_material.
-			var h_x1: float = noise.get_noise_2d(x + eps, z) * undulation
-			var h_x0: float = noise.get_noise_2d(x - eps, z) * undulation
-			var h_z1: float = noise.get_noise_2d(x, z + eps) * undulation
-			var h_z0: float = noise.get_noise_2d(x, z - eps) * undulation
+			var h_x1: float = noise.get_noise_2d(sx + eps, sz) * undulation
+			var h_x0: float = noise.get_noise_2d(sx - eps, sz) * undulation
+			var h_z1: float = noise.get_noise_2d(sx, sz + eps) * undulation
+			var h_z0: float = noise.get_noise_2d(sx, sz - eps) * undulation
 			var normal := Vector3(-(h_x1 - h_x0) / (2.0 * eps), 1.0, -(h_z1 - h_z0) / (2.0 * eps)).normalized()
 			normals.append(normal)
 			colors.append(Color(1.0, 1.0, 1.0, _edge_alpha(x, z, centre, half)))

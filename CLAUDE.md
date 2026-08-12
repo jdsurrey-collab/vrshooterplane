@@ -2869,8 +2869,9 @@ ground. Two pieces, each doing what it's good at:
   drives depth fog's ramp from the player's absolute world Y, so visibility
   only collapses while inside `[cloud_base_y, cloud_base_y +
   cloud_thickness]`.
-- `cloud_deck.gd` (`CloudDeck`) — the VISIBLE layer: a single lit mesh at
-  the midpoint of that same band, alpha-blended with a soft noise pattern.
+- `cloud_deck.gd` (`CloudDeck`) — the VISIBLE layer: a small stack of lit
+  sheets spanning that same band's vertical thickness (not one flat plane —
+  see "Real thickness" below), alpha-blended with a soft noise pattern.
 
 **Why absolute altitude, not local-ground-relative.** An earlier version
 measured the band above LOCAL ground, resampled under the player every
@@ -2894,11 +2895,12 @@ is resampled as the camera moves.
 
 **The deck sits below the tallest towers on purpose** — shadows fall away
 from the light, and the overhead sun cannot cast onto anything above
-itself. With the deck at the band's midpoint, several hundred buildings
-punch through it (measured: 483 of 1466 at the earlier city-only sizing),
-and it's those protruding towers that lay real shadows across the cloud
-surface below. Soft edges are carried in vertex alpha (`_edge_alpha`, a
-radial fade using the larger of the two axis distances so the mesh's
+itself. With the deck's layers spanning the band's midsection, several
+hundred buildings punch through the lower ones (measured: 483 of 1466 at
+the earlier city-only sizing, single-layer version), and it's those
+protruding towers that lay real shadows across the cloud surface below.
+Soft edges are carried in vertex alpha (`_edge_alpha`, a radial fade using
+the larger of the two axis distances so the mesh's
 corners fade too), so the deck doesn't terminate in a hard rectangle
 against the sky at the map's own boundary.
 
@@ -3090,9 +3092,48 @@ original reference-image framing. Verified headlessly (4/4): the exported
 `opacity` and the shader's live `opacity_scale` parameter both read 1.0,
 and the generated density texture's alpha never samples below ~0.72
 anywhere across the whole 1024x1024 map (previously ran to true 0.0).
-Not yet confirmed live — the deck reading as opaque enough from below
-without looking like a flat grey lid is a judgment call that needs the
-headset, same as everything else in this section.
+
+**Third live pass — full opacity still didn't hide the mothership,
+because a flat sheet has no thickness.** Confirmed with a screenshot: under
+the clouds, looking toward the horizon (not straight up), the mothership
+sat clearly visible in blue sky, fully unobscured, with only a faint
+smear where the deck itself crossed the frame. The alpha fix from the
+previous pass was necessary but not sufficient — it fixed the case a
+straight-up view ray tests (cross the deck once, at full opacity, blocked)
+but not the case a shallow/grazing view ray tests (cross the SAME single
+altitude once, at ONE point, which subtends almost no screen area no
+matter how opaque that point is — 100% alpha times a knife-edge crossing
+is still a knife-edge crossing). Since the mothership sits well above the
+band and the player was well below it, the sightline between them
+necessarily still crosses the deck's one altitude somewhere along the way
+— it just crossed it as a thin line, not a wall.
+
+Fixed by giving the deck real vertical thickness instead of chasing more
+alpha: `cloud_deck.gd` now builds `layer_count` (4) parallel sheets spread
+across the band's own vertical span (`atmosphere.cloud_base_y` to
+`cloud_base_y + cloud_thickness`) instead of one sheet at the midpoint.
+A grazing ray now crosses several opaque sheets in sequence rather than
+one, and perspective compresses those successive crossings toward the
+horizon into what reads as a genuinely thick ceiling rather than a line.
+Each layer reuses the identical mesh-building code and shares ONE
+material (cost stays effectively free — still no per-frame recompute,
+draw calls go from 1 to `layer_count`, nowhere near enough triangles to
+register against this project's ~870k-triangle whole-scene budget); only
+each layer's altitude and a `layer_sample_spacing`-offset noise/UV sample
+coordinate differ, so stacked layers don't look like an obviously
+repeated pattern when seen nearly straight through — the offset shifts
+only the noise lookup, never the actual vertex position, so every layer
+still spans the true map footprint.
+
+Verified headlessly (4/4): exactly `layer_count` mesh instances exist
+under `CloudDeck`, their measured world-Y altitudes (3272m, 3426m, 3580m,
+3727m against a configured 3200-3800m band) fall inside the band and are
+meaningfully spread across nearly its full thickness rather than
+clustered, and all four share one material instance. Whether this
+actually closes the gap enough to hide something like the mothership from
+a real grazing angle — versus needing more layers, or genuine volumetric
+thickness — is exactly the kind of judgment call that needs the headset,
+same as the rest of this section.
 
 ### Cloud top layer — the "looking down from above" view (`cloud_top.gd`)
 
