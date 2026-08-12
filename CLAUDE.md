@@ -3057,6 +3057,43 @@ plausible, well-reasoned fix for what the code was doing wrong, not a
 visual confirmation, since a rendering result still can't be seen
 headlessly.
 
+**Second live pass — the deck was letting the sky bleed straight
+through it.** After pulling `CloudTop` out of the active tree (see below),
+reported directly: "when I'm under the clouds and look up, I can see the
+sky perfectly... I'd like to not be able to see up through the clouds."
+Correctly diagnosed from the deck's own alpha math, not guessed — two
+compounding causes, both in `cloud_deck.gd`:
+
+- `_build_cloud_texture()`'s density gradient ran its alpha from **0.0**
+  at the low end of the noise range up to 1.0 at the high end — genuinely
+  "broken cloud with real gaps," the original intent from the reference
+  image (distinct puffs with real sky visible between them). But because
+  that 0.0-0.42 span of the noise range maps to near-zero alpha, a large
+  share of the sky directly overhead reads as barely-there cloud rather
+  than solid cover — the deck was doing exactly what it was built to do,
+  it just wasn't the thing actually wanted once seen live.
+- Even the **densest** band topped out multiplied by `opacity`
+  (`opacity_scale` in the shader), which defaulted to **0.8** — so even a
+  "solid core" pixel was only ever 80% opaque, letting a fifth of the sky
+  behind it bleed through everywhere, including the thickest parts of a
+  puff.
+
+Fixed by raising both: the gradient's floor went from `0.0` to `0.72` (the
+five stepped bands now run 0.72 -> 1.0 instead of 0.0 -> 1.0 — still a
+graphic, cel-shaded texture with real density variation, just never
+transparent enough to see stars/sky through), and `opacity` went `0.8` ->
+`1.0` so the solid-core band is now genuinely solid. The two aesthetic
+goals — "distinct puffs with visible sky between them" and "can't see
+through the cloud material itself from directly underneath" — aren't
+reconcilable with one texture; this prioritizes the live report over the
+original reference-image framing. Verified headlessly (4/4): the exported
+`opacity` and the shader's live `opacity_scale` parameter both read 1.0,
+and the generated density texture's alpha never samples below ~0.72
+anywhere across the whole 1024x1024 map (previously ran to true 0.0).
+Not yet confirmed live — the deck reading as opaque enough from below
+without looking like a flat grey lid is a judgment call that needs the
+headset, same as everything else in this section.
+
 ### Cloud top layer — the "looking down from above" view (`cloud_top.gd`)
 
 `CloudDeck` above is tuned entirely for the **underside** view: baked-once

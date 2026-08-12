@@ -82,10 +82,11 @@ extends Node3D
 ## "looking exactly like it did before." See cloud_deck_toon.gdshader's own
 ## note on AMBIENT_LIGHT.
 @export var ambient_floor: float = 0.3
-## Peak opacity of the thickest patches; the noise ramp takes it to fully
-## transparent elsewhere, which is what makes it read as broken cloud rather
-## than a lid.
-@export var opacity: float = 0.8
+## Peak opacity of the thickest patches. Was 0.8 (letting sky bleed through
+## even the "solid core" band) until a live report: looking straight up from
+## underneath showed clear sky, not cloud cover. Raised to fully opaque —
+## see _build_cloud_texture()'s gradient for the other half of that fix.
+@export var opacity: float = 1.0
 ## World size of one tile of the cloud pattern.
 @export var pattern_scale: float = 3400.0
 ## Slow UV drift, so the deck moves without any geometry moving.
@@ -226,10 +227,23 @@ func _build_material() -> ShaderMaterial:
 	return mat
 
 
-## Noise run through a gradient that ends fully transparent, so the deck is
-## broken cloud with real gaps rather than a uniform sheet. The gradient is
-## what carries the ALPHA — a plain grayscale noise texture is opaque
-## everywhere and would just tint the deck.
+## Noise run through a gradient that carries the ALPHA — a plain grayscale
+## noise texture is opaque everywhere and would just tint the deck.
+##
+## THE FLOOR IS NO LONGER NEAR-ZERO. It used to run 0.0 -> 1.0 ("broken
+## cloud with real gaps"), which read as intended from a distance but broke
+## down directly underneath: a huge share of the noise range mapped to
+## near-transparent, so looking straight up hit "clear sky" far more often
+## than cloud, reported live as "when I'm under the clouds and look up, I
+## can see the sky perfectly" — not the desired read, since the whole point
+## of a cloud ceiling from below is that you can't see past it. The bands
+## now run 0.72 -> 1.0: still five stepped density levels for the graphic
+## cel-shaded texture (thin wisp through solid core), but nothing thin
+## enough to see stars/sky through. Distinct puffs with real negative space
+## between them was the original intent for the reference image's look;
+## solid overcast coverage from directly underneath is what was actually
+## asked for once seen live, and the two aren't reconcilable with one
+## texture, so this prioritizes the live report.
 ##
 ## TUNED SOFT AGAINST THE SPIDER-WEB BUG. An early version (frequency 0.9, 4
 ## octaves, a gradient snapping from 0.0 to 0.12 alpha within the first 38%
@@ -267,10 +281,10 @@ func _build_cloud_texture() -> NoiseTexture2D:
 	ramp.interpolation_mode = Gradient.GRADIENT_INTERPOLATE_CONSTANT
 	ramp.offsets = PackedFloat32Array([0.0, 0.42, 0.55, 0.7, 0.85])
 	ramp.colors = PackedColorArray([
-		Color(1.0, 1.0, 1.0, 0.0),
-		Color(1.0, 1.0, 1.0, 0.28),
-		Color(1.0, 1.0, 1.0, 0.55),
+		Color(1.0, 1.0, 1.0, 0.72),
 		Color(1.0, 1.0, 1.0, 0.82),
+		Color(1.0, 1.0, 1.0, 0.90),
+		Color(1.0, 1.0, 1.0, 0.96),
 		Color(1.0, 1.0, 1.0, 1.0),
 	])
 
