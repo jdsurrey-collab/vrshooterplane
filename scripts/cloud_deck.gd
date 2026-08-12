@@ -61,7 +61,20 @@ extends Node3D
 ## faint ripple.
 @export var undulation: float = 200.0
 
-@export var deck_color: Color = Color(0.80, 0.82, 0.82)
+## Warm-white sunlit tops. Two-tone cel shading (see cloud_deck_toon.gdshader)
+## replaced the old flat deck_color + StandardMaterial3D DIFFUSE_TOON, per a
+## reference image of bold graphic cumulus with a genuinely different-hued
+## shadow side rather than just a darker one.
+@export var lit_color: Color = Color(1.0, 0.98, 0.94)
+## Cool blue-grey shadow side — the actual point of the change. DIFFUSE_TOON
+## could only ever dim the lit colour toward black; this is a distinct hue,
+## which needs its own uniform rather than a derived darkening.
+@export var shadow_color: Color = Color(0.55, 0.62, 0.8)
+## Antialiasing width of the lit/shadow step, NOT a stylistic softener — the
+## look is deliberately a hard graphic 2-band split, same as the density
+## texture's own GRADIENT_INTERPOLATE_CONSTANT bands below. This just keeps
+## that step from aliasing/shimmering.
+@export var shadow_edge_softness: float = 0.06
 ## Peak opacity of the thickest patches; the noise ramp takes it to fully
 ## transparent elsewhere, which is what makes it read as broken cloud rather
 ## than a lid.
@@ -74,7 +87,9 @@ extends Node3D
 @export var atmosphere_path: NodePath = ^"../Atmosphere"
 @export var terrain_path: NodePath = ^"../Terrain"
 
-var _material: StandardMaterial3D
+const TOON_SHADER := preload("res://Assets/Shaders/cloud_deck_toon.gdshader")
+
+var _material: ShaderMaterial
 var _drift: Vector2 = Vector2.ZERO
 
 
@@ -177,45 +192,29 @@ func _edge_alpha(x: float, z: float, centre: Vector3, half: float) -> float:
 	return 1.0 - smoothstep(0.75, 1.0, edge_distance)
 
 
-func _build_material() -> StandardMaterial3D:
-	var mat := StandardMaterial3D.new()
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.albedo_color = Color(deck_color.r, deck_color.g, deck_color.b, opacity)
-	mat.albedo_texture = _build_cloud_texture()
-	# The radial edge fade lives in vertex alpha, so it has to be multiplied in.
-	mat.vertex_color_use_as_albedo = true
-	# Visible from underneath as well — the player spends most of the fight
-	# below this.
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	# LIT, not unshaded. This is the line that makes building shadows appear
-	# on the deck; an unshaded material ignores lights and shadows entirely.
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
-	mat.roughness = 1.0
-	mat.metallic = 0.0
-	# Cloud shouldn't have a specular hotspot.
-	mat.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
-	# CEL-SHADED diffuse — a hard step between lit and shadowed faces
-	# instead of BaseMaterial3D's default smooth Burley falloff. Combined
-	# with the real per-vertex normals above and the stepped alpha ramp in
-	# _build_cloud_texture, this is what actually delivers "cell shaded...
-	# dynamic contrast": the puffs now have real graphic light/dark facets
-	# instead of one uniformly-lit flat sheet. Ambient light still fills the
-	# shadowed side (DIFFUSE_TOON only affects the direct-light term), so
-	# it bands rather than going pure black.
-	mat.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
-	# A faint self-glow keyed off the same density texture — sunlit cloud
-	# tops read as visibly brighter than the open sky around them even when
-	# backlit or far away. Without this the deck has no light source of its
-	# own and can wash out to near-invisible at range, which is what "I
-	# wanna be able to see this bubbly smoke from anywhere" was asking to
-	# fix. Reuses the albedo texture directly rather than building a second
-	# one — same density, same puff shapes, just interpreted as a glow mask.
-	mat.emission_enabled = true
-	mat.emission_texture = mat.albedo_texture
-	mat.emission = Color(0.85, 0.88, 0.92)
-	mat.emission_energy_multiplier = 0.22
+## Two-tone TOON shading via a custom light() function
+## (Assets/Shaders/cloud_deck_toon.gdshader), replacing StandardMaterial3D's
+## DIFFUSE_TOON — see that file's header for exactly why: the built-in toon
+## diffuse mode can only dim a single ALBEDO colour toward black, so the
+## shadow side could never be a genuinely different hue. This shader picks
+## between `lit_color` and `shadow_color` directly, combining the mesh's own
+## real per-vertex normals (this puff's bumps) with real shadow-map
+## occlusion (buildings crossing the deck) into one graphic step, matching
+## the same hard-banded "cel shaded... dynamic contrast" direction the
+## density texture below already commits to.
+func _build_material() -> ShaderMaterial:
+	var mat := ShaderMaterial.new()
+	mat.shader = TOON_SHADER
+	mat.set_shader_parameter("albedo_texture", _build_cloud_texture())
+	mat.set_shader_parameter("lit_color", lit_color)
+	mat.set_shader_parameter("shadow_color", shadow_color)
+	mat.set_shader_parameter("shadow_edge_softness", shadow_edge_softness)
+	mat.set_shader_parameter("opacity_scale", opacity)
+	mat.set_shader_parameter("emission_energy", 0.22)
+	mat.set_shader_parameter("uv1_offset", Vector3.ZERO)
 	# Transparent surfaces don't write depth by default; that's correct here,
-	# so towers punching through sort properly against it.
+	# so towers punching through sort properly against it — unchanged from
+	# the StandardMaterial3D this replaces.
 	return mat
 
 
@@ -286,4 +285,4 @@ func _process(delta: float) -> void:
 	if not _material:
 		return
 	_drift += drift_speed * delta
-	_material.uv1_offset = Vector3(_drift.x, _drift.y, 0.0)
+	_material.set_shader_parameter("uv1_offset", Vector3(_drift.x, _drift.y, 0.0))

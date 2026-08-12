@@ -2968,6 +2968,66 @@ volumetric layer above the fog purely for shadows (costs the same as a
 thick one, for the reason above); ground-relative cloud placement (too low
 over low terrain, city-footprint-only coverage).
 
+### Two-tone toon shading + procedural sky — chasing a specific reference look
+
+Direct request, working from a reference image: bold, graphic cel-shaded
+cumulus clouds — a warm-white lit side and a distinctly **cool blue-grey**
+shadow side, not a darker version of the same colour — against a clean
+gradient sky, not a photographic backdrop. Two independent changes, done
+together because they were asked for together.
+
+**`Assets/Shaders/cloud_deck_toon.gdshader` replaces `StandardMaterial3D`'s
+`DIFFUSE_TOON` on the deck.** The built-in toon diffuse mode only steps the
+*brightness* of the lighting term — it still multiplies one `ALBEDO`
+colour, so the shadow side can only ever be a dimmer version of the lit
+side, never a different hue. Getting an actual colour shift needs the two
+tones authored directly and picked between, which means writing a custom
+`light()` function rather than leaning on a `diffuse_mode` flag — the same
+reason this project already reaches for a custom shader elsewhere
+(`explosion_orb.gdshader`, `laser_bolt.gdshader`) whenever a built-in
+material mode hits a real ceiling.
+
+- **Real geometric shading AND real shadow-map occlusion combine into one
+  step**, not two separate effects. `dot(NORMAL, LIGHT)` (this puff's own
+  bumps, from the mesh's real per-vertex normals) is multiplied by
+  `ATTENUATION` (which already carries the shadow map — buildings crossing
+  the deck), then the combined value is thresholded again into a hard
+  graphic 2-band split. That second threshold is what makes a real soft
+  shadow-map penumbra read as a crisp cel edge instead of a gradient.
+- **`shadow_edge_softness` is antialiasing, not a stylistic softener.** The
+  look is deliberately a hard 2-band split — the density texture below
+  already commits to the identical idea via
+  `Gradient.GRADIENT_INTERPOLATE_CONSTANT`. The small `smoothstep` band only
+  stops the transition from shimmering/aliasing at distance.
+  `deck_color`/`opacity` were replaced by `lit_color` (warm near-white) and
+  `shadow_color` (cool blue-grey) — `opacity` keeps its old meaning as an
+  overall alpha scale.
+- Everything else about the deck is unchanged: same stepped density texture,
+  same radial edge fade in vertex alpha, same emission-glow-for-visibility-
+  at-range trick (now tied to `lit_color` directly rather than a separately
+  hardcoded emission colour, so "this side is lit" and "this side glows"
+  can't drift out of sync), same UV drift (now driven through
+  `set_shader_parameter("uv1_offset", ...)` instead of a
+  `StandardMaterial3D` property, functionally identical).
+
+**The skybox is now a `ProceduralSkyMaterial`**, replacing the static
+`PanoramaSkyMaterial` + `Assets/Skybox/panorama.tga`. The reference's
+background is a clean vertical gradient, not a photo — Godot's built-in
+procedural sky is a direct, cheap match for that (`sky_top_color` a real
+blue, `sky_horizon_color` paler toward the horizon, a low `sky_curve` for a
+fairly quick near-horizon falloff), and needs no addon. The texture is left
+on disk unreferenced rather than deleted, in case it's wanted again.
+
+Verified headlessly (14/14): the shader compiles and genuinely implements a
+custom `light()` (not the built-in toon mode) reading real `NORMAL`/`LIGHT`
+and `ATTENUATION`; the live scene's `CloudDeck` material is the new shader
+with `shadow_color` confirmed a distinctly bluer hue than `lit_color`
+(not just darker); UV drift still animates through the new parameter path;
+and the sky material is `ProceduralSkyMaterial` with a real blue top fading
+to a paler horizon. **Cannot be verified headlessly**: whether the shading
+and the sky actually read as the reference image in the headset — first
+pass, like every other visual tuning in this project.
+
 ### Cloud top layer — the "looking down from above" view (`cloud_top.gd`)
 
 `CloudDeck` above is tuned entirely for the **underside** view: baked-once
