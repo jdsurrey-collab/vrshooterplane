@@ -3129,6 +3129,20 @@ undulation, colors, and puff scale actually read as "clouds" from a real
 flying altitude in the headset — first-pass values like every other visual
 tuning in this project.
 
+**Pulled out of the active scene tree** after a live report of "three
+different layers of clouds" with a suspicion this top layer was covering
+the new toon-shaded `CloudDeck` underside look. Diagnostically this
+shouldn't have been possible — `CloudTop`'s `PlaneMesh` keeps its default
+single-sided +Y front face specifically so it's invisible from below/inside
+the band where `CloudDeck` owns the visual — but pulling it is a cheap,
+directly-testable way to confirm or rule that out live rather than guessing
+further from code alone. The `CloudTop` node and its `13_cloudtop`
+`ext_resource` were removed from `Town.tscn`; `scripts/cloud_top.gd` and
+`Assets/Shaders/cloud_top.gdshader` are left on disk untouched, same
+retired-systems convention as everything else pulled from the active tree
+in this project, so the "sea of clouds from above" view can be reinstated
+by re-adding the node if the live look calls for it back.
+
 ### Overcast lighting under the deck
 
 `atmosphere.gd` also dims and cools the sun and ambient light for the whole

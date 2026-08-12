@@ -1,4 +1,4 @@
-[gd_scene load_steps=19 format=3 uid="uid://ceaei3xynkod2"]
+[gd_scene load_steps=18 format=3 uid="uid://ceaei3xynkod2"]
 
 [ext_resource type="PackedScene" uid="uid://c2dyoeywkgf30" path="res://scenes/Player.tscn" id="1_player"]
 [ext_resource type="Script" uid="uid://bqxjeht1l8htu" path="res://scripts/heightmap_terrain.gd" id="5_terrain"]
@@ -9,7 +9,6 @@
 [ext_resource type="Script" uid="uid://b60p1qhinfufc" path="res://scripts/atmosphere.gd" id="10_atmosphere"]
 [ext_resource type="Script" uid="uid://c5vu8gg2v8p2t" path="res://scripts/cloud_deck.gd" id="11_clouddeck"]
 [ext_resource type="Script" uid="uid://cw4dpr1w5cyb6" path="res://scripts/thruster_trails.gd" id="12_thrustertrails"]
-[ext_resource type="Script" path="res://scripts/cloud_top.gd" id="13_cloudtop"]
 [ext_resource type="Script" uid="uid://dex42byg4lhxr" path="res://scripts/ground_flak.gd" id="14_groundflak"]
 [ext_resource type="Script" uid="uid://k3g26ysl12mj" path="res://scripts/tank_objective.gd" id="15_tankobjective"]
 [ext_resource type="Script" uid="uid://1wgta10o6w0v" path="res://scripts/friendly_tags.gd" id="16_friendlytags"]
@@ -97,9 +96,6 @@ spawn_position_xz = Vector2(-16000, 0)
 
 [node name="CloudDeck" type="Node3D" parent="."]
 script = ExtResource("11_clouddeck")
-
-[node name="CloudTop" type="Node3D" parent="."]
-script = ExtResource("13_cloudtop")
 
 [node name="City" type="Node3D" parent="."]
 script = ExtResource("7_citygen")
