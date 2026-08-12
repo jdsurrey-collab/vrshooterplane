@@ -1,4 +1,4 @@
-[gd_scene load_steps=21 format=3 uid="uid://ceaei3xynkod2"]
+[gd_scene load_steps=22 format=3 uid="uid://ceaei3xynkod2"]
 
 [ext_resource type="PackedScene" uid="uid://c2dyoeywkgf30" path="res://scenes/Player.tscn" id="1_player"]
 [ext_resource type="Texture2D" uid="uid://neat1aug36g3" path="res://Assets/Skybox/panorama.tga" id="4_panorama"]
@@ -17,6 +17,7 @@
 [ext_resource type="Script" uid="uid://cv0ubfryy7x2w" path="res://scripts/perf_logger.gd" id="17_perflogger"]
 [ext_resource type="Script" uid="uid://bmjbu78sbyk2x" path="res://scripts/damage_smoke.gd" id="18_damagesmoke"]
 [ext_resource type="Shader" uid="uid://c0fps8o31p6kc" path="res://addons/flowing-sky/shaders/panorama.gdshader" id="19_flowingsky"]
+[ext_resource type="Script" uid="uid://b03ldvgf07ugh" path="res://scripts/volumetric_cloud_puff.gd" id="20_volumetriccloudpuff"]
 
 [sub_resource type="ShaderMaterial" id="SkyMat_1"]
 shader = ExtResource("19_flowingsky")
@@ -140,3 +141,44 @@ script = ExtResource("8_gameflow")
 
 [node name="PerfLogger" type="Node" parent="."]
 script = ExtResource("17_perflogger")
+
+[node name="VolumetricClouds" type="Node3D" parent="."]
+
+[node name="Puff1" type="MeshInstance3D" parent="VolumetricClouds"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 13000, 3500, 0)
+script = ExtResource("20_volumetriccloudpuff")
+puff_size = 800.0
+
+[node name="Puff2" type="MeshInstance3D" parent="VolumetricClouds"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 10950, 3300, 4950)
+script = ExtResource("20_volumetriccloudpuff")
+puff_size = 650.0
+
+[node name="Puff3" type="MeshInstance3D" parent="VolumetricClouds"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 6000, 3700, 7000)
+script = ExtResource("20_volumetriccloudpuff")
+puff_size = 900.0
+
+[node name="Puff4" type="MeshInstance3D" parent="VolumetricClouds"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1050, 3400, 4950)
+script = ExtResource("20_volumetriccloudpuff")
+puff_size = 550.0
+
+[node name="Puff5" type="MeshInstance3D" parent="VolumetricClouds"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1000, 3600, 0)
+script = ExtResource("20_volumetriccloudpuff")
+puff_size = 750.0
+
+[node name="Puff6" type="MeshInstance3D" parent="VolumetricClouds"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1050, 3300, -4950)
+script = ExtResource("20_volumetriccloudpuff")
+
+[node name="Puff7" type="MeshInstance3D" parent="VolumetricClouds"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 6000, 3500, -7000)
+script = ExtResource("20_volumetriccloudpuff")
+puff_size = 850.0
+
+[node name="Puff8" type="MeshInstance3D" parent="VolumetricClouds"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 10950, 3600, -4950)
+script = ExtResource("20_volumetriccloudpuff")
+puff_size = 600.0

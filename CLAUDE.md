@@ -3080,6 +3080,96 @@ undulation, colors, and puff scale actually read as "clouds" from a real
 flying altitude in the headset — first-pass values like every other visual
 tuning in this project.
 
+### Volumetric cloud puffs — `addons/texture3d_visualizer` (`volumetric_cloud_puff.gd`)
+
+The user added this addon alongside `flowing-sky` and asked whether it
+helps with clouds. It's a real raymarched volumetric renderer — box-
+intersect a ray, accumulate a `sampler3D` along it front-to-back — not a
+toy despite the "visualizer" name. Directly relevant to the "Volumetric fog
+is deliberately not used" section above: that system was rejected three
+times for temporal-reprojection jitter, a range limited to
+`volumetric_fog_length` of the camera, and a fixed froxel-grid cost paid
+every frame regardless of what was visible. This addon's approach avoids
+all three structurally — no reprojection to jitter, the volume is just a
+box placed anywhere at any size, and cost is bound by the 3D texture's own
+resolution and how much screen the box covers, not a fixed enormous grid.
+
+**Not a CloudDeck replacement — a small bounded pool of "hero" formations
+layered on top of it.** CloudDeck/CloudTop cover the entire ~110km map
+(`Terrain.world_size` 100000 × `coverage_scale` 1.1) as flat-ish meshes
+specifically because that's what's affordable at that scale; raymarching a
+volume that size, filling most of the screen while flying through it in VR
+stereo, is exactly the cost this project's whole performance-audit history
+has fought. Instead: 8 fixed `VolumetricCloudPuff` instances
+(`VolumetricClouds` in `Town.tscn`), 550-900m across, scattered around
+`dome_center`/the city at cloud-band altitude (Y 3300-3700, inside
+`Atmosphere`'s 3200-3800 band) — genuinely fly-through-able 3D formations
+with real depth, while the cheap mesh systems keep doing "the whole sky
+looks cloudy from anywhere." Same budgeted-spectacle philosophy already
+used for flak bursts and crash sites.
+
+**A real blocker found during implementation, not assumed away: the
+density texture is built at RUNTIME, not a saved asset.**
+`ImageTexture3D.create()` works correctly — confirmed dimensions, confirmed
+it round-trips cleanly through a `ShaderMaterial`'s shader parameter — but
+`ResourceSaver.save()` on it produced an empty 57-byte resource stub
+(`_get_images()` returns nothing when the saver tries to serialize the
+pixel data back out). So the established "generate once with a
+`--headless` script, save the asset" pattern this project uses for
+`soft_particle.png`/`missile_lock.tres` simply has no working path for this
+particular resource type in this Godot version. Not a workaround: this
+project already has the other precedent for procedural textures —
+`cloud_deck.gd`'s own `_build_cloud_texture()` builds its `NoiseTexture2D`
+the identical way, every time the game runs, never as a pre-saved asset.
+`volumetric_cloud_puff.gd` follows that same pattern, with the NxNxN
+generation (real CPU work, though measured at only 30ms for the production
+48³ resolution — negligible against everything else `_ready()` already
+does) cached in a class-level **static** var so it runs once regardless of
+how many puffs exist, not once per instance.
+
+- **The texture carries the shape.** `visualizer.gdshader` does no edge
+  softening of its own, so a raymarched box would read as a visible cube
+  without it — a radial envelope baked into the density (`1.0 -
+  smoothstep(0.55, 1.0, distance_from_centre)`) is what gives it a rounded,
+  puffy silhouette instead. 3D fBm noise on top gives real internal
+  cauliflower structure, at the same low base frequency `cloud_deck.gd`'s
+  own header already documents as the fix for a lace/spider-web look in
+  its 2D version — the identical lesson, ported to 3D.
+- **`model_size` must match the mesh exactly** — the shader's own doc
+  comment is explicit this "must be set manually, cannot be inferred," so
+  `volumetric_cloud_puff.gd` computes it from the same `puff_size` the
+  `BoxMesh` itself used rather than a second number that could drift.
+- **Distance-culled** (`cull_range`, 20000m) — hidden entirely beyond that,
+  the same "costs nothing when nobody's near it" convention already used
+  for `explosion_cull_range`/`spark_range`.
+- **No shadow interaction to reason about**: the shader already sets
+  `unshaded`/`shadows_disabled`/`fog_disabled` in its own `render_mode`, so
+  it neither casts nor receives, and can't double up with `atmosphere.gd`'s
+  own depth-fog band.
+- **Tied into the existing measurement tool rather than shipped
+  unmeasured**: `perf_logger.gd` gained a `NO_VOLUMETRIC_PUFFS` sweep
+  configuration (hides `VolumetricClouds` entirely), extending the same
+  causal on/off comparison already used for flak, particles, shadows, glow,
+  clouds and render scale — a small, direct addition to a tool that exists
+  specifically to catch an unmeasured suspect, rather than adding one next
+  to it.
+
+Verified headlessly (18/18): the shared texture builds at the requested
+resolution and is genuinely cached (a second request at the same
+resolution returns the identical object, not a rebuild); all 8 scene
+puffs share that one texture rather than each generating their own; each
+puff's `model_size` uniform matches its own mesh size; the distance cull
+correctly shows/hides across the boundary; and the new sweep configuration
+correctly toggles the pool's visibility in both directions.
+
+**Cannot be verified headlessly, and this is the real open question**:
+whether the puffs read as convincing volumetric cloud (shape, density,
+scale — first-pass values, like every other visual tuning in this
+project) and, more importantly given this project's performance history,
+actual GPU cost while flying near or through one in VR stereo. That's
+exactly what the new sweep configuration is for — fly it in `SWEEP` mode
+before deciding whether to scale the pool up, down, or cut it.
+
 ### Overcast lighting under the deck
 
 `atmosphere.gd` also dims and cools the sun and ambient light for the whole
