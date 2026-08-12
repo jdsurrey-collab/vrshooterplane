@@ -3129,11 +3129,74 @@ Verified headlessly (4/4): exactly `layer_count` mesh instances exist
 under `CloudDeck`, their measured world-Y altitudes (3272m, 3426m, 3580m,
 3727m against a configured 3200-3800m band) fall inside the band and are
 meaningfully spread across nearly its full thickness rather than
-clustered, and all four share one material instance. Whether this
-actually closes the gap enough to hide something like the mothership from
-a real grazing angle — versus needing more layers, or genuine volumetric
-thickness — is exactly the kind of judgment call that needs the headset,
-same as the rest of this section.
+clustered, and all four share one material instance.
+
+**Fourth live pass — still visible, and this time root-caused past the
+mesh entirely.** Another screenshot, same report: "I can still see the
+sky." This is the pass that actually explains why the first three all
+fell short, and the answer is structural, not a tuning miss. **No finite
+stack of flat sheets at a fixed altitude can ever fully rule this out.**
+A mesh — however opaque, however many layers deep — only blocks a
+specific view ray where that ray geometrically crosses the mesh's own
+altitude. From underneath, a ray toward something far above the band (a
+distant mothership, open sky) is only guaranteed to cross the band
+somewhere along its path — it says nothing about whether that crossing
+still falls within `layer_count`'s finite vertical coverage before the ray
+continues on past the TOP of the stack into untouched blue. More layers
+narrows the gap; no finite number of them closes it for every possible
+player position and viewing angle. The whole approach was solving the
+wrong layer of the problem — geometry that has to be intersected can
+always be missed.
+
+**The actual fix moves the guarantee from `cloud_deck.gd` (a mesh) to
+`atmosphere.gd` (a genuinely per-pixel effect).** Godot's height fog
+(`Environment.fog_height`/`fog_height_density`) computes its contribution
+from the real WORLD ALTITUDE of whatever's being shaded — sky background
+included, via `fog_sky_affect` — which has no "clear the top edge" case
+to leave a gap in, because it isn't checking whether a ray crossed a
+specific piece of geometry at all. `atmosphere.gd` used to force
+`fog_height_density = 0.0`, dismissing height fog outright as "the
+monotonic component that runs to the ground" (true at POSITIVE values —
+Godot's normal use case is ground fog, denser near the surface). The fix
+is the sign flip the engine explicitly supports: a NEGATIVE
+`fog_height_density` makes it denser ABOVE `fog_height` instead, which is
+exactly "everything above the cloud base gets progressively hazier," with
+no dependency on any specific ray-geometry intersection.
+
+Wired to the SAME `overcast` factor already driving the sun/ambient
+dimming (`_overcast_factor`, 0 at/above the band's top, 1 at/below its
+bottom) rather than new state — `fog_height_density` ramps `0.0 ->
+overcast_fog_height_density` (-3.0, a first-pass magnitude) and
+`fog_sky_affect` ramps from the scene's own authored 0.5 (captured in
+`_ready()`, same pattern as `_base_sun_energy`/etc.) up to
+`overcast_fog_sky_affect` (1.0 — Godot caps how much fog can ever paint
+over the sky background at less than 1.0 by default, which would have
+silently capped how much blue could ever be hidden regardless of density).
+Both hit exactly their base/untouched values at `overcast == 0`, so "above
+the clouds is left completely untouched" continues to hold here too, by
+the same construction as the lighting terms, not a second cutoff to keep
+in sync. `fog_height` itself is a static threshold (`cloud_base_y`, set
+once in `_ready()`, never touched per-frame — only the density needs to
+turn the effect on and off).
+
+The mesh stack from the previous pass is NOT being removed — it's still
+what provides the actual visible, shadow-receiving, toon-shaded cloud
+look up close (the reference-image ask this whole system started from);
+height fog is the complementary piece that guarantees nothing escapes
+visibility beyond/above it regardless of angle, a job geometry alone was
+never going to finish.
+
+Verified headlessly (6/6): `fog_height` set to `cloud_base_y`; at and
+above the band's top both `fog_height_density` and `fog_sky_affect` are
+bit-for-bit their untouched/authored values (0.0 and the scene's own 0.5);
+fully under the deck both reach their configured overcast targets exactly
+(-3.0 and 1.0); `overcast_fog_height_density` is confirmed negative (the
+above-not-below flip); and a mid-band sample lands at exactly half the
+target (-1.5), confirming a real ramp rather than a snap. Whether -3.0 is
+strong enough to actually hide something like the mothership without also
+reading as a flat grey wall sitting too close overhead is, like
+everything else in this section, a headset question the code alone can't
+answer.
 
 ### Cloud top layer — the "looking down from above" view (`cloud_top.gd`)
 
