@@ -59,7 +59,6 @@ enum Config {
 	NO_SHADOWS,
 	NO_GLOW,
 	NO_CLOUDS,
-	NO_VOLUMETRIC_PUFFS,
 	SCALE_85,
 }
 
@@ -70,7 +69,6 @@ const CONFIG_NAMES := {
 	Config.NO_SHADOWS: "NO_SHADOWS",
 	Config.NO_GLOW: "NO_GLOW",
 	Config.NO_CLOUDS: "NO_CLOUDS",
-	Config.NO_VOLUMETRIC_PUFFS: "NO_VOLUMETRIC_PUFFS",
 	Config.SCALE_85: "SCALE_85",
 }
 
@@ -118,7 +116,6 @@ var _env: Environment
 var _flak: Node3D
 var _cloud_deck: Node
 var _cloud_top: Node
-var _volumetric_clouds: Node
 var _battle: Node
 var _player: Node3D
 var _flow: Node
@@ -140,7 +137,6 @@ func _ready() -> void:
 	_flak = get_node_or_null("../GroundFlak") as Node3D
 	_cloud_deck = get_node_or_null("../CloudDeck")
 	_cloud_top = get_node_or_null("../CloudTop")
-	_volumetric_clouds = get_node_or_null("../VolumetricClouds")
 	_battle = get_node_or_null("../FactionBattle")
 	_player = get_node_or_null("../Player") as Node3D
 	_flow = get_node_or_null("../GameFlow")
@@ -242,8 +238,6 @@ func _apply_config(c: int) -> void:
 		_cloud_deck.enabled = c != Config.NO_CLOUDS
 	if _cloud_top:
 		_cloud_top.enabled = c != Config.NO_CLOUDS
-	if _volumetric_clouds:
-		_volumetric_clouds.visible = c != Config.NO_VOLUMETRIC_PUFFS
 	get_viewport().scaling_3d_scale = 0.85 if c == Config.SCALE_85 else _base_scale
 
 	# Particles are hidden rather than stopped: `emitting = false` would drain
