@@ -37,7 +37,7 @@ extends Node3D
 
 const STICK_DEADZONE := 0.45  # must fall back inside this before another push registers
 
-@export var game_flow_path: NodePath = ^"../GameFlow"
+@export var game_flow_path: NodePath = ^"../../GameFlow"
 
 var _game_flow: Node
 var _left_controller: XRController3D

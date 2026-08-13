@@ -4226,6 +4226,55 @@ request didn't call for.
   the test harness itself made a signal-boolean assertion unreliable —
   not a bug in the actual menu code).
 
+  **A real bug shipped in that first pass anyway, and it was a total
+  outage: the menu never appeared at all.** Reported live the next
+  session as "it automatically puts me in the world map with no menu or
+  anything, but I can't select anything to continue, and I can't start
+  any matches." Root cause: `main_menu.gd`'s `game_flow_path` export
+  still defaulted to `^"../GameFlow"`, a relative path written back when
+  `MainMenu` was nested two levels deep (`Player/XRCamera3D/MainMenu`).
+  The reparent to a direct child of `Player` (`Player/MainMenu`, see
+  above) changed how many `..` segments are needed to reach `GameFlow`
+  (a sibling of `Player` under `Town`) — one level short now lands on
+  `Player` itself and looks for a nonexistent `GameFlow` child there,
+  needing `^"../../GameFlow"` instead. Because `_ready()` resolves it
+  with `get_node_or_null()`, the miss was completely silent: `_game_flow`
+  stayed null, so `_process()`'s `var is_menu: bool = _game_flow != null
+  and ...` was permanently false, so `visible` never went true (the
+  screen quad simply never rendered) and the thumbstick/trigger handlers
+  never ran — indistinguishable, from the headset, from "the menu isn't
+  there." The headless verification above never caught it because it
+  called `main_menu.gd`'s methods directly rather than checking whether
+  `_game_flow` itself had resolved.
+
+  **Caught by writing a headless script that actually asserts
+  `main_menu._game_flow != null` and `main_menu.visible`** rather than
+  only exercising the higher-level `move_selection`/`confirm_selection`
+  API — the earlier verification pass tested the menu's OWN logic
+  thoroughly but never checked that its NodePath dependencies had
+  actually resolved, which is exactly the class of bug an
+  export-default that quietly returns null can hide from any test that
+  doesn't check for null. Re-verified end to end after the fix: menu
+  visible from frame one, GAME MODES submenu opens/closes, and confirming
+  FULL SCALE actually flips `GameFlow.state` to `PLAYING` and starts the
+  battle.
+
+  **A second, unrelated gotcha resurfaced while debugging this**: running
+  `godot --headless --editor --quit` to check for parse errors silently
+  resaved `Player.tscn` on disk (the editor's "Reopening scenes" step) —
+  reordering `ext_resource` entries, dropping the `uid=` attribute off
+  one of them, and writing a bogus `scene_properties_keys =
+  PackedStringArray("main_menu_ui.gd")` onto the `Screen` node (harmless
+  at runtime — `XRToolsViewport2DIn3D._update_render()` recomputes that
+  array from the actual scene script's real `@export`s in `_ready()`
+  before ever reading the stale `.tscn` value, so it can't affect
+  anything, but it's confusing diff noise). Same class of quirk already
+  documented under Flight HUD (stripped crosshair emission properties on
+  resave) — worth remembering that ANY `--editor --quit` invocation while
+  `Player.tscn`/`Town.tscn` are among the editor's last-open scenes can
+  silently modify them, so a bug-hunting session should diff scene files
+  before committing, not just script files.
+
   ### The old head-locked version, for the record
 
   - **Solid black the whole time it's up, not a quick reveal** — `Fade`,
