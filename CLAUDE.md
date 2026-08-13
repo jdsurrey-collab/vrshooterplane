@@ -655,6 +655,93 @@ writes and wires up scenes/scripts directly.
   as coherent sprawl rather than uniform coverage, and whether supertall
   towers now reaching close to the cloud band's own altitude (3200-3800m)
   read as intended poking through cloud cover or as visual clutter.
+
+  **A single, deliberately colossal one-off landmark** — direct request,
+  described almost as if reporting a bug at first ("you also have one
+  building that's fifty times bigger than any building... sits right in
+  the middle of the entire map and extends all the way up... almost like
+  a beacon or a tower"), clarified as a genuine feature ask once
+  investigated and found not to match anything actually in the data ("No,
+  no, this is a new thing... an addition that I want added"). Real
+  investigation happened first, not assumed: a headless sweep of every
+  placed building's radius/height found nothing exceeding the
+  mathematically expected ceiling (max measured 3746m height / 82.5m
+  radius, both matching the formula exactly, and neither anywhere near
+  the map's centre — 34km and 17km away respectively), and a fine 50m
+  heightmap sample around world origin found a smooth, unremarkable
+  ~1238m with no spike. Worth the legwork: it meant the eventual
+  implementation could be a clean, deliberate addition rather than a bug
+  fix chasing a phantom.
+
+  `_place_mega_tower()` (`CityGenerator`'s new "Mega tower" export group)
+  reuses `LANDMARK_BUILDINGS[0]` — the same visual language as the city's
+  own tallest towers, textured through the identical
+  `_material_for_scene()` path — scaled to independent height (25,000m)
+  and diameter (1200m) targets rather than the procedural population's
+  single uniform scale factor, since this is a hand-tuned one-off, not a
+  member of a population sharing one scale law. The targets themselves
+  come from reading "fifty times bigger" / "diameter twenty times bigger"
+  against a TYPICAL building (median height ~520m, median diameter ~56m)
+  rather than the literal current maximum — 50x the actual tallest
+  building would be ~187km, longer than the entire 100km map, clearly not
+  what was meant. 25,000m works out to just under 7x the tallest
+  procedural landmark and over 3x the tallest mountain (~6984m), genuinely
+  towering above the cloud band (3200-3800m) as a real beacon visible from
+  across the map, without being nonsensical relative to the world's own
+  scale.
+
+  **Deliberately outside both the batched population and the collapse
+  system.** Not folded into the building `MultiMesh`es (a true one-off
+  doesn't need machinery built for many identical-scale instances — one
+  extra draw call is free) and not added to the `buildings` array
+  `collapse_near()` walks (a permanent monument, not something a nearby
+  tank explosion should be able to sink). Also deliberately left out of
+  `landmark_rooftops` — `ground_flak.gd`'s cosmetic AA fire is tuned for
+  towers reaching a few hundred metres
+  (`SHELL_BURST_ALTITUDE_MIN/MAX` 3700-4700m), and flak launching from a
+  25,000m rooftop would be far outside anything that system was ever
+  tuned against.
+
+  **A real bug caught by verification, not assumed away.** The first
+  version placed the mesh's TRANSFORM ORIGIN at ground height and let the
+  model's own pivot-to-base offset (normally a few metres, invisible on
+  an ordinary building's much smaller scale) ride along uncorrected — at
+  this tower's ~200x `scale_y`, that same small offset amplified into a
+  measured 100m gap between the visible base and the actual ground,
+  caught by comparing the tower's own combined world-space mesh AABB
+  against `Terrain.get_height_at()` rather than trusting the transform
+  alone. Fixed by solving for the transform origin that puts the mesh's
+  true lower bound — not its pivot — exactly on the ground.
+
+  Placed at world origin (`mega_tower_position_xz = (0, 0)`, the terrain's
+  actual centre — NOT `city_center`, which is just where the original
+  fixed-footprint city and the Air Superiority scoring column happen to
+  sit) — coincidentally only 6000m from `city_center`, meaning it sits
+  well inside `dome_radius` (8000m): a genuine new obstacle inside the
+  contested airspace, not just background scenery, consistent with how
+  every other building already works (ships crash into it exactly like
+  terrain — no special-cased avoidance, matching this project's existing
+  approximate-collision philosophy). It also inherits the same accepted
+  limitation as every tall building: `MAX_BUILDING_HEIGHT` (4000m) still
+  gates the building-collision physics query, so anything flying above
+  4000m near the tower — the vast majority of its 25,000m height — won't
+  be collision-checked against it. Not treated as a bug worth fixing:
+  nothing in this game currently operates anywhere near that altitude
+  (AI combat tops out at `ai_objective_ceiling`, 2450m), so in practice
+  the tower is fully solid exactly where anyone could plausibly fly into
+  it, the same real limitation every other tall building already has,
+  just more visible on something this size.
+
+  Verified headlessly (3/3, after the base-height fix): measured mesh
+  height and diameter match their targets exactly (25000.0m, 1200.0m),
+  and the combined mesh AABB's base sits exactly flush with
+  `Terrain.get_height_at()` at that position (previously off by the
+  100m pivot-offset bug above, now within 0.001m). **Not yet confirmed
+  live**: whether it actually reads as an intentional "beacon" landmark
+  rather than an ungainly needle — the base model's natural proportions
+  were never designed for a ~21:1 height-to-diameter stretch, which is a
+  genuine first-pass guess about how far a supertall silhouette can be
+  pushed before it stops looking like a tower.
 - `scripts/target_lock.gd` — left controller's **Y button**
   (`by_button`) **cycles** a lock through living aliens from
   `faction_battle.gd`'s roster, nearest-to-farthest
