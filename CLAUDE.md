@@ -4446,6 +4446,108 @@ whether 220m hands read as genuinely "small" against 600m letters, and
 whether the pulse timing/brightness needs retuning once seen at real
 battle scale.
 
+### Capture confirmation audio — low, droning, map-wide
+
+Direct follow-up request: *"trigger[ed] once an objective has been
+captured by either side... directional, come from the way that the
+capture point is, and everybody on the map can hear it... make sure it's
+low and droning... a lot of reverb to kind of echo through the map."*
+Sourced from a single user-supplied impact SFX dropped in a new
+`capture/` folder at the project root (matching this project's usual
+raw-asset-source convention — `city explsosions/`, `damage/`, `weapons/`,
+etc. all live there too), processed once via `ffmpeg` rather than used
+raw: down-mixed to mono (`AudioStreamPlayer3D` can only position a mono
+source, the same rule every other positional sound in this project
+follows), pitched way down (`asetrate=48000*0.52`, turning a bright
+5.2s impact into a much lower ~10s tone), heavy bass boost
+(`bass=g=14:f=75`), a `lowpass=f=1700` to keep it dark rather than
+tinny, a **5-tap `aecho` chain** (delays at 70/450/950/1600/2600ms,
+decaying gains) for the requested "a lot of reverb... echo through the
+map," and `apad` + `loudnorm` to give the echo tail room to breathe and
+normalize the result. Final asset (`Assets/Audio/capture_confirmed.mp3`)
+runs ~16.2s, entirely droning tail past the original impact.
+
+**Positional but deliberately NOT range-gated**, unlike every other
+budgeted ambience sound in this file (`_play_battle_sound()`,
+`tank_objective.gd`'s `explosion_sound_range`) which silently skips
+spawning the sound at all beyond some radius. `_maybe_play_capture_sound()`
+always spawns a standalone `AudioStreamPlayer3D` at the zone's own
+position — real positional audio, so it genuinely reads as "coming from
+the way that the capture point is" — with `capture_sound_max_distance`
+left at **0.0** (Godot's own "no hard cutoff" convention for
+`AudioStreamPlayer3D`) and a deliberately huge `capture_sound_unit_size`
+(6000.0, several times any other sound's unit_size in this project) so
+the natural inverse-distance falloff stays audible rather than silent
+clear across the map, matching "everybody on the map can hear it" as
+literally as Godot's attenuation model allows. `capture_sound_cutoff_hz`
+(2200Hz) adds only a little extra distance muffling on top of what's
+already heavily darkened at the mix stage.
+
+**A true one-shot per capture, not per-frame.** `CaptureZone.last_captured_owner`
+is a NEW field, separate from anything the visual pulse reads — 
+`_maybe_play_capture_sound()` fires only when `owner_faction()` genuinely
+transitions to a non-neutral value different from what it last recorded,
+so holding a captured zone (or sitting neutral) never re-triggers it,
+but losing and later re-taking the SAME zone correctly fires it again as
+a genuinely new event. Reset in `reset_battle()` alongside `capture_value`
+itself — without that, a zone captured by the same faction again next
+match would silently skip the confirmation sound the first time, since
+`last_captured_owner` would still read that faction from the previous
+match.
+
+Verified headlessly: a lone friendly ship driving a zone to full capture
+spawns exactly one `AudioStreamPlayer3D` positioned at the zone (within
+1m), using `capture_confirmed.mp3`, with the expected unit_size/
+max_distance; holding the capture for several more update ticks spawns
+no additional voices; and an enemy majority later flipping the same zone
+back correctly spawns a second, independent confirmation sound. **Not
+yet confirmed live** — whether "low and droning... echo through the map"
+actually reads as intended, and whether a `unit_size` of 6000 is
+generous enough (or too generous) to genuinely carry across this
+project's ~100km map, are headset/playtest questions the code alone
+can't answer.
+
+### Two letter rings per tower — above AND below the cloud line
+
+Direct follow-up request: *"I need every tower to have two sets of
+letters down, one below the cloud line and one above the cloud line, but
+six thousand meters higher than what it is now."* Previously each tower
+carried a single ring of 4 letter faces, always placed above the cloud
+band (`maxf(tower_base + 500, cloud_top + 200)`). Now every tower carries
+**two** full rings — 8 letter faces and 8 clock hands total — built by a
+new shared `_build_letter_ring(zone, letter_y)` helper that the original
+per-side construction loop was factored into, called twice per tower
+from `_build_zone_letters()`:
+
+- **Above ring** — the exact original formula, simply raised another
+  6000m: `maxf(tower_base + 500, cloud_top + 200) + 6000.0`.
+- **Below ring** — new: `minf(tower_base + 1500, cloud_base - 300)`,
+  floored at `tower_base + 300` so it never sits lower than a sane height
+  up the tower's own structure even on the tallest-based towers. This
+  terrain is genuinely mountainous (measured tower base elevations span
+  1162-5291m across the ring, per the earlier six-tower-constellation
+  work), so a handful of towers whose base already sits near or above the
+  cloud band simply don't have room for a position that's both "up the
+  tower" and "below the clouds" — the floor wins in that edge case, the
+  same accepted-edge-case tolerance already extended to every other
+  measured placement in this project rather than special-cased away.
+
+Both rings share the identical letter/hand construction (font, size,
+outline, clock-hand mesh, materials) — a tower flown under the weather
+and one flown well above it both get a fully readable, fully animated
+capture status, not just whichever ring happened to be visible before
+this change. `_update_zone_visual()` needed **no changes at all** to
+support this: it already loops over `zone.letter_labels.size()`
+generically, so 8 faces update exactly like 4 did.
+
+Verified headlessly across all 6 zones: each carries exactly 8 letter
+labels/hand pivots/hand materials; the above-ring's Y matches the old
+single-ring formula plus exactly 6000m; the below-ring sits strictly
+lower than the above-ring; and all 4 sides of each ring share the same
+Y (a real ring, not four independently-drifted heights). **Not yet
+confirmed live** — whether the below-cloud ring reads clearly against
+city/terrain clutter the way the above-cloud ring does against open sky.
+
   ### The old head-locked version, for the record
 
   - **Solid black the whole time it's up, not a quick reveal** — `Fade`,

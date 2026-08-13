@@ -313,6 +313,15 @@ const ZONE_NEUTRAL_COLOR := Color(0.55, 0.55, 0.58)
 
 const ZONE_LETTER_FONT := preload("res://Assets/Fonts/Orbitron-Variable.ttf")
 
+## Low, droning, heavily-reverbed one-shot played the instant a tower
+## genuinely flips ownership — see `_maybe_play_capture_sound()`. Sourced
+## from a user-supplied impact SFX (`capture/` at the project root),
+## pitched way down (asetrate*0.52) and run through a 5-tap `aecho` chain
+## for the "a lot of reverb to kind of echo through the map" ask, the same
+## ffmpeg-processing-not-a-new-recording convention already used for every
+## other sound in this project.
+const CAPTURE_CONFIRMED_SOUND := preload("res://Assets/Audio/capture_confirmed.mp3")
+
 # --- Conquest clock-hand visuals (see _build_zone_letters/_update_zone_visual) ---
 const ZONE_HAND_LENGTH := 220.0  # a "small hand" against the ~600m-tall letters
 const ZONE_HAND_WIDTH := 16.0
@@ -460,6 +469,23 @@ const KILL_FEED_ENTRY_LIFETIME := 8.0
 ## draw). Direct instruction: "the score is gonna go all the way to a
 ## thousand."
 @export var score_target: float = 1000.0
+
+@export_group("Capture confirmation audio")
+## Direct request: "trigger[ed] once an objective has been captured by
+## either side... directional, come from the way that the capture point
+## is, and everybody on the map can hear it." `max_distance` (0 = no hard
+## cutoff, per Godot's own AudioStreamPlayer3D convention) combined with a
+## deliberately huge `unit_size` is what makes "everybody on the map" true
+## — a real inverse-distance falloff, not a range gate that silently skips
+## spawning the sound past some radius the way `_play_battle_sound()`'s
+## budgeted ambience does.
+@export var capture_sound_unit_size: float = 6000.0
+@export var capture_sound_max_distance: float = 0.0
+@export var capture_sound_volume_db: float = 6.0
+## Distance low-pass — kept modest since the source is already heavily
+## darkened at the mix stage (see CAPTURE_CONFIRMED_SOUND's own header);
+## this only adds a little extra muffling the further away you are.
+@export var capture_sound_cutoff_hz: float = 2200.0
 
 ## How many aliens may hunt the player at once. An "attacker cap" is a
 ## standard modern-combat-AI pacing device: without it, every alien inside
@@ -735,6 +761,12 @@ func reset_battle() -> void:
 	enemy_score = 0.0
 	for zone in capture_zones:
 		zone.capture_value = 0.0
+		# Reset so a zone captured by the SAME faction again next match
+		# still fires the confirmation sound — without this, last_captured_owner
+		# would still read that faction from the previous match and the
+		# "genuinely changed" check in _maybe_play_capture_sound() would
+		# silently skip it the first time around.
+		zone.last_captured_owner = CaptureZone.NEUTRAL
 		# Explicit rather than waiting for the next _update_capture_zones()
 		# tick (which only runs while simulation_active) — a player who
 		# returns to the menu and looks at a tower shouldn't still see last
@@ -2252,76 +2284,107 @@ func _build_capture_zones() -> void:
 ## huge PHYSICAL marker on the tower, not a HUD readout; letters genuinely
 ## get bigger as you approach, matching a real marking on a real
 ## structure the size of everything else in this "hellscape."
+## TWO rings per tower now — direct follow-up request: "every tower to
+## have two sets of letters down, one below the cloud line and one above
+## the cloud line, but six thousand meters higher than what it is now."
+## The "above" ring is the ORIGINAL single set's own placement formula,
+## simply raised another 6000m; the "below" ring is new. Both get the
+## full letter+hand treatment via `_build_letter_ring()`, so a tower now
+## carries 8 letter faces (2 rings * 4 sides) and 8 clock hands — flying
+## either above or below the weather still shows a readable, animated
+## capture status, not just the one that happened to clear the clouds.
 func _build_zone_letters() -> void:
+	var cloud_base_y := 3200.0
 	var cloud_top_y := 3800.0
 	var world_env := get_node_or_null("../Atmosphere")
 	if world_env and "cloud_base_y" in world_env and "cloud_thickness" in world_env:
+		cloud_base_y = world_env.cloud_base_y
 		cloud_top_y = world_env.cloud_base_y + world_env.cloud_thickness
 
 	for zone in capture_zones:
-		# Whichever is higher: comfortably above the (absolute-altitude)
-		# cloud band, or a sane height up the tower's own structure — a
-		# tower whose base already sits above the clouds (this terrain is
-		# genuinely mountainous, measured base_y ranged 1162-5291m across
-		# the ring) still gets its letters a real distance off the ground
-		# rather than sitting right at its own base.
-		var letter_y: float = maxf(zone.position.y + 500.0, cloud_top_y + 200.0)
-		var ring_radius := 700.0  # just outside the tower's own 600m base radius
 		zone.letter_labels.clear()
 		zone.hand_pivots.clear()
 		zone.hand_materials.clear()
 		zone.pulse_phase = randf() * TAU  # don't let all six towers pulse in lockstep
-		for side in 4:
-			var angle := float(side) * PI * 0.5
-			var offset := Vector3(sin(angle), 0.0, cos(angle)) * ring_radius
-			var label := Label3D.new()
-			label.text = zone.letter
-			label.font = ZONE_LETTER_FONT
-			label.font_size = 300
-			label.pixel_size = 2.0  # real world scale — see this function's own header
-			label.modulate = ZONE_NEUTRAL_COLOR
-			label.outline_size = 24
-			label.outline_modulate = Color(0.0, 0.0, 0.0, 0.6)
-			label.position = zone.position + offset + Vector3(0.0, letter_y - zone.position.y, 0.0)
-			# Face OUTWARD (away from the tower centre) — a Label3D's
-			# readable front is its own local +Z by default (same
-			# convention flight_hud.gd's non-billboarded labels already
-			# documented), so rotate to point +Z along `offset`.
-			label.rotation.y = angle
-			add_child(label)
-			zone.letter_labels.append(label)
 
-			# CLOCK HAND — a small needle on each letter face, direct
-			# request: "there needs to be a small hand on the letter that
-			# you could see it goes around and slowly starts to capture,
-			# like, a clock." Two-node split is required, not cosmetic:
-			# the PIVOT is what rotates (around its OWN origin, i.e. the
-			# letter's centre), while the visible mesh is a fixed child
-			# offset half its length away — rotating the mesh directly
-			# would spin it in place around its own midpoint instead of
-			# sweeping around the letter like an actual clock hand.
-			var hand_pivot := Node3D.new()
-			hand_pivot.position = label.position + offset.normalized() * ZONE_HAND_FORWARD_OFFSET
-			hand_pivot.rotation.y = angle  # matches the label's own outward facing, set once, never touched again
-			add_child(hand_pivot)
+		# BELOW the cloud line. Never lower than a sane height up the
+		# tower's own base (same reasoning the original set already used)
+		# even if that means poking into/above the cloud band on a tower
+		# whose base already sits unusually high — this terrain is
+		# genuinely mountainous, measured base_y ranged 1162-5291m across
+		# the ring, so a handful of towers simply don't have room for a
+		# true "below the clouds" position and this is the accepted
+		# edge case, same tolerance this project already extends to every
+		# other measured placement edge case.
+		var letter_y_below: float = minf(zone.position.y + 1500.0, cloud_base_y - 300.0)
+		letter_y_below = maxf(letter_y_below, zone.position.y + 300.0)
+		_build_letter_ring(zone, letter_y_below)
 
-			var hand_mesh := MeshInstance3D.new()
-			var hand_box := BoxMesh.new()
-			hand_box.size = Vector3(ZONE_HAND_WIDTH, ZONE_HAND_LENGTH, ZONE_HAND_THICKNESS)
-			hand_mesh.mesh = hand_box
-			hand_mesh.position = Vector3(0.0, ZONE_HAND_LENGTH * 0.5, 0.0)
-			var hand_mat := StandardMaterial3D.new()
-			# Unshaded + emission, same lesson just relearned on the main
-			# menu screen: a glowing indicator that has to read clearly
-			# regardless of scene lighting (including under the overcast
-			# cloud band, or at night) can't be a lit/shaded material.
-			hand_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-			hand_mat.emission_enabled = true
-			hand_mesh.material_override = hand_mat
-			hand_pivot.add_child(hand_mesh)
+		# ABOVE the cloud line — the original formula (comfortably above
+		# the absolute-altitude cloud band, or a sane height up the
+		# tower's own structure, whichever is higher), now raised an
+		# additional 6000m per the direct follow-up request.
+		var letter_y_above: float = maxf(zone.position.y + 500.0, cloud_top_y + 200.0) + 6000.0
+		_build_letter_ring(zone, letter_y_above)
 
-			zone.hand_pivots.append(hand_pivot)
-			zone.hand_materials.append(hand_mat)
+
+## Builds one full ring of 4 letter faces + 4 clock hands at a given
+## world-Y and appends onto whatever's already in the zone's arrays — see
+## `_build_zone_letters()`'s own header for why a tower now gets two of
+## these instead of one.
+func _build_letter_ring(zone: CaptureZone, letter_y: float) -> void:
+	var ring_radius := 700.0  # just outside the tower's own 600m base radius
+	for side in 4:
+		var angle := float(side) * PI * 0.5
+		var offset := Vector3(sin(angle), 0.0, cos(angle)) * ring_radius
+		var label := Label3D.new()
+		label.text = zone.letter
+		label.font = ZONE_LETTER_FONT
+		label.font_size = 300
+		label.pixel_size = 2.0  # real world scale — see _build_zone_letters()'s own header
+		label.modulate = ZONE_NEUTRAL_COLOR
+		label.outline_size = 24
+		label.outline_modulate = Color(0.0, 0.0, 0.0, 0.6)
+		label.position = zone.position + offset + Vector3(0.0, letter_y - zone.position.y, 0.0)
+		# Face OUTWARD (away from the tower centre) — a Label3D's
+		# readable front is its own local +Z by default (same
+		# convention flight_hud.gd's non-billboarded labels already
+		# documented), so rotate to point +Z along `offset`.
+		label.rotation.y = angle
+		add_child(label)
+		zone.letter_labels.append(label)
+
+		# CLOCK HAND — a small needle on each letter face, direct
+		# request: "there needs to be a small hand on the letter that
+		# you could see it goes around and slowly starts to capture,
+		# like, a clock." Two-node split is required, not cosmetic:
+		# the PIVOT is what rotates (around its OWN origin, i.e. the
+		# letter's centre), while the visible mesh is a fixed child
+		# offset half its length away — rotating the mesh directly
+		# would spin it in place around its own midpoint instead of
+		# sweeping around the letter like an actual clock hand.
+		var hand_pivot := Node3D.new()
+		hand_pivot.position = label.position + offset.normalized() * ZONE_HAND_FORWARD_OFFSET
+		hand_pivot.rotation.y = angle  # matches the label's own outward facing, set once, never touched again
+		add_child(hand_pivot)
+
+		var hand_mesh := MeshInstance3D.new()
+		var hand_box := BoxMesh.new()
+		hand_box.size = Vector3(ZONE_HAND_WIDTH, ZONE_HAND_LENGTH, ZONE_HAND_THICKNESS)
+		hand_mesh.mesh = hand_box
+		hand_mesh.position = Vector3(0.0, ZONE_HAND_LENGTH * 0.5, 0.0)
+		var hand_mat := StandardMaterial3D.new()
+		# Unshaded + emission, same lesson just relearned on the main
+		# menu screen: a glowing indicator that has to read clearly
+		# regardless of scene lighting (including under the overcast
+		# cloud band, or at night) can't be a lit/shaded material.
+		hand_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		hand_mat.emission_enabled = true
+		hand_mesh.material_override = hand_mat
+		hand_pivot.add_child(hand_mesh)
+
+		zone.hand_pivots.append(hand_pivot)
+		zone.hand_materials.append(hand_mat)
 
 
 ## Presence-COUNT driven clock-sweep capture — replaced the old flat-rate
@@ -2368,6 +2431,7 @@ func _update_capture_zones(delta: float) -> void:
 			zone.capture_value = move_toward(zone.capture_value, float(dominant_sign) * 100.0, rate * delta)
 
 		_update_zone_visual(zone, dominant_sign, delta)
+		_maybe_play_capture_sound(zone)
 
 
 ## `capture_base_time` seconds at n=1, exponentially shorter as n grows,
@@ -2392,6 +2456,37 @@ func _faction_count_near(units: Array, pos: Vector3) -> int:
 		if combatant.alive and Vector2(combatant.position.x - pos.x, combatant.position.z - pos.z).length_squared() <= radius_sq:
 			count += 1
 	return count
+
+
+## Fires the low, droning capture-confirmed cue the instant a zone
+## genuinely FLIPS to a new owner — gated on `CaptureZone.last_captured_owner`
+## rather than `_update_zone_visual()`'s per-frame `pulsing` flag, so it's a
+## true one-shot event rather than something that could re-trigger on
+## every frame a zone happens to sit at an extreme. Fires again if the
+## same zone is lost and recaptured later in the match — each new arrival
+## at an extreme is a genuinely new capture event.
+func _maybe_play_capture_sound(zone: CaptureZone) -> void:
+	var new_owner := zone.owner_faction()
+	if new_owner == CaptureZone.NEUTRAL or new_owner == zone.last_captured_owner:
+		return
+	zone.last_captured_owner = new_owner
+
+	# Deliberately NOT range-gated like _play_battle_sound()'s budgeted
+	# ambience — "everybody on the map can hear it" means this always
+	# spawns, positioned at the tower, and leans on unit_size/max_distance
+	# (see the export group's own header) to stay audible however far away
+	# the listener actually is.
+	var sound := AudioStreamPlayer3D.new()
+	get_tree().current_scene.add_child(sound)
+	sound.global_position = zone.position
+	sound.stream = CAPTURE_CONFIRMED_SOUND
+	sound.volume_db = capture_sound_volume_db
+	sound.unit_size = capture_sound_unit_size
+	sound.max_distance = capture_sound_max_distance
+	sound.attenuation_filter_cutoff_hz = capture_sound_cutoff_hz
+	sound.attenuation_filter_db = -24.0
+	sound.play()
+	sound.finished.connect(sound.queue_free)
 
 
 ## Drives BOTH the clock hand (angle = abs(capture_value)/100 swept

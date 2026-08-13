@@ -72,6 +72,15 @@ var hand_materials: Array[StandardMaterial3D] = []
 ## offsets elsewhere in this project.
 var pulse_phase: float = 0.0
 
+## Faction this zone was last observed to genuinely FLIP TO — distinct
+## from `owner_faction()`, which is derived live every frame from
+## `capture_value` alone. Used only by `faction_battle.gd`'s
+## `_update_capture_zones()` to fire the one-shot "objective captured"
+## audio cue exactly once per real capture event (including a zone
+## flipping back and forth more than once across a match), never for
+## anything visual.
+var last_captured_owner: int = NEUTRAL
+
 
 ## Derived, not stored — see the class header for why.
 func owner_faction() -> int:
