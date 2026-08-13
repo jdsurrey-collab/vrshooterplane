@@ -313,6 +313,15 @@ const ZONE_NEUTRAL_COLOR := Color(0.55, 0.55, 0.58)
 
 const ZONE_LETTER_FONT := preload("res://Assets/Fonts/Orbitron-Variable.ttf")
 
+# --- Conquest clock-hand visuals (see _build_zone_letters/_update_zone_visual) ---
+const ZONE_HAND_LENGTH := 220.0  # a "small hand" against the ~600m-tall letters
+const ZONE_HAND_WIDTH := 16.0
+const ZONE_HAND_THICKNESS := 6.0
+const ZONE_HAND_FORWARD_OFFSET := 15.0  # sits just in front of the glyph plane, avoids z-fighting
+const ZONE_PULSE_SPEED := 3.2  # rad/s, cosmetic pulse frequency while a capture is actively contested
+const ZONE_PULSE_MIN := 0.7  # brightness multiplier at the pulse trough
+const ZONE_PULSE_MAX := 2.6  # pushed above 1.0 so the pulse peak actually blooms via the Glow pass
+
 # --- Tracer readability at range (see _bolt_transform) ----------------------
 
 ## The bolt mesh's own dimensions, kept next to the sizes they are built from
@@ -416,13 +425,25 @@ const KILL_FEED_ENTRY_LIFETIME := 8.0
 ## between neighbouring towers leaves each zone clearly its own contested
 ## area rather than overlapping the next one.
 @export var capture_radius: float = 4000.0
-## How fast `CaptureZone.capture_value` moves per second while
-## uncontested (one faction present, the other absent) — 15.0 means
-## neutral -> fully captured in ~6.7s, or fully-enemy -> fully-friendly in
-## ~13.3s (has to pass back through neutral first — see
-## _update_capture_zones()'s own note on why that's the real Conquest rule,
-## not a shortcut).
-@export var zone_capture_rate: float = 15.0
+## CLOCK-SWEEP CAPTURE MODEL — replaced the old flat `zone_capture_rate`.
+## Direct follow-up request, after the flat-rate version read as "it just
+## instantly captures when somebody gets in that field": a capture should
+## visibly sweep like a clock hand (see `_build_zone_letters()`'s hand
+## meshes and `_update_capture_zones()`'s own header), taking
+## `capture_base_time` seconds for a FULL 0->100% sweep with exactly ONE
+## ship of the dominant faction present — "a capture takes about thirty
+## seconds for one person" — getting exponentially faster as more of that
+## faction pile onto the zone, and never faster than `capture_min_time`
+## however many show up: "it can never be faster than a five second
+## capture." See `_capture_sweep_duration()` for the exact curve.
+@export var capture_base_time: float = 30.0
+## Floor on sweep duration no matter how many ships are present.
+@export var capture_min_time: float = 5.0
+## How quickly additional presence shortens the sweep below
+## `capture_base_time`, applied as an exponential decay toward
+## `capture_min_time` (see `_capture_sweep_duration()`) — first-pass, needs
+## live tuning like every other rate in this project.
+@export var capture_decay_rate: float = 0.5
 ## Points per second, per zone currently controlled, added to that zone's
 ## owning faction's score. Six zones held for the whole 10-minute match
 ## would alone contribute 6 * 0.2 * 600 = 720 of the 1000-point target —
@@ -717,8 +738,8 @@ func reset_battle() -> void:
 		# Explicit rather than waiting for the next _update_capture_zones()
 		# tick (which only runs while simulation_active) — a player who
 		# returns to the menu and looks at a tower shouldn't still see last
-		# match's colour.
-		_update_zone_letter_color(zone)
+		# match's colour, glow, or hand position.
+		_update_zone_visual(zone, 0, 0.0)
 	match_time_remaining = match_duration
 	_ambient_bolts.clear()
 	_kill_feed_entries.clear()
@@ -2247,6 +2268,9 @@ func _build_zone_letters() -> void:
 		var letter_y: float = maxf(zone.position.y + 500.0, cloud_top_y + 200.0)
 		var ring_radius := 700.0  # just outside the tower's own 600m base radius
 		zone.letter_labels.clear()
+		zone.hand_pivots.clear()
+		zone.hand_materials.clear()
+		zone.pulse_phase = randf() * TAU  # don't let all six towers pulse in lockstep
 		for side in 4:
 			var angle := float(side) * PI * 0.5
 			var offset := Vector3(sin(angle), 0.0, cos(angle)) * ring_radius
@@ -2267,61 +2291,151 @@ func _build_zone_letters() -> void:
 			add_child(label)
 			zone.letter_labels.append(label)
 
+			# CLOCK HAND — a small needle on each letter face, direct
+			# request: "there needs to be a small hand on the letter that
+			# you could see it goes around and slowly starts to capture,
+			# like, a clock." Two-node split is required, not cosmetic:
+			# the PIVOT is what rotates (around its OWN origin, i.e. the
+			# letter's centre), while the visible mesh is a fixed child
+			# offset half its length away — rotating the mesh directly
+			# would spin it in place around its own midpoint instead of
+			# sweeping around the letter like an actual clock hand.
+			var hand_pivot := Node3D.new()
+			hand_pivot.position = label.position + offset.normalized() * ZONE_HAND_FORWARD_OFFSET
+			hand_pivot.rotation.y = angle  # matches the label's own outward facing, set once, never touched again
+			add_child(hand_pivot)
 
-## Presence-based capture, straight from Battlefield Conquest: whichever
-## faction has ships within `capture_radius` and the other does NOT
-## captures/reinforces the zone toward themselves; if both are present the
-## zone is CONTESTED and progress freezes; if neither is present the zone
-## holds whatever state it was last in. Flipping an enemy-owned zone to
-## friendly (or vice versa) requires draining it back through neutral
-## first — a captured zone doesn't just gradually reassign, matching the
-## real rule rather than a softer approximation of it.
+			var hand_mesh := MeshInstance3D.new()
+			var hand_box := BoxMesh.new()
+			hand_box.size = Vector3(ZONE_HAND_WIDTH, ZONE_HAND_LENGTH, ZONE_HAND_THICKNESS)
+			hand_mesh.mesh = hand_box
+			hand_mesh.position = Vector3(0.0, ZONE_HAND_LENGTH * 0.5, 0.0)
+			var hand_mat := StandardMaterial3D.new()
+			# Unshaded + emission, same lesson just relearned on the main
+			# menu screen: a glowing indicator that has to read clearly
+			# regardless of scene lighting (including under the overcast
+			# cloud band, or at night) can't be a lit/shaded material.
+			hand_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			hand_mat.emission_enabled = true
+			hand_mesh.material_override = hand_mat
+			hand_pivot.add_child(hand_mesh)
+
+			zone.hand_pivots.append(hand_pivot)
+			zone.hand_materials.append(hand_mat)
+
+
+## Presence-COUNT driven clock-sweep capture — replaced the old flat-rate
+## boolean-presence version. Direct follow-up request: "it just instantly
+## captures when somebody gets in that field... [instead] the letter needs
+## to pulsate and glow with the color that's about to capture, and there
+## needs to be a small hand on the letter... like a clock. And then once
+## it gets to twelve o'clock, that group is captured, and they hold it."
+##
+## Whichever faction has MORE ships within `capture_radius` is "dominant"
+## and pushes `capture_value` toward its own extreme (+100 friendly, -100
+## enemy) via `move_toward()` at a rate from `_capture_sweep_duration()` —
+## more of that faction present sweeps faster, down to the
+## `capture_min_time` floor. Equal counts (including 0-0) freeze the value
+## exactly where it is — the same CONTESTED rule real Conquest uses, now
+## driven by a majority count instead of a boolean "is anyone here."
+##
+## Flipping an enemy-owned zone to friendly (or vice versa) still drains
+## back through neutral first, and REVERSING an in-progress capture isn't
+## special-cased anywhere: "if the enemy comes in and there's a majority,
+## that clears in the opposite direction... back to neutral and then
+## clockwise again in the other color" is just what `move_toward()` does
+## on its own once the dominant sign flips — see `_update_zone_visual()`
+## for how that single scalar becomes the swinging hand and pulsing glow.
 func _update_capture_zones(delta: float) -> void:
 	for zone in capture_zones:
-		var friendly_present := _faction_present_near(_friendlies, zone.position)
-		if not friendly_present and _player \
-				and Vector2(_player.global_position.x - zone.position.x, _player.global_position.z - zone.position.z).length() <= capture_radius:
-			friendly_present = true
-		var enemy_present := _faction_present_near(_enemies, zone.position)
+		var friendly_count := _faction_count_near(_friendlies, zone.position)
+		if _player and Vector2(_player.global_position.x - zone.position.x, _player.global_position.z - zone.position.z).length_squared() <= capture_radius * capture_radius:
+			friendly_count += 1  # the player counts as one friendly, same convention the retired dome-presence system used
+		var enemy_count := _faction_count_near(_enemies, zone.position)
 
-		if friendly_present and enemy_present:
-			continue  # contested — frozen, same as real Conquest
+		var dominant_sign := 0
+		var dominant_count := 0
+		if friendly_count > enemy_count:
+			dominant_sign = 1
+			dominant_count = friendly_count
+		elif enemy_count > friendly_count:
+			dominant_sign = -1
+			dominant_count = enemy_count
+		# else: tied (including 0-0) — frozen, same as real Conquest's CONTESTED rule
 
-		if friendly_present:
-			zone.capture_value = minf(zone.capture_value + zone_capture_rate * delta, 100.0)
-		elif enemy_present:
-			zone.capture_value = maxf(zone.capture_value - zone_capture_rate * delta, -100.0)
-		# else: nobody present — hold current value unchanged.
+		if dominant_sign != 0:
+			var rate := 100.0 / _capture_sweep_duration(dominant_count)
+			zone.capture_value = move_toward(zone.capture_value, float(dominant_sign) * 100.0, rate * delta)
 
-		_update_zone_letter_color(zone)
-
-
-## Only actually touches the four Label3D materials when ownership
-## genuinely changed — most zones sit stable for long stretches of a
-## match, so this is a cheap early-out against real per-frame work on 24
-## labels for nothing. Direct instruction: "when they're captured, they
-## turn the color of the... faction that captured them."
-func _update_zone_letter_color(zone: CaptureZone) -> void:
-	var owner: int = zone.owner_faction()
-	if owner == zone._last_owner_written:
-		return
-	zone._last_owner_written = owner
-	var color: Color = ZONE_NEUTRAL_COLOR
-	if owner == CaptureZone.FRIENDLY:
-		color = FRIENDLY_COLOR
-	elif owner == CaptureZone.ENEMY:
-		color = ENEMY_COLOR
-	for label in zone.letter_labels:
-		label.modulate = color
+		_update_zone_visual(zone, dominant_sign, delta)
 
 
-func _faction_present_near(units: Array, pos: Vector3) -> bool:
+## `capture_base_time` seconds at n=1, exponentially shorter as n grows,
+## asymptoting toward — but never reaching below — `capture_min_time`.
+## Direct request: "a capture takes about thirty seconds for one person
+## and then exponentially gets faster the more people are in it... for a
+## minimum of five seconds. It can never be faster than a five second
+## capture." Verified against the formula itself: n=1 -> exactly
+## capture_base_time, monotonically decreasing, and the floor is a true
+## asymptote (never crossed) rather than a clamp that could read as a
+## sudden speed cap.
+func _capture_sweep_duration(n: int) -> float:
+	var count: float = maxf(1.0, float(n))
+	return capture_min_time + (capture_base_time - capture_min_time) * exp(-capture_decay_rate * (count - 1.0))
+
+
+func _faction_count_near(units: Array, pos: Vector3) -> int:
 	var radius_sq := capture_radius * capture_radius
+	var count := 0
 	for c in units:
 		var combatant: Combatant = c
 		if combatant.alive and Vector2(combatant.position.x - pos.x, combatant.position.z - pos.z).length_squared() <= radius_sq:
-			return true
-	return false
+			count += 1
+	return count
+
+
+## Drives BOTH the clock hand (angle = abs(capture_value)/100 swept
+## clockwise — a full 360 degree turn IS "twelve o'clock," i.e. fully
+## captured) and the letter/hand glow. Runs every frame rather than only
+## on an ownership change like the old flat-rate version, since the hand
+## has to keep sweeping and the pulse has to keep animating even while
+## ownership itself hasn't flipped yet.
+##
+## Pulsing uses the DOMINANT faction's colour — whoever currently has more
+## ships present — not necessarily the faction that currently owns the
+## zone, so contesting a friendly-owned zone immediately glows the
+## enemy's colour before `capture_value` has moved at all: "the letter
+## needs to pulsate and glow with the color that's about to capture."
+func _update_zone_visual(zone: CaptureZone, dominant_sign: int, delta: float) -> void:
+	var sweep_fraction: float = clampf(absf(zone.capture_value) / 100.0, 0.0, 1.0)
+	var hand_angle := sweep_fraction * TAU
+
+	# Actively contested/capturing: the dominant push hasn't yet reached
+	# its own extreme. Sitting on an extreme with that SAME faction still
+	# dominant (or nobody around at all) is false here, and the zone just
+	# holds its settled colour — "once it gets to twelve o'clock, that
+	# group is captured, and they hold it."
+	var pulsing: bool = dominant_sign != 0 and float(dominant_sign) * zone.capture_value < 100.0
+
+	var base_color: Color = ZONE_NEUTRAL_COLOR
+	if pulsing:
+		base_color = FRIENDLY_COLOR if dominant_sign > 0 else ENEMY_COLOR
+	elif zone.capture_value > 0.0:
+		base_color = FRIENDLY_COLOR
+	elif zone.capture_value < 0.0:
+		base_color = ENEMY_COLOR
+
+	var glow_color := base_color
+	if pulsing:
+		zone.pulse_phase += delta * ZONE_PULSE_SPEED
+		var pulse_mul: float = lerpf(ZONE_PULSE_MIN, ZONE_PULSE_MAX, 0.5 + 0.5 * sin(zone.pulse_phase))
+		glow_color = Color(base_color.r * pulse_mul, base_color.g * pulse_mul, base_color.b * pulse_mul, 1.0)
+
+	for i in zone.letter_labels.size():
+		zone.letter_labels[i].modulate = glow_color
+		zone.hand_materials[i].albedo_color = base_color
+		zone.hand_materials[i].emission = glow_color
+		zone.hand_pivots[i].rotation.z = -hand_angle  # negative = clockwise as viewed facing the letter
 
 
 ## The ticket-bleed half of Conquest, translated to a score race instead of

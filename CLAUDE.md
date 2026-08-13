@@ -1179,6 +1179,16 @@ rather than a field that could disagree with it.
 
 ### Capture rules — the real Conquest rules, not an approximation
 
+**RETIRED AS THE LIVE TIMING MODEL — see "Conquest capture rework — the
+clock hand" further down for what actually runs now.** Direct follow-up:
+*"it just instantly captures when somebody gets in that field"* (there
+was no in-progress visual at all, which read as instant regardless of the
+real rate) plus a specific clock-hand redesign request. The CONTESTED/
+majority-freeze concept below is still exactly correct as a description
+of the rule's SHAPE — it's the flat per-second rate and the boolean
+presence check that got replaced by a presence-COUNT-driven variable
+speed. Kept below for history.
+
 `FactionBattle._update_capture_zones()`, every physics frame a zone's
 faction presence is checked (`_faction_present_near()`, horizontal-only
 distance against `capture_radius`, 4000m — the player's own position
@@ -4273,7 +4283,168 @@ request didn't call for.
   resave) — worth remembering that ANY `--editor --quit` invocation while
   `Player.tscn`/`Town.tscn` are among the editor's last-open scenes can
   silently modify them, so a bug-hunting session should diff scene files
-  before committing, not just script files.
+  before committing, not just script files. This also compounds with an
+  actual live Godot editor/game process running on the same machine
+  concurrently (confirmed via `tasklist` mid-session) — the file can churn
+  from BOTH sources, so the fix was verified with a game-mode
+  (`--headless --script`, no `--editor`) run instead, which doesn't
+  trigger the resave.
+
+  **Second live bug, immediately after the path fix: the screen showed
+  up but rendered as a solid black box.** Reported as "the menu shows up,
+  but it's a black box... I can hit trigger and start the game, but I
+  can't see any menu options." Root cause was the exact same CLASS of
+  mistake as the FBX-material bug documented under City above, just for
+  lighting instead of textures: `XRToolsViewport2DIn3D`'s screen quad
+  defaults to a real LIT material (`unshaded = false` ->
+  `SHADING_MODE_PER_PIXEL`), so the quad displaying the rendered UI
+  texture is subject to the scene's actual sun/ambient lighting at
+  whatever altitude the player spawns — under the overcast cloud band, in
+  shadow, or simply dim, the lit material multiplies the UI texture's
+  real colours down toward black regardless of what's actually drawn
+  inside the `SubViewport`. Every OTHER glowing/HUD element in this
+  project is deliberately unshaded for exactly this reason (the crosshair,
+  tracer bolts, HUD text, the new Conquest clock hands below); this one
+  screen was the sole exception, inherited from the addon's own default
+  rather than ever being set explicitly. Fixed with `unshaded = true` on
+  the `Screen` node override in `Player.tscn`. Verified headlessly: the
+  export reads `true`, and — more load-bearing — the ACTUAL live
+  `_screen_material.shading_mode` on the instantiated node reads
+  `SHADING_MODE_UNSHADED` after `_ready()` runs (the export alone doesn't
+  prove the addon's own dirty-flag machinery actually applied it).
+
+## Conquest capture rework — the clock hand
+
+Direct follow-up request, after seeing the flat-rate version live: *"Right
+now, it just instantly captures when somebody gets in that field."* The
+underlying rate wasn't actually instant (the old flat `zone_capture_rate`
+took ~6.7-13.3s per full swing), but there was **no progress readout at
+all** — `_update_zone_letter_color()` only touched a label when ownership
+itself crossed the ±100 threshold, so a letter sat flat neutral grey for
+the entire ramp and then SNAPPED straight to full colour the instant it
+crossed — which reads exactly like "instant" regardless of the real
+underlying rate. This rework replaces both the missing feedback and the
+flat-rate timing model in one pass, direct request: *"the letter needs to
+pulsate and glow with the color that's about to capture, and there needs
+to be a small hand on the letter that you could see it goes around and
+slowly starts to capture, like, a clock. And then once it gets to twelve
+o'clock, that group is captured, and they hold it... a capture takes
+about thirty seconds for one person and then exponentially gets faster
+the more people are in it... for a minimum of five seconds. It can never
+be faster than a five second capture."*
+
+### The scalar IS the clock hand — no special-casing required
+
+`CaptureZone.capture_value` (still -100..0..+100, unchanged range) now
+does double duty: `abs(capture_value) / 100.0` is the fraction of one
+full 0->360° clockwise sweep, reaching exactly one full turn ("twelve
+o'clock") when a side fully owns the zone. This is what makes the
+described reversal behaviour — *"if the enemy comes in and there's a
+majority, that clears in the opposite direction. It goes back to
+neutral and then goes clockwise again in the other color to capture"* —
+fall straight out of the existing `move_toward()` physics rather than
+needing a state machine: as the dominant faction's sign flips, the
+SAME scalar decreasing toward 0 visually reads as the hand sweeping
+backward (counter-clockwise) through the owning colour, and the instant
+it crosses 0 and starts climbing again in the new sign, the identical
+math reads as the hand sweeping forward (clockwise) again — now in the
+new faction's colour, since the pulse colour tracks the DOMINANT sign,
+not `capture_value`'s own sign. No branch anywhere distinguishes
+"clearing" from "capturing"; it's one continuous chase toward whichever
+extreme currently has more ships near it.
+
+### Presence-COUNT driven speed, not a boolean
+
+`_faction_count_near()` (replacing the old boolean `_faction_present_near()`)
+counts living ships of each faction within `capture_radius`, and whichever
+count is strictly higher is "dominant" and pushes `capture_value` toward
+its own extreme via `move_toward()`. Tied counts — including 0-0 — freeze
+the value exactly where it is, the same CONTESTED rule real Conquest uses,
+now driven by a majority count rather than "is anyone here at all."
+
+`_capture_sweep_duration(n)` is the actual timing curve:
+
+    capture_min_time + (capture_base_time - capture_min_time) * exp(-capture_decay_rate * (n - 1))
+
+`capture_base_time` (30.0) is exactly what one ship produces at `n=1`
+(the formula's own `exp(0) = 1` term), decaying exponentially as more of
+the dominant faction pile onto the zone, asymptoting toward — but by
+construction never crossing — `capture_min_time` (5.0): *"it can never be
+faster than a five second capture."* `capture_decay_rate` (0.5, first-pass)
+is the only tuning dial for how fast additional presence matters; at that
+value `n=2` -> ~20.2s, `n=5` -> ~8.4s, `n=50` -> ~5.0000s (still, correctly,
+never quite touching the floor).
+
+### The hand — a rotating pivot, not a rotating mesh
+
+Each of the 24 letter faces (4 sides * 6 towers) gets its own small clock
+hand, built in `_build_zone_letters()` alongside the existing label:
+a `Node3D` PIVOT positioned at the letter's own anchor (nudged 15m
+outward along the letter's own facing to sit clear of the glyph and avoid
+z-fighting), with the actual visible hand — a small `BoxMesh`, 220m long
+against the ~600m-tall glyphs — as a CHILD offset half its own length away
+from the pivot's origin. This split is required, not stylistic: rotating
+the visible mesh directly would spin it in place around its own midpoint;
+rotating the PIVOT (whose origin sits at the letter's centre) sweeps the
+offset child around that centre like an actual clock hand. The pivot's
+`rotation.y` (matching the label's own outward-facing angle) is set ONCE
+at build time and never touched again; only `rotation.z` — the actual
+sweep angle, `-abs(capture_value)/100 * TAU`, negative for a clockwise
+read facing the letter — is written every frame.
+
+**Unshaded + emission material, on purpose, learned fresh from the
+main-menu black-box bug directly above.** A glowing indicator that has to
+read clearly regardless of scene lighting (including under the overcast
+cloud band, or wherever the sun happens to be) can't be a lit/shaded
+material — the exact mistake just found and fixed on the menu screen,
+applied here proactively instead of waiting to hit it twice.
+
+### Pulsing — the dominant faction's colour, not the owner's
+
+`_update_zone_visual()` now runs every frame (not gated on an ownership
+change like the old version, since the hand has to keep sweeping and the
+pulse has to keep animating even while ownership itself hasn't flipped).
+`pulsing` is true whenever `dominant_sign * capture_value < 100.0` — i.e.
+the dominant push hasn't yet reached its own extreme — which is exactly
+what makes a friendly-owned zone immediately start glowing the ENEMY
+colour the instant an enemy majority shows up, even before
+`capture_value` has moved a single unit: *"the letter needs to pulsate
+and glow with the color that's about to capture."* While pulsing, both
+the letter's `modulate` and the hand material's `emission` oscillate
+between `ZONE_PULSE_MIN` (0.7) and `ZONE_PULSE_MAX` (2.6, deliberately
+above 1.0 so the peak actually blooms through `Town.tscn`'s Glow pass) at
+`ZONE_PULSE_SPEED` (3.2 rad/s), on a per-zone `pulse_phase` randomised at
+build time so the six towers don't glow in lockstep — the same
+"don't phase-lock" reasoning already used for the mothership drone layers
+and thruster-trail start offsets. The instant `pulsing` goes false (the
+dominant faction has fully locked in its own extreme, or the zone sits
+neutral and abandoned), both settle to a FLAT, non-animated colour — the
+existing FRIENDLY_COLOR/ENEMY_COLOR/ZONE_NEUTRAL_COLOR, completely
+unchanged from before — matching *"once it gets to twelve o'clock, that
+group is captured, and they hold it."*
+
+`zone_capture_rate` (the old flat-rate export) is retired — the whole
+timing model it drove no longer applies, so unlike most retirements in
+this project it wasn't left inert-but-defined; it's gone, replaced by
+`capture_base_time`/`capture_min_time`/`capture_decay_rate`.
+
+Verified headlessly (23/23), by direct simulation against the real
+`FactionBattle` node rather than structural checks alone:
+`_capture_sweep_duration()` reads exactly 30.0 at n=1, decreases
+monotonically, and never crosses 5.0 even at n=50; one friendly ship
+parked on a zone advances `capture_value` at precisely the n=1 rate and
+reaches exactly 100.0 after a full 30s sweep with no overshoot; the hand
+pivot's rotation tracks the sweep and returns to a clean full turn once
+captured; the settled colour is flat (non-pulsed) `FRIENDLY_COLOR`; a
+2-ship enemy majority against the lone friendly ship reverses the value
+at the (faster, n=2) rate, drives it through zero, and lands it on exactly
+-100.0 with the settled colour now flat `ENEMY_COLOR`; a tied 1v1 presence
+freezes the value exactly where it was; and an abandoned zone (nobody
+present) holds its last value unchanged. **Not yet confirmed live** —
+same as every other visual first pass in this project, particularly
+whether 220m hands read as genuinely "small" against 600m letters, and
+whether the pulse timing/brightness needs retuning once seen at real
+battle scale.
 
   ### The old head-locked version, for the record
 

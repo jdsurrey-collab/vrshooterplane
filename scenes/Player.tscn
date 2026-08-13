@@ -170,6 +170,7 @@ screen_size = Vector2(4.0, 2.6)
 viewport_size = Vector2(1280, 832)
 scene = ExtResource("56_mainmenuui")
 transparent = 0
+unshaded = true
 input_gamepad = false
 
 [node name="Music" type="AudioStreamPlayer" parent="MainMenu"]
