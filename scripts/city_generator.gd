@@ -94,12 +94,17 @@ const LANDMARK_BUILDINGS := [
 ## building strictly at 300m would have shrunk the city to ~80 buildings
 ## instead of expanding it. The measured table that came out of that
 ## survey (0.06% / 2.6% / 14% / 26% / 44% / 57% of the map qualifying at
-## 300 / 500 / 750 / 1000 / 1500 / 2000m respectively) is what
-## `max_building_terrain_height` (750.0) was actually chosen against —
-## ~14% of the map, an estimated ~17,000 buildings at this density, a real
-## ~12x expansion over the previous ~1470-building fixed city while
-## keeping every genuine mountain range building-free.
-@export var max_building_terrain_height: float = 750.0
+## 300 / 500 / 750 / 1000 / 1500 / 2000m respectively) is what 750.0 (then
+## the live default) was chosen against.
+##
+## DOUBLED to 1500.0 on direct request after the 750m version ran well —
+## per the same survey table, 1500m qualifies ~44% of the map, an
+## estimated ~54,500 buildings at this density, up from ~17,300 at 750m.
+## Real new territory for this project's collision-body count (one
+## StaticBody3D per building, unbatched, unlike the MultiMesh rendering) —
+## worth re-measuring load time and physics cost live rather than assuming
+## the previous 750m measurement still holds at 3x the building count.
+@export var max_building_terrain_height: float = 1500.0
 @export var block_pitch: float = 257.14  # distance between street centerlines
 @export var road_width: float = 30.0
 @export var building_jitter: float = 20.0  # reduced with the tighter 257m blocks so buildings stay off the streets
@@ -110,9 +115,28 @@ const LANDMARK_BUILDINGS := [
 ## exact building count, just genuine density in the area that qualifies.
 @export var skip_chance: float = 0.18  # leave some blocks empty (plazas/lots)
 @export var landmark_chance: float = 0.08  # fraction of filled blocks that go supertall
-@export var regular_scale_min: float = 1.0
+## DOUBLE THE CEILING, KEEP THE FLOOR — the actual request was "double the
+## height of all the buildings['] potential... I still want building sizes
+## to range from a couple hundred meters to the max." A uniform doubling of
+## `height_multiplier` alone would have doubled BOTH ends. Instead
+## `height_multiplier` doubled (3.0 -> 6.0, doubling the ceiling) while
+## both scale_min values were HALVED to exactly cancel that doubling at
+## the floor — the algebra: final height = base * scale *
+## height_multiplier, so halving scale while doubling height_multiplier
+## leaves the MINIMUM unchanged while the MAXIMUM (scale_max, left
+## untouched) doubles along with height_multiplier alone. Verified against
+## the ACTUAL generated buildings, not the "~73-125m" base-height figure
+## documented elsewhere (which turned out to describe only some models,
+## not the true extremes across all 10 REGULAR_BUILDINGS): measured
+## shortest building **111m**, tallest **3738m** — since the floor-side
+## multiplier (`scale_min * height_multiplier`) is algebraically identical
+## before and after (1.0*3.0 == 0.5*6.0 == 3.0), 111m is guaranteed to be
+## exactly what the shortest building already measured before this change,
+## whatever that model's true base height actually is; only the ceiling
+## genuinely moved, and it moved by exactly 2x (measured old max ~1868m).
+@export var regular_scale_min: float = 0.5
 @export var regular_scale_max: float = 2.5
-@export var landmark_scale_min: float = 3.5  # ~125m base * 3.5 = 437m, comfortably 400m+
+@export var landmark_scale_min: float = 1.75  # ~73m base * 1.75 * 6.0 height_multiplier = ~766m, unchanged floor
 @export var landmark_scale_max: float = 5.0
 
 ## Applied to the Y axis ONLY, on top of the uniform scale above — so
@@ -125,8 +149,9 @@ const LANDMARK_BUILDINGS := [
 ## above which its ships and bolts skip their building-collision physics
 ## query entirely. If the tallest building here can exceed that value,
 ## things fly through the tops of towers. Tallest right now: ~125m base *
-## 5.0 landmark scale * 3.0 height multiplier = ~1830m measured.
-@export var height_multiplier: float = 3.0
+## 5.0 landmark scale * 6.0 height multiplier = ~3750m measured — see the
+## matching bump on MAX_BUILDING_HEIGHT itself.
+@export var height_multiplier: float = 6.0
 
 ## Buildings are drawn as batched MultiMeshes, optionally split into a
 ## render_chunks x render_chunks grid. Higher values improve frustum culling
@@ -279,17 +304,27 @@ func _ready() -> void:
 	_half_total = _terrain.world_size * 0.5
 	_grid_count = int(_terrain.world_size / block_pitch)
 
-	# Batch bounds must cover the whole terrain footprint now, not the old
-	# fixed 10800m city block — see CITY_BATCH_AABB's own note. Building
-	# height tops out around ~1830m (height_multiplier's own header), so
-	# 4000m of vertical margin comfortably covers every real building plus
-	# however far collapse_near() sinks one before it's hidden.
-	_city_batch_aabb = AABB(
-			Vector3(_origin.x - _half_total - 2000.0, -2000.0, _origin.z - _half_total - 2000.0),
-			Vector3(_half_total * 2.0 + 4000.0, 6000.0, _half_total * 2.0 + 4000.0))
-
 	_generate_roads()
 	_generate_buildings()
+
+	# Batch bounds must cover the whole terrain footprint now, not the old
+	# fixed 10800m city block — see CITY_BATCH_AABB's own note. Computed
+	# from the ACTUAL placed buildings (pos.y + height) rather than a
+	# formula guess against height_multiplier/scale exports — those moved
+	# once already (doubled) and guessing a margin against them is exactly
+	# the kind of number that silently goes stale the next time they do.
+	# X/Z still come from the terrain extent directly, since building
+	# placement is bounded by that regardless of any individual height.
+	var max_top_y := 0.0
+	for b in buildings:
+		var pos: Vector3 = b["pos"]
+		max_top_y = maxf(max_top_y, pos.y + float(b["height"]))
+	var aabb_y_bottom := -2000.0
+	var aabb_y_top := max_top_y + 1000.0
+	_city_batch_aabb = AABB(
+			Vector3(_origin.x - _half_total - 2000.0, aabb_y_bottom, _origin.z - _half_total - 2000.0),
+			Vector3(_half_total * 2.0 + 4000.0, aabb_y_top - aabb_y_bottom, _half_total * 2.0 + 4000.0))
+
 	# Buildings are only bucketed during placement; this turns the buckets
 	# into the actual MultiMeshInstance3D nodes.
 	_build_building_multimeshes()

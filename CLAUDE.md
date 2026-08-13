@@ -427,14 +427,18 @@ writes and wires up scenes/scripts directly.
   regardless of pitch (24 blocks at 450m and 30 at 360m covered identical
   ground), `skip_chance` tuning the *building count* rather than the raw
   block count. **This is superseded — see "Map-wide, height-gated
-  placement" below, which is the live behavior.** `height_multiplier`
-  (**3.0**, unchanged by that rework) scales **Y only**, so towers get
-  taller without getting wider (tallest measured **1868m**); scaling all
+  placement" and its later doubling below, which are the live
+  behavior.** `height_multiplier`
+  (now **6.0**, doubled from an original 3.0 — see the doubling writeup
+  below for how the floor was preserved while doing it) scales **Y
+  only**, so towers get taller without getting wider (tallest currently
+  measured **3738m**, up from an original ~1868m); scaling all
   three axes would have widened every footprint, crowding the blocks and
   effectively growing the city. The `CollisionShape3D` is a child of the
   scaled `StaticBody3D`, so it inherits the non-uniform scale and collision
   stays correct for free.
-  **Coupled to `faction_battle.gd`'s `MAX_BUILDING_HEIGHT`** (2000m): that
+  **Coupled to `faction_battle.gd`'s `MAX_BUILDING_HEIGHT`** (4000m, moved
+  twice already — 700 -> 2000 -> 4000 — as this value changed): that
   is the altitude above which ships and bolts skip their building-collision
   physics query entirely, so it must stay above the tallest building this
   can produce. Raising building height without raising that gate silently
@@ -586,12 +590,71 @@ writes and wires up scenes/scripts directly.
   false, and draw calls stay at 19. Scene instantiate-plus-two-frames wall
   time measured at ~3.25s (headless, dummy renderer) — a one-time load
   cost, not a frame-rate one, but worth knowing before assuming this is
-  free at boot. **Not yet confirmed live**: whether ~17,300 scattered
-  buildings actually reads as a coherent, good-looking sprawl from the air
-  (versus e.g. looking sparse/patchy at 14% coverage), and whether losing
-  the building-shadow-crossing-the-clouds effect is missed — both are
-  headset questions, same as every other visual judgment call in this
-  project.
+  free at boot.
+
+  **Doubled again, after the 750m/~17,300-building version "ran really
+  well" live.** Direct request: double `max_building_terrain_height` AND
+  double every building's height ceiling, "but I still want building
+  sizes to range from a couple hundred meters to the max" — i.e. the
+  CEILING should double, not the whole distribution uniformly.
+  `max_building_terrain_height` 750.0 -> **1500.0** (per the survey table
+  above, 44% of the map now qualifies, measured **54,508 buildings**, up
+  from 17,301 — real new territory for collision-body count, see below).
+
+  **Doubling the height ceiling while preserving the floor needed real
+  algebra, not just doubling `height_multiplier`.** Final building height
+  is `base * scale * height_multiplier`; doubling `height_multiplier`
+  alone (3.0 -> 6.0) would have doubled BOTH ends of the range, pushing
+  the shortest buildings well past "a couple hundred meters." Instead
+  `height_multiplier` doubled (3.0 -> 6.0) while `regular_scale_min`
+  (1.0 -> 0.5) and `landmark_scale_min` (3.5 -> 1.75) were HALVED — the
+  floor-side product (`scale_min * height_multiplier`) is algebraically
+  identical before and after (`1.0*3.0 == 0.5*6.0 == 3.0`), so the
+  shortest building is mathematically guaranteed to measure exactly what
+  it did before, while the ceiling (`scale_max`, left untouched) doubles
+  purely from `height_multiplier` alone. Measured against the actual
+  generated buildings rather than the doc's own approximate "~73-125m
+  base height" figure (which turned out not to describe every model's
+  true extremes): **111m shortest, 3738m tallest** — precisely double the
+  previously-measured ~1868m ceiling, with the floor unchanged by
+  construction regardless of which specific model happens to be shortest.
+
+  **Two coupled systems had to move with it, both caught by rebuilding the
+  same verification approach rather than assumed safe:**
+  - `faction_battle.gd`'s `MAX_BUILDING_HEIGHT` (the altitude above which
+    ships/bolts skip the building-collision physics query entirely) 2000m
+    -> **4000m**, comfortably clearing the new ~3738m measured tallest
+    building. This is the third time this constant has moved with the
+    city's own height settings (700 -> 2000 -> 4000) — it has never once
+    been safe to leave alone when height_multiplier changes.
+  - `_city_batch_aabb` used to be computed from a formula (a guessed
+    margin against `height_multiplier`/`landmark_scale_max`) — exactly
+    the kind of number this rework already showed goes stale the moment
+    those exports move again. Rebuilt to compute itself from the ACTUAL
+    placed buildings' `pos.y + height` after `_generate_buildings()`
+    runs, with a flat 1000m margin on top, so it can never drift out of
+    sync with whatever the height settings currently are, however they
+    change next.
+
+  **Collision-body count is now genuinely unmeasured territory for this
+  project** — 54,508 individual `StaticBody3D`s, ~3.15x the previous
+  17,301 and ~37x the ORIGINAL fixed city's ~1470. The 1.7% physics A/B
+  (see Performance) is still the reason this wasn't treated as
+  disqualifying, but that measurement predates both expansions; it's
+  flagged rather than re-asserted as still-obviously-fine.
+
+  Verified headlessly (6/6): 54,508 buildings generated (matching the
+  survey's ~54,500 estimate), zero height-gate violations, measured
+  height range [111m, 3738m] matching the preserved-floor/doubled-ceiling
+  design exactly, every building's base AND top fall inside the
+  rebuilt `_city_batch_aabb`, `MAX_BUILDING_HEIGHT` (4000m) clears the
+  tallest actual building with ~262m of margin, and draw calls stay at
+  19. Load time ~3.78s headless (up modestly from ~3.25s at the previous
+  scale). **Not yet confirmed live**, same open questions as before plus
+  a new one: whether ~54,500 buildings across 44% of the map still reads
+  as coherent sprawl rather than uniform coverage, and whether supertall
+  towers now reaching close to the cloud band's own altitude (3200-3800m)
+  read as intended poking through cloud cover or as visual clutter.
 - `scripts/target_lock.gd` — left controller's **Y button**
   (`by_button`) **cycles** a lock through living aliens from
   `faction_battle.gd`'s roster, nearest-to-farthest
@@ -4345,19 +4408,22 @@ small, the time is going to the GPU.
 - **Geometry is not the bottleneck.** Whole-scene triangle budget was
   ~870k per eye (terrain 524k, motherships 248k, city ~26k, ships ~50k,
   two cloud layers ~18k each), which is unremarkable for a 3060 Ti. The
-  problem was never vertices. **Stale since the map-wide city rework** —
-  city building geometry jumped ~12x (~1470 -> ~17,300 buildings at the
-  same ~35 triangles/building average), putting the estimated new
-  whole-scene budget around ~1.5-1.6M triangles per eye. Draw calls are
-  unaffected (still ~19 for the city, MultiMesh batching doesn't care about
-  instance count) and shadows were turned off specifically so this larger
-  triangle count doesn't also have to be re-rendered into a shadow map —
-  but the MAIN camera pass still submits all of it every frame, and that
-  has not been re-measured live. Even at ~1.5M this is still a plausible
-  "unremarkable for a 3060 Ti" figure by the same reasoning as before
-  (simple, low-poly, opaque, batched geometry), but "plausible" is a guess
-  until it's actually watched in the headset — flagged here rather than
-  quietly left on the old, now-wrong number.
+  problem was never vertices. **Stale twice over now, since the map-wide
+  city rework and its later doubling** — city building geometry went
+  ~1470 -> 17,301 -> **54,508** buildings (at the same ~35
+  triangles/building average, roughly ~1.9M triangles for city geometry
+  alone), putting the estimated new whole-scene budget around **~3.3M
+  triangles per eye**, ~3.8x the original figure. Draw calls are
+  unaffected (still ~19 for the city, MultiMesh batching doesn't care
+  about instance count) and shadows were turned off specifically so this
+  larger triangle count doesn't also have to be re-rendered into a shadow
+  map — but the MAIN camera pass still submits all of it every frame, and
+  that has not been re-measured live. Still plausibly fine by the same
+  structural reasoning (simple, low-poly, opaque, batched geometry, no
+  new draw calls) — but "plausible" is doing more work at ~3.3M than it
+  was at ~870k, and this has now moved twice without a live check in
+  between. If the next headset pass shows real frame-time trouble, city
+  building count is the first place to look, not a hypothetical.
 
 ### What has NOT been done, deliberately
 

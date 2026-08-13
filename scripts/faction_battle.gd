@@ -178,10 +178,22 @@ const RESPAWN_DELAY := 8.0
 ## MUST STAY ABOVE THE TALLEST BUILDING city_generator.gd can produce, or
 ## ships and bolts silently pass through the tops of towers. That is
 ## `LANDMARK_BUILDINGS` base height (~125m) * `landmark_scale_max` (5.0) *
-## `height_multiplier` (2.0) = ~1250m, hence 1400m with margin. This value
-## was 700m while buildings were half their current height — if the city's
-## height settings change again, this has to move with them.
-const MAX_BUILDING_HEIGHT := 2000.0
+## `height_multiplier` (6.0, doubled from 3.0 alongside a matching halving
+## of both scale_min exports — see that file's own header) = ~3750m, hence
+## 4000m with margin. This value has moved twice already as the city's
+## height settings changed (700m -> 2000m -> 4000m) — if they change again,
+## this has to move with them.
+##
+## Widening this gate ALSO widens the altitude band where the real
+## building-collision physics query actually runs (see the PERFORMANCE
+## GATES note above) — combined with the city's building count also
+## roughly tripling in the same change (map-wide placement gated at a
+## doubled terrain-height threshold), this is genuinely more physics load
+## than this project has measured before. The prior 1.7% A/B (queries
+## fully off vs. fully on) is why it wasn't treated as disqualifying, but
+## it was measured at a smaller building count and a lower gate — worth a
+## fresh measurement if a live session's PERF line shows PHYS climbing.
+const MAX_BUILDING_HEIGHT := 4000.0
 
 ## Air Superiority is a slow scalar (as_generation_multiplier is 0.01) and
 ## counting every ship in the dome costs a terrain sample each. Recomputing
