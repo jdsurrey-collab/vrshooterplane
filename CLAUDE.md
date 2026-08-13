@@ -2218,6 +2218,40 @@ inside a building (`tank_building_clearance` 120m) or too near another tank
 (`tank_min_spacing` 600m). Verified: 20/20 placed, 0 overlapping a building,
 closest pair ~790-890m.
 
+**Real crash, hit live: "hung up at the main menu" then a script error —
+`Invalid access to property or key 'grid_size' on a base object of type
+'Node3D (CityGenerator)'`, at `_scatter_tanks()`.** A direct casualty of
+the map-wide city rework above: `_scatter_tanks()` used to derive its
+scatter area from `_city.grid_size * _city.block_pitch * 0.5` —
+`CityGenerator`'s own fixed-footprint math — and that export stopped
+existing the moment building placement became map-wide instead of a fixed
+block. Missed because the grep done at the time only checked
+`faction_battle.gd`'s use of `city_center` (still valid, untouched), not
+every consumer of the OLD footprint math across the whole codebase — a
+real gap in the "did I check everything that reads this" step, not a
+subtle bug.
+
+Fixed by giving `TankObjective` its own `scatter_radius` export (5400.0)
+instead of reaching into `CityGenerator` for a footprint that no longer
+conceptually exists there — set to exactly match the OLD city's own
+half-extent (10800m-wide grid / 2), so the fuel-tank objective's actual
+play area is genuinely unchanged. This is also the more correct design
+regardless of the crash: the tanks are a ground objective meant to sit
+inside the contested airspace the AI/player actually fight over
+(`FactionBattle.dome_radius`, sized against that same original footprint),
+not scattered anywhere across a 100km map most of which nobody ever flies
+near — expanding city buildings map-wide was never meant to relocate this
+objective too.
+
+Verified headlessly through the real entry point (`GameFlow._start_match()`,
+not a direct call to the broken function, matching this project's own
+established lesson about tests needing to go through the actual game
+state machine): all 20 tanks place successfully with no `grid_size` error,
+and the furthest tank lands within `scatter_radius`'s diagonal of
+`city_center` as expected. A global grep afterward for every remaining
+`.grid_size`/`.block_pitch` reference across `scripts/` and `scenes/`
+turned up nothing else broken.
+
 ### The collapse — buildings sinking into the earth
 
 Destroying a tank takes its block down with it: every building within

@@ -81,6 +81,21 @@ const TANK_EXPLOSION_SOUND := preload("res://Assets/Audio/tank_explosion.mp3")
 ## immediate neighbourhood rather than a single building or half a district.
 @export var collapse_radius: float = 400.0
 
+## Half-width of the square area tanks scatter across, centred on
+## `CityGenerator.city_center`. Used to read this from `_city.grid_size *
+## _city.block_pitch * 0.5` — CityGenerator's own footprint math — but that
+## broke the instant `city_generator.gd`'s buildings stopped having a fixed
+## footprint at all (map-wide, height-gated placement now — see that
+## script's own header). Kept as this project's OWN number instead,
+## matching the OLD city footprint exactly (5400m = the previous
+## 10800m-wide grid's own half-extent) so the fuel-tank objective's actual
+## play area is UNCHANGED: tanks are a ground objective meant to sit inside
+## the contested airspace the AI/player actually fight over
+## (`FactionBattle.dome_radius`, sized against this same original
+## footprint), not scattered anywhere across a 100km map most of which
+## nobody ever flies over.
+@export var scatter_radius: float = 5400.0
+
 ## Minimum spacing between tanks, and clearance from any standing building,
 ## when scattering them. Both are in metres.
 @export var tank_min_spacing: float = 600.0
@@ -219,7 +234,7 @@ func _find_mesh(n: Node) -> Mesh:
 ## this."
 func _scatter_tanks() -> void:
 	_tanks.clear()
-	var half: float = _city.grid_size * _city.block_pitch * 0.5
+	var half: float = scatter_radius
 	var center: Vector3 = _city.city_center
 
 	var attempts := 0
