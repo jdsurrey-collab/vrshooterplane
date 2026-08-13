@@ -1,13 +1,17 @@
 class_name CityGenerator
 extends Node3D
 
-## Procedurally builds a city block grid near the starting area: a lattice
-## of streets (roads.tscn-free — built directly as GPU-instanced tiles, see
-## _generate_roads) with skyscrapers from the "skyscraper_pack" asset set
-## centered in each block, facing the grid instead of randomly rotated.
-## That grid alignment is what actually reads as "a city" from a distance —
-## the previous version scattered buildings with full random rotation and
-## no street pattern, which just looked like debris from far away.
+## Procedurally builds a city across the WHOLE TERRAIN, wherever the ground
+## is low enough (see max_building_terrain_height) — originally a single
+## fixed block grid near the starting area, superseded by a map-wide,
+## height-gated version (see that export's own header for the measured
+## heightmap survey behind it). A lattice of streets (roads.tscn-free —
+## built directly as GPU-instanced tiles, see _generate_roads) with
+## skyscrapers from the "skyscraper_pack" asset set centered in each
+## candidate block, facing the grid instead of randomly rotated. That grid
+## alignment is what actually reads as "a city" from a distance — an
+## earlier version scattered buildings with full random rotation and no
+## street pattern, which just looked like debris from far away.
 ##
 ## Two building pools:
 ## - REGULAR_BUILDINGS (shorter base models, modest scale) — the bulk of
@@ -61,25 +65,49 @@ const LANDMARK_BUILDINGS := [
 ]
 
 @export var terrain_path: NodePath = ^"../Terrain"
+## Still exported and still real — read by `FactionBattle.dome_center`
+## (`if "city_center" in city: dome_center = city.city_center`), the
+## Air Superiority contested-column anchor. Now DECOUPLED from building
+## placement below, which covers the terrain's own full extent instead of
+## a footprint centered here — this is deliberately left untouched so the
+## dome/motherships/spawn coupling documented elsewhere in this project
+## doesn't shift just because the buildings now cover more ground.
 @export var city_center: Vector3 = Vector3(6000.0, 0.0, 0.0)
-## DENSITY WITHOUT SPRAWL. grid_size and block_pitch are deliberately
-## inverse to one another: the city's overall footprint is
-## `grid_size * block_pitch` (10800m across, unchanged since the first
-## version), so packing more blocks in means shrinking the block pitch by
-## the same factor rather than extending the grid outward. 24 blocks at
-## 450m, 30 at 360m and 42 at 257.14m all cover exactly the same ground.
+## MAP-WIDE, HEIGHT-GATED PLACEMENT, not a fixed footprint. Buildings and
+## roads now cover the terrain's ENTIRE extent (`_terrain.world_size`,
+## centred on `_terrain.global_position`) rather than a fixed
+## `grid_size * block_pitch` block anchored on `city_center` — a candidate
+## block is only actually built if the terrain underneath it is at or
+## below `max_building_terrain_height`, so the city naturally pools into
+## the lowlands and mountains stay bare. Direct request: "put a building
+## everywhere that is [low enough]... that just makes it so buildings
+## can't go on mountains."
 ##
-## Changing either of these WITHOUT compensating the other changes the
-## city's real size, which would move the goalposts for
-## `FactionBattle.dome_radius` (8000m, sized against the city's ~7637m
-## half-diagonal).
-@export var grid_size: int = 42  # grid_size x grid_size city blocks
-@export var block_pitch: float = 257.14  # distance between street centerlines (42 * 257.14 = 10800m, the unchanged footprint)
+## `block_pitch` is still the density dial (distance between street
+## centerlines) — it just no longer has a fixed footprint to multiply
+## against; the grid now spans the whole map, and MEASURED, not guessed,
+## because this terrain's baseline elevation turned out far higher than
+## assumed. A headless heightmap sample (40,401 points, 500m spacing)
+## found only 0.06% of the map at or below 300m (the number first asked
+## for) — the lowest point sampled anywhere was 239m, meaning the
+## EXISTING city already sits in essentially the only pocket that low, and
+## building strictly at 300m would have shrunk the city to ~80 buildings
+## instead of expanding it. The measured table that came out of that
+## survey (0.06% / 2.6% / 14% / 26% / 44% / 57% of the map qualifying at
+## 300 / 500 / 750 / 1000 / 1500 / 2000m respectively) is what
+## `max_building_terrain_height` (750.0) was actually chosen against —
+## ~14% of the map, an estimated ~17,000 buildings at this density, a real
+## ~12x expansion over the previous ~1470-building fixed city while
+## keeping every genuine mountain range building-free.
+@export var max_building_terrain_height: float = 750.0
+@export var block_pitch: float = 257.14  # distance between street centerlines
 @export var road_width: float = 30.0
 @export var building_jitter: float = 20.0  # reduced with the tighter 257m blocks so buildings stay off the streets
-## Tuned alongside grid_size so the actual building count lands on the
-## intended increase rather than the raw block count. 42x42 at 0.18 skip
-## gives ~1470 buildings; the previous 30x30 gave ~740 and 24x24 gave ~490.
+## Applies per CANDIDATE block, same as always — most of the actual
+## thinning at map scale now comes from `max_building_terrain_height`
+## rejecting mountain blocks outright, not from this. Left at its
+## previous value rather than retuned, since the target was never an
+## exact building count, just genuine density in the area that qualifies.
 @export var skip_chance: float = 0.18  # leave some blocks empty (plazas/lots)
 @export var landmark_chance: float = 0.08  # fraction of filled blocks that go supertall
 @export var regular_scale_min: float = 1.0
@@ -106,13 +134,21 @@ const LANDMARK_BUILDINGS := [
 ## 1 means a single city-wide batch per mesh — fewest possible draw calls,
 ## no per-district culling.
 ##
-## DEFAULT IS 1, and that is a measured decision rather than a guess: the
-## entire city's building geometry is only ~51,000 triangles (these models
-## average ~35 triangles each — they are very low-poly boxes). Submitting
-## all of it every frame costs essentially nothing, so there is nothing for
-## culling to save, and 4x4 chunking was costing ~215 draw calls to protect
-## against a vertex cost that doesn't exist. Raise this only if the building
-## models are ever replaced with something genuinely heavy.
+## DEFAULT IS 1, and that was a measured decision, not a guess, back when
+## the city was ~1470 buildings (~51,000 triangles at these models' ~35
+## triangles/building average) — genuinely nothing for culling to save, and
+## 4x4 chunking was costing ~215 draw calls to protect against a vertex
+## cost that didn't exist.
+##
+## STALE SINCE THE MAP-WIDE REWORK (see max_building_terrain_height):
+## ~17,300 buildings puts city geometry around ~605,000 triangles, ~12x
+## what this default was validated against. Still likely fine for the same
+## structural reason (draw-call cost has historically dominated vertex cost
+## in this project at every scale tried so far), but that's now an
+## extrapolation, not the original measurement — re-check before assuming
+## render_chunks=1 is still clearly correct if this ever needs revisiting.
+## Raise this only if the building models are ever replaced with something
+## genuinely heavy, or if a live look says otherwise.
 @export var render_chunks: int = 1
 
 @export_group("Surface look")
@@ -159,8 +195,11 @@ var buildings: Array[Dictionary] = []
 enum BuildingState { STANDING, COLLAPSING, GONE }
 
 ## Bounds handed to every building MultiMesh — see _build_building_multimeshes.
-const CITY_BATCH_AABB := AABB(
-		Vector3(-24000.0, -10000.0, -24000.0), Vector3(48000.0, 24000.0, 48000.0))
+## Was a fixed const sized for the old ~10800m city footprint; now that
+## buildings can land anywhere across the terrain's own extent, this has to
+## track terrain.world_size instead of a hardcoded guess, so it's computed
+## in _ready() (see _origin/_half_total) rather than a compile-time constant.
+var _city_batch_aabb: AABB
 
 ## How long a doomed building takes to disappear, in SECONDS — deliberately a
 ## duration rather than a sink speed in metres/second. This city's buildings
@@ -222,11 +261,32 @@ var _bucket_mmi: Dictionary = {}
 
 var _terrain: Node
 
+## Terrain-derived placement bounds, computed once in _ready() and shared by
+## both generation passes — the whole point of the map-wide rework is that
+## there is no longer a separate, independently-tunable footprint size, so
+## these three values ARE the footprint now.
+var _origin: Vector3
+var _half_total: float
+var _grid_count: int
+
 
 func _ready() -> void:
 	_terrain = get_node_or_null(terrain_path)
 	if not _terrain:
 		return
+
+	_origin = _terrain.global_position
+	_half_total = _terrain.world_size * 0.5
+	_grid_count = int(_terrain.world_size / block_pitch)
+
+	# Batch bounds must cover the whole terrain footprint now, not the old
+	# fixed 10800m city block — see CITY_BATCH_AABB's own note. Building
+	# height tops out around ~1830m (height_multiplier's own header), so
+	# 4000m of vertical margin comfortably covers every real building plus
+	# however far collapse_near() sinks one before it's hidden.
+	_city_batch_aabb = AABB(
+			Vector3(_origin.x - _half_total - 2000.0, -2000.0, _origin.z - _half_total - 2000.0),
+			Vector3(_half_total * 2.0 + 4000.0, 6000.0, _half_total * 2.0 + 4000.0))
 
 	_generate_roads()
 	_generate_buildings()
@@ -234,14 +294,13 @@ func _ready() -> void:
 	# into the actual MultiMeshInstance3D nodes.
 	_build_building_multimeshes()
 
-	# Nothing is collapsing at match start, and a city of ~1400 buildings has
-	# no other per-frame work at all — collapse_near() switches this back on.
+	# Nothing is collapsing at match start, and a city of many thousands of
+	# buildings has no other per-frame work at all — collapse_near()
+	# switches this back on.
 	set_process(false)
 
 
 func _generate_roads() -> void:
-	var half_total := grid_size * block_pitch * 0.5
-
 	var road_material := StandardMaterial3D.new()
 	road_material.albedo_color = Color(0.055, 0.058, 0.065)
 	# Wet asphalt: dark and smooth, so the streets throw a long specular
@@ -260,23 +319,30 @@ func _generate_roads() -> void:
 
 	var transforms: Array[Transform3D] = []
 
-	# Streets running along Z, at each of the grid_size+1 X-grid-lines —
+	# Streets running along Z, at each of the _grid_count+1 X-grid-lines —
 	# one tile per block along the street's length, not one long strip.
-	for i in range(grid_size + 1):
-		var x := city_center.x - half_total + i * block_pitch
-		for j in grid_size:
-			var z := city_center.z - half_total + j * block_pitch + block_pitch * 0.5
+	# Each tile is independently gated by max_building_terrain_height, same
+	# as buildings — a road climbing partway up a mountain with no
+	# buildings around it would look like a mistake, not a feature.
+	for i in range(_grid_count + 1):
+		var x := _origin.x - _half_total + i * block_pitch
+		for j in _grid_count:
+			var z := _origin.z - _half_total + j * block_pitch + block_pitch * 0.5
 			var ground_height: float = _terrain.get_height_at(x, z)
+			if ground_height > max_building_terrain_height:
+				continue
 			transforms.append(Transform3D(
 					Basis().scaled(Vector3(road_width, 1.0, block_pitch)),
 					Vector3(x, ground_height + 0.05, z)))
 
-	# Streets running along X, at each of the grid_size+1 Z-grid-lines.
-	for j in range(grid_size + 1):
-		var z := city_center.z - half_total + j * block_pitch
-		for i in grid_size:
-			var x := city_center.x - half_total + i * block_pitch + block_pitch * 0.5
+	# Streets running along X, at each of the _grid_count+1 Z-grid-lines.
+	for j in range(_grid_count + 1):
+		var z := _origin.z - _half_total + j * block_pitch
+		for i in _grid_count:
+			var x := _origin.x - _half_total + i * block_pitch + block_pitch * 0.5
 			var ground_height: float = _terrain.get_height_at(x, z)
+			if ground_height > max_building_terrain_height:
+				continue
 			transforms.append(Transform3D(
 					Basis().scaled(Vector3(block_pitch, 1.0, road_width)),
 					Vector3(x, ground_height + 0.05, z)))
@@ -295,21 +361,25 @@ func _generate_roads() -> void:
 
 
 func _generate_buildings() -> void:
-	var half_total := grid_size * block_pitch * 0.5
-
-	for gx in grid_size:
-		for gz in grid_size:
+	for gx in _grid_count:
+		for gz in _grid_count:
 			if randf() < skip_chance:
 				continue
 
 			# Block CENTER — midway between the road grid lines on either
 			# side, not aligned to the roads themselves, so buildings sit
 			# inside their block instead of straddling a street.
-			var x := city_center.x - half_total + gx * block_pitch + block_pitch * 0.5 \
+			var x := _origin.x - _half_total + gx * block_pitch + block_pitch * 0.5 \
 					+ randf_range(-building_jitter, building_jitter)
-			var z := city_center.z - half_total + gz * block_pitch + block_pitch * 0.5 \
+			var z := _origin.z - _half_total + gz * block_pitch + block_pitch * 0.5 \
 					+ randf_range(-building_jitter, building_jitter)
 			var ground_height: float = _terrain.get_height_at(x, z)
+
+			# THE actual "buildings can't go on mountains" gate — see
+			# max_building_terrain_height's own header for the measured
+			# heightmap survey behind the chosen value.
+			if ground_height > max_building_terrain_height:
+				continue
 
 			var is_landmark := randf() < landmark_chance
 			var pool := LANDMARK_BUILDINGS if is_landmark else REGULAR_BUILDINGS
@@ -360,7 +430,7 @@ func _generate_buildings() -> void:
 			body.add_child(collision)
 
 			# --- rendering (batched) ---
-			var chunk := _chunk_index(x, z, half_total)
+			var chunk := _chunk_index(x, z)
 			var parts_ref: Array = []
 			for part in (model["parts"] as Array):
 				var part_xform: Transform3D = world_xform * (part["xform"] as Transform3D)
@@ -492,10 +562,14 @@ func _collect_parts(node: Node, xform: Transform3D, parts: Array) -> void:
 		_collect_parts(child, xform, parts)
 
 
-func _chunk_index(x: float, z: float, half_total: float) -> int:
-	var span := half_total * 2.0
-	var cx := clampi(int((x - (city_center.x - half_total)) / span * float(render_chunks)), 0, render_chunks - 1)
-	var cz := clampi(int((z - (city_center.z - half_total)) / span * float(render_chunks)), 0, render_chunks - 1)
+## Chunk bucketing now keys off the terrain's own extent (_origin/_half_total)
+## rather than city_center — city_center no longer bounds where buildings can
+## land, so it stopped being the right origin for this even at the default
+## render_chunks=1 (where the result is always chunk 0 regardless).
+func _chunk_index(x: float, z: float) -> int:
+	var span := _half_total * 2.0
+	var cx := clampi(int((x - (_origin.x - _half_total)) / span * float(render_chunks)), 0, render_chunks - 1)
+	var cz := clampi(int((z - (_origin.z - _half_total)) / span * float(render_chunks)), 0, render_chunks - 1)
 	return cz * render_chunks + cx
 
 
@@ -539,10 +613,10 @@ func _build_building_multimeshes() -> void:
 		# their AABB before, but collapse_near() now rewrites instance
 		# transforms at runtime — and a dirty MultiMesh with no custom_aabb
 		# recomputes its bounds by walking EVERY instance it owns, which for
-		# a single city-wide batch is hundreds of buildings per frame while
-		# anything is sinking. Generous enough to cover the whole city
-		# including buildings on their way down through the terrain.
-		mm.custom_aabb = CITY_BATCH_AABB
+		# a single map-wide batch is now many thousands of buildings per
+		# frame while anything is sinking. Generous enough to cover the
+		# whole terrain footprint including buildings on their way down.
+		mm.custom_aabb = _city_batch_aabb
 
 		var mmi := MultiMeshInstance3D.new()
 		mmi.multimesh = mm

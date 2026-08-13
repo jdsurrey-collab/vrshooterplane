@@ -422,29 +422,28 @@ writes and wires up scenes/scripts directly.
   (shorter base models) and `LANDMARK_BUILDINGS` (tallest base models
   scaled up hard — the supertall towers). Dimensions were measured directly
   from the imported meshes via a one-off headless AABB script, not guessed.
-  **Density and height are tuned independently of sprawl.** `grid_size` and
-  `block_pitch` are deliberately inverse: the footprint is
-  `grid_size * block_pitch`, held at **10800m** across, so packing in more
-  blocks means shrinking the pitch rather than growing the grid outward
-  (24 blocks at 450m and 30 at 360m cover identical ground). `skip_chance`
-  is then tuned so the *building count* lands where intended rather than
-  the raw block count. Current: **42 x 42 blocks at 257.14m pitch, ~1432
-  buildings**, up from 744 (which was itself up from ~490) — footprint
-  measured unchanged throughout.
-  `height_multiplier` (**3.0**) scales **Y only**, so towers get taller
-  without getting wider (tallest measured **1868m**); scaling all three axes
-  would have widened every footprint, crowded the blocks and effectively
-  grown the city. `building_jitter` was reduced to 20m alongside the tighter
-  257m blocks so buildings stay off the streets. The `CollisionShape3D` is a child of the scaled
-  `StaticBody3D`, so it inherits the non-uniform scale and collision stays
-  correct for free.
-  **Coupled to `faction_battle.gd`'s `MAX_BUILDING_HEIGHT`** (now 1400m):
-  that is the altitude above which ships and bolts skip their
-  building-collision physics query entirely, so it must stay above the
-  tallest building this can produce. Raising building height without
-  raising that gate silently makes ships fly through the tops of towers.
-  `dome_radius` (8000m) is likewise sized against the city's ~7637m
-  half-diagonal, which only holds while the footprint does.
+  **Density and height were originally tuned independently of sprawl, on a
+  fixed footprint** — `grid_size * block_pitch` held at 10800m across
+  regardless of pitch (24 blocks at 450m and 30 at 360m covered identical
+  ground), `skip_chance` tuning the *building count* rather than the raw
+  block count. **This is superseded — see "Map-wide, height-gated
+  placement" below, which is the live behavior.** `height_multiplier`
+  (**3.0**, unchanged by that rework) scales **Y only**, so towers get
+  taller without getting wider (tallest measured **1868m**); scaling all
+  three axes would have widened every footprint, crowding the blocks and
+  effectively growing the city. The `CollisionShape3D` is a child of the
+  scaled `StaticBody3D`, so it inherits the non-uniform scale and collision
+  stays correct for free.
+  **Coupled to `faction_battle.gd`'s `MAX_BUILDING_HEIGHT`** (2000m): that
+  is the altitude above which ships and bolts skip their building-collision
+  physics query entirely, so it must stay above the tallest building this
+  can produce. Raising building height without raising that gate silently
+  makes ships fly through the tops of towers.
+  `dome_radius` (8000m) and `city_center` are gameplay/scoring anchors for
+  `FactionBattle`'s contested column, sized against the ORIGINAL city
+  footprint's ~7637m half-diagonal — deliberately **left untouched** by the
+  map-wide building rework below, which only changes where buildings are
+  drawn, not where the fight is scored.
   **Buildings are batched into MultiMeshes, like the streets already were**
   — this is what makes density affordable. Every building used to be its
   own instantiated scene, so 745 buildings meant ~745 draw calls despite
@@ -476,6 +475,123 @@ writes and wires up scenes/scripts directly.
   from the model path by family — `Models/building_04.2.fbx` ->
   `Textures/building_04.png` — rather than a hand-maintained table.
   Verified: 18 of 18 batches textured, all 8 textures in use.
+
+  **Map-wide, height-gated placement — replacing the fixed 10800m
+  footprint.** Direct request: "put a building everywhere that is three
+  hundred meters or below" (later revised after measurement — see below)
+  "so that just makes it so buildings can't go on mountains and stuff."
+  Buildings and roads now cover the terrain's **entire extent**
+  (`_terrain.world_size`, centred on `_terrain.global_position`) instead of
+  a fixed block anchored on `city_center` — a candidate block is only
+  actually built if `_terrain.get_height_at()` at that position is at or
+  below `max_building_terrain_height`, so the city naturally pools into
+  the lowlands and every real mountain range stays bare. `block_pitch`
+  is still the density dial; it just no longer has a fixed footprint to
+  multiply against — the grid now spans the whole map
+  (`_grid_count = int(world_size / block_pitch)`), and only the
+  height-gated fraction of it actually builds anything.
+
+  **The literal "300m" ask was measured before being implemented, and the
+  number was wrong for this terrain — not a matter of taste, a real
+  surprise.** A headless heightmap survey (40,401 samples, 500m spacing
+  across the full 100km map) found only **0.06%** of the terrain at or
+  below 300m — the single lowest point sampled anywhere was 239m, meaning
+  the *original* fixed-footprint city already sat in essentially the only
+  pocket that low. Building strictly at 300m would have **shrunk** the
+  city to an estimated ~80 buildings, the opposite of the request. The
+  full measured table (fraction of map qualifying / estimated resulting
+  building count at the existing density):
+
+  | threshold | % of map | est. buildings |
+  |---|---|---|
+  | 300m | 0.06% | ~80 |
+  | 500m | 2.6% | ~3,150 |
+  | 750m | 14% | ~17,300 |
+  | 1000m | 26% | ~31,900 |
+  | 1500m | 44% | ~54,500 |
+  | 2000m | 57% | ~70,900 |
+
+  Presented to the user with this table; **750m was chosen** — a real
+  ~12x expansion over the previous ~1470-building fixed city (measured
+  result: **17,301 buildings**, spanning the full ~99,500m width/depth of
+  the map) while keeping genuine mountain ranges building-free and staying
+  well short of the 30,000+ building range that would have been new,
+  unmeasured territory for the collision-body count.
+
+  **`city_center` and `dome_radius` are deliberately untouched.**
+  `FactionBattle.dome_center` reads `CityGenerator.city_center` directly
+  (`if "city_center" in city: dome_center = city.city_center`) — that is
+  the Air Superiority scoring anchor, not a building-placement bound, and
+  decoupling it from the now-map-wide building footprint means the
+  contested column, motherships, and spawn points all stay exactly where
+  they were. The buildings now sprawl far beyond `dome_radius` (8000m) —
+  most of the new city is outside the actual contested airspace, which is
+  an accepted trade (backdrop/scale, not new scoring area) rather than an
+  oversight.
+
+  **`CITY_BATCH_AABB` had to stop being a compile-time constant.** It was
+  sized for the old ~10800m footprint (`AABB` spanning ±24000m); with
+  buildings now landing anywhere across a 100km terrain, a fixed constant
+  would silently clip/mis-cull the new instances at the map's edges. It's
+  now `_city_batch_aabb`, computed once in `_ready()` from
+  `_terrain.world_size` directly, the same "derive it from the real
+  source, don't duplicate the number" reasoning already used for
+  `cloud_deck.gd` reading `Atmosphere`'s band.
+
+  **Draw calls and physics stay separate stories, same as always.**
+  Rendering is still ~19 draw calls regardless of building count — density
+  was already "nearly free on the render side" per the batching note
+  above, and going from ~1,470 to ~17,301 instances doesn't change that;
+  it's still more instances in the same batches. **Collision is the one
+  part of this that genuinely scales 1:1 with count** — every building
+  still gets its own `StaticBody3D` + `BoxShape3D` (unbatched, unlike the
+  MultiMesh rendering), so this is ~11.8x more physics bodies in the world
+  than before. This project's own prior measurement is the reason that
+  wasn't treated as disqualifying: a wall-clock A/B with the
+  building-collision physics query fully DISABLED vs. fully ENABLED (see
+  Performance, below) found only a 1.7% frame-time difference at the
+  *previous* building count — physics/collision has never been where this
+  project's real cost lives.
+
+  **Shadows were turned off globally to compensate, on direct
+  instruction** (`Sun.shadow_enabled` false in `Town.tscn`; the rest of
+  its tuning — bias, PSSM mode, max distance — is left authored but
+  dormant, not deleted, so re-enabling is a one-line flip if wanted back).
+  This is the more consequential trade, and it's worth stating plainly:
+  buildings were the ENTIRE reason the shadow pass existed and was tuned
+  at all (`directional_shadow_max_distance` raised from Godot's 100m
+  default specifically so building shadows would reach the city; terrain
+  was deliberately EXCLUDED from casting specifically to keep the shadow
+  pass cheap and building-dominated — see Shadows below) — with building
+  triangle count now roughly **12x** what that tuning assumed
+  (~26-51k -> an estimated ~600k, at the same ~35 triangles/building
+  average), rendering that same geometry into a shadow map every frame
+  was the more realistic risk to re-measure, and disabling it sidesteps
+  the question entirely rather than trying to re-tune PSSM splits/bias for
+  an unmeasured new triangle count. **Real, accepted cost**: the mothership
+  no longer casts its own shadow, and — the bigger loss —
+  `cloud_deck_toon.gdshader`'s `ATTENUATION` term (real shadow-map
+  occlusion from buildings crossing the deck, part of what made the
+  two-tone toon shading read as buildings poking through real cloud cover
+  rather than a flat texture) now always reads as fully lit, since there is
+  no shadow map to sample. The deck's own bump-normal shading (the OTHER
+  half of that lit/shadow ramp) is untouched — this only removes the
+  building-shadow contribution specifically.
+
+  Verified headlessly (7/7): 17,301 buildings generated, zero placed on
+  terrain above `max_building_terrain_height`, spread across the map's
+  full ~99,500m extent in both axes (not clustered near the old
+  footprint), every building falls inside the recomputed
+  `_city_batch_aabb`, `city_center` unchanged, `Sun.shadow_enabled` is
+  false, and draw calls stay at 19. Scene instantiate-plus-two-frames wall
+  time measured at ~3.25s (headless, dummy renderer) — a one-time load
+  cost, not a frame-rate one, but worth knowing before assuming this is
+  free at boot. **Not yet confirmed live**: whether ~17,300 scattered
+  buildings actually reads as a coherent, good-looking sprawl from the air
+  (versus e.g. looking sparse/patchy at 14% coverage), and whether losing
+  the building-shadow-crossing-the-clouds effect is missed — both are
+  headset questions, same as every other visual judgment call in this
+  project.
 - `scripts/target_lock.gd` — left controller's **Y button**
   (`by_button`) **cycles** a lock through living aliens from
   `faction_battle.gd`'s roster, nearest-to-farthest
@@ -3320,6 +3436,23 @@ unobstructed sunshine under a sky that's nominally overcast.
   recovery on climbing back above — 10/10 checks.
 
 ### Shadows
+
+**Currently DISABLED** (`Sun.shadow_enabled = false` in `Town.tscn`, direct
+instruction, "turn the shadows off to compensate") — see the map-wide city
+rework above for why: building triangle count (the shadow pass's entire
+real cost, per the exclusions below) jumped roughly 12x when the city went
+from a fixed ~1470-building footprint to ~17,300 buildings covering the
+whole terrain, and turning shadows off sidesteps re-measuring/re-tuning an
+unmeasured new triangle count entirely rather than guessing at it. Every
+other tuning value in this section (`shadow_bias`, `directional_shadow_mode`,
+`directional_shadow_max_distance`) is left authored in the scene, just
+inert — re-enabling is a one-property flip, not a re-derivation, if the
+headset ends up wanting shadows back at a re-tuned cost. The rest of this
+section is the original reasoning/tuning history, kept for when that
+happens.
+
+---
+
 `shadow_enabled` was **already true** on the Sun and had been the whole
 time — but Godot's default `directional_shadow_max_distance` is **100
 metres**, in a world where the city is 10800m across and buildings are
@@ -4175,10 +4308,22 @@ small, the time is going to the GPU.
 - **Not per-frame node lookups.** A sweep of every `_process` /
   `_physics_process` in the project found zero `get_node`, `find_child` or
   `load()` calls on a per-frame path — all resolution happens in `_ready()`.
-- **Geometry is not the bottleneck.** Whole-scene triangle budget is
+- **Geometry is not the bottleneck.** Whole-scene triangle budget was
   ~870k per eye (terrain 524k, motherships 248k, city ~26k, ships ~50k,
   two cloud layers ~18k each), which is unremarkable for a 3060 Ti. The
-  problem was never vertices.
+  problem was never vertices. **Stale since the map-wide city rework** —
+  city building geometry jumped ~12x (~1470 -> ~17,300 buildings at the
+  same ~35 triangles/building average), putting the estimated new
+  whole-scene budget around ~1.5-1.6M triangles per eye. Draw calls are
+  unaffected (still ~19 for the city, MultiMesh batching doesn't care about
+  instance count) and shadows were turned off specifically so this larger
+  triangle count doesn't also have to be re-rendered into a shadow map —
+  but the MAIN camera pass still submits all of it every frame, and that
+  has not been re-measured live. Even at ~1.5M this is still a plausible
+  "unremarkable for a 3060 Ti" figure by the same reasoning as before
+  (simple, low-poly, opaque, batched geometry), but "plausible" is a guess
+  until it's actually watched in the headset — flagged here rather than
+  quietly left on the old, now-wrong number.
 
 ### What has NOT been done, deliberately
 
