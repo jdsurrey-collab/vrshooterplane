@@ -713,14 +713,15 @@ writes and wires up scenes/scripts directly.
   alone. Fixed by solving for the transform origin that puts the mesh's
   true lower bound — not its pivot — exactly on the ground.
 
-  Placed at world origin (`mega_tower_position_xz = (0, 0)`, the terrain's
-  actual centre — NOT `city_center`, which is just where the original
-  fixed-footprint city and the Air Superiority scoring column happen to
-  sit) — coincidentally only 6000m from `city_center`, meaning it sits
-  well inside `dome_radius` (8000m): a genuine new obstacle inside the
-  contested airspace, not just background scenery, consistent with how
-  every other building already works (ships crash into it exactly like
-  terrain — no special-cased avoidance, matching this project's existing
+  Placed at world origin (originally `mega_tower_position_xz = (0, 0)`,
+  the terrain's actual centre — NOT `city_center`, which is just where the
+  original fixed-footprint city and the Air Superiority scoring column
+  happen to sit) — only 6000m from `city_center`, meaning it sits well
+  inside `dome_radius` (8000m at the time this was written, since grown —
+  see below): a genuine new obstacle inside the contested airspace, not
+  just background scenery, consistent with how every other building
+  already works (ships crash into it exactly like terrain — no
+  special-cased avoidance, matching this project's existing
   approximate-collision philosophy). It also inherits the same accepted
   limitation as every tall building: `MAX_BUILDING_HEIGHT` (4000m) still
   gates the building-collision physics query, so anything flying above
@@ -736,12 +737,58 @@ writes and wires up scenes/scripts directly.
   height and diameter match their targets exactly (25000.0m, 1200.0m),
   and the combined mesh AABB's base sits exactly flush with
   `Terrain.get_height_at()` at that position (previously off by the
-  100m pivot-offset bug above, now within 0.001m). **Not yet confirmed
-  live**: whether it actually reads as an intentional "beacon" landmark
-  rather than an ungainly needle — the base model's natural proportions
-  were never designed for a ~21:1 height-to-diameter stretch, which is a
-  genuine first-pass guess about how far a supertall silhouette can be
-  pushed before it stops looking like a tower.
+  100m pivot-offset bug above, now within 0.001m).
+
+  **Grown from one tower to a constellation of six**, direct follow-up:
+  "I think five or six of these spread across the map would be great."
+  `_place_mega_towers()` now computes `mega_tower_count` (6) positions —
+  the original world-origin placement stays first, then the remaining 5
+  ring evenly around it at `mega_tower_ring_radius` (32000m), starting due
+  north, via `_mega_tower_positions()`. Deterministic, not randomized:
+  these function as navigation landmarks, and players benefit from them
+  being in the same place every match rather than a shuffled layout.
+  32000m wasn't guessed — it was picked to clear the two things it could
+  plausibly collide with (motherships, ~22000-28000m from `city_center`
+  along the spawn axis; the tank scatter zone, ~5400m of `city_center`)
+  and then VERIFIED by direct measurement rather than trusted: closest
+  ring tower to any mothership position measured ~10,184m clear, and the
+  central (original) tower measured exactly 6000m from `city_center`,
+  outside the tank scatter square's own boundary. Each tower now also
+  cycles through a different `LANDMARK_BUILDINGS` entry (`i %
+  LANDMARK_BUILDINGS.size()`) instead of six identical copies of the same
+  model, for cheap visual variety.
+
+  Verified headlessly (5/5): exactly 6 distinct tower clusters found (by
+  grouping the constellation's `MeshInstance3D` children spatially),
+  every one measures the exact target height/diameter, every base sits
+  flush with its own LOCAL ground height (which varies a lot across the
+  ring — measured 1162m to 5291m depending on which part of this
+  mountainous terrain each lands on), and the minimum pairwise distance
+  between any two towers is exactly the configured ring radius (32000m —
+  no accidental clustering). **Not yet confirmed live**, same open
+  question as the single-tower version (whether the extreme height-to-
+  diameter stretch reads as intentional) plus a new one: whether six of
+  these landmarks, at wildly different local ground elevations, read as a
+  coherent deliberate layout from the air rather than an arbitrary
+  scatter.
+
+  **`FactionBattle.dome_radius` grown alongside it**, a separate but
+  related follow-up: "I think the dome for the city is too small and
+  should extend through majority of the map." Was 8000m (sized against
+  the ORIGINAL fixed-footprint city's ~7637m diagonal, deliberately left
+  untouched through the earlier map-wide building rework since that was a
+  placement change, not a scoring one). Now **40000.0** — against the
+  terrain's 50000m half-extent, an 80000m-diameter contested column,
+  covering just over half the square map's total area and the clear
+  majority of anywhere actually worth flying (the far corners are the
+  most extreme, least-built-up mountain terrain anyway). Every existing
+  formula that already reads `dome_radius` live (rally points, squad
+  objective radii, the in-dome membership check) scales automatically —
+  no separate fix needed anywhere else, the payoff of it already being a
+  single shared export rather than a duplicated constant. Smoke-tested
+  through the real `GameFlow._start_match()` entry point with a short
+  simulated run afterward to confirm rally points/AS scoring don't break
+  at the new scale.
 - `scripts/target_lock.gd` — left controller's **Y button**
   (`by_button`) **cycles** a lock through living aliens from
   `faction_battle.gd`'s roster, nearest-to-farthest

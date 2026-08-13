@@ -38,10 +38,11 @@ extends Node3D
 ## and enemy_ai.gd so flying into a building crashes you exactly like
 ## hitting the ground.
 ##
-## Also places ONE deliberately colossal hand-tuned landmark at the
-## terrain's true centre, entirely separate from the procedural population
-## above — see the "Mega tower" export group and _place_mega_tower() for
-## the full reasoning.
+## Also places a small constellation of deliberately colossal hand-tuned
+## landmarks — one at the terrain's true centre, the rest ringed around
+## it — entirely separate from the procedural population above. See the
+## "Mega tower" export group and _place_mega_towers() for the full
+## reasoning.
 
 const BUILDING_COLLISION_LAYER := 10
 const BUILDING_TEXTURE_DIR := "res://Assets/City/Textures/"
@@ -181,43 +182,50 @@ const LANDMARK_BUILDINGS := [
 ## genuinely heavy, or if a live look says otherwise.
 @export var render_chunks: int = 1
 
-@export_group("Mega tower — one-off landmark")
-## A single, deliberately colossal tower — direct request: "a one-off
-## thing where this huge building is almost looming over the entire
-## area... like a beacon or a tower," dramatically bigger than anything
-## the procedural population above can produce. Genuinely hand-placed, not
-## part of `_generate_buildings()`'s grid: NOT in the `buildings` array
-## (so it's immune to `collapse_near()` — a permanent monument, not
-## something a nearby tank explosion should be able to sink) and NOT
-## folded into the batched building MultiMeshes (a true one-off doesn't
-## need the batching machinery built for many identical-scale instances —
-## one extra draw call is free). Reuses `LANDMARK_BUILDINGS[0]` so it
-## matches the city's own visual language rather than introducing a new
-## asset, textured through the same `_material_for_scene()` FBX-recovery
-## path as everything else.
+@export_group("Mega tower — one-off landmarks")
+## Originally a SINGLE colossal tower — direct request: "a one-off thing
+## where this huge building is almost looming over the entire area...
+## like a beacon or a tower," dramatically bigger than anything the
+## procedural population above can produce. Direct follow-up: "I think
+## five or six of these spread across the map would be great" — now a
+## small constellation instead of one. Every instance is still genuinely
+## hand-placed, not part of `_generate_buildings()`'s grid: NOT in the
+## `buildings` array (so it's immune to `collapse_near()` — permanent
+## monuments, not something a nearby tank explosion should be able to
+## sink) and NOT folded into the batched building MultiMeshes (a handful
+## of one-offs don't need the batching machinery built for many
+## identical-scale instances — a few extra draw calls is free). Each
+## reuses a different `LANDMARK_BUILDINGS` entry (cycling by index) for
+## visual variety rather than N identical copies, textured through the
+## same `_material_for_scene()` FBX-recovery path as everything else.
 @export var mega_tower_enabled: bool = true
-## World X/Z — "sits right in the middle of the ENTIRE map," i.e. the
-## terrain's own true centre (world origin), not `city_center` (which is
-## just where the original fixed-footprint city and the Air Superiority
-## scoring column happen to be).
-@export var mega_tower_position_xz: Vector2 = Vector2.ZERO
-## Target height in metres. The request's own "fifty times bigger than
-## any building" read literally against the current tallest building
-## (~3746m) would be ~187km — longer than the entire 100km map, clearly
-## not literally meant. Read instead against a TYPICAL building (median
-## height ~520m at this density): 50x = ~26,000m, rounded to a clean
-## 25,000m — nearly 7x the tallest procedural landmark and over 3x the
-## tallest mountain (~6984m), genuinely towering above the cloud band
-## (3200-3800m) as a real beacon visible from across the map.
+## How many towers total. The first is always the original "middle of the
+## entire map" placement (world origin); the rest ring evenly around it.
+@export var mega_tower_count: int = 6
+## Radius of the ring the non-central towers sit on. 32000m was chosen and
+## then VERIFIED, not assumed — measured clear of both motherships
+## (~22000-28000m from `city_center` along the spawn axis) and the tank
+## scatter zone (~5400m of `city_center`), so the ring doesn't visually
+## collide with either.
+@export var mega_tower_ring_radius: float = 32000.0
+## Target height in metres, applied to every tower. The request's own
+## "fifty times bigger than any building" read literally against the
+## current tallest building (~3746m) would be ~187km — longer than the
+## entire 100km map, clearly not literally meant. Read instead against a
+## TYPICAL building (median height ~520m at this density): 50x = ~26,000m,
+## rounded to a clean 25,000m — nearly 7x the tallest procedural landmark
+## and over 3x the tallest mountain (~6984m), genuinely towering above the
+## cloud band (3200-3800m) as a real beacon visible from across the map.
 @export var mega_tower_height: float = 25000.0
-## Target base diameter in metres. Same reasoning against a typical
-## building's diameter (median ~56m): 20x = ~1120m, rounded to 1200m.
+## Target base diameter in metres, applied to every tower. Same reasoning
+## against a typical building's diameter (median ~56m): 20x = ~1120m,
+## rounded to 1200m.
 @export var mega_tower_diameter: float = 1200.0
 ## Height and diameter are hit INDEPENDENTLY (unlike the procedural
 ## population's single uniform `s` plus `height_multiplier`) by computing
 ## separate X/Z and Y scale factors against the chosen model's own
-## measured local AABB — this is a one-off hand-tuned landmark, not a
-## member of a population that needs one shared scale law.
+## measured local AABB — these are hand-tuned one-offs, not members of a
+## population that needs one shared scale law.
 ##
 ## NOT ADDED TO `landmark_rooftops`. That array feeds ground_flak.gd's
 ## cosmetic AA fire, which is tuned for towers reaching a few hundred
@@ -379,7 +387,7 @@ func _ready() -> void:
 	_build_building_multimeshes()
 
 	if mega_tower_enabled:
-		_place_mega_tower()
+		_place_mega_towers()
 
 	# Nothing is collapsing at match start, and a city of many thousands of
 	# buildings has no other per-frame work at all — collapse_near()
@@ -544,26 +552,47 @@ func _generate_buildings() -> void:
 			})
 
 
-## Places the single hand-tuned landmark described in this file's own
+## Computes the constellation's positions — the first is always world
+## origin (unchanged from the original single-tower placement), the rest
+## spaced evenly around `mega_tower_ring_radius`, starting due north so the
+## layout is deterministic and reproducible match to match rather than
+## randomized (these function as navigation landmarks; players benefit
+## from them being in the same place every time).
+func _mega_tower_positions() -> Array[Vector2]:
+	var positions: Array[Vector2] = [Vector2.ZERO]
+	var ring_count := mega_tower_count - 1
+	for i in ring_count:
+		var angle := PI * 0.5 + TAU * float(i) / float(ring_count)
+		positions.append(Vector2(cos(angle), sin(angle)) * mega_tower_ring_radius)
+	return positions
+
+
+## Places every tower in the constellation described by this file's own
 ## "Mega tower" export group — see that comment for the full reasoning
-## behind the height/diameter targets. Reuses `_model_for()`'s cache (this
-## exact model is already loaded regardless, since LANDMARK_BUILDINGS[0]
-## is also in the procedural pool), but builds a plain MeshInstance3D per
-## part and a standalone StaticBody3D rather than going through the
-## batched-MultiMesh / buildings-array machinery built for a population of
-## many same-scale instances — this is a genuine one-off, not a member of
-## that population.
-func _place_mega_tower() -> void:
-	var scene: PackedScene = LANDMARK_BUILDINGS[0]
+## behind the height/diameter targets and why these stay outside both the
+## batched MultiMesh population and the buildings/collapse array.
+func _place_mega_towers() -> void:
+	var positions := _mega_tower_positions()
+	for i in positions.size():
+		_place_one_mega_tower(positions[i], LANDMARK_BUILDINGS[i % LANDMARK_BUILDINGS.size()])
+
+
+## Builds a single tower at `position_xz` using `scene`'s mesh. Reuses
+## `_model_for()`'s cache (every `LANDMARK_BUILDINGS` entry is already
+## loaded regardless, since the procedural pool draws from the same list),
+## but builds plain MeshInstance3D parts and a standalone StaticBody3D
+## rather than going through the batched-MultiMesh / buildings-array
+## machinery built for a population of many same-scale instances — these
+## are genuine one-offs, not members of that population.
+func _place_one_mega_tower(position_xz: Vector2, scene: PackedScene) -> void:
 	var model: Dictionary = _model_for(scene)
 	var local_aabb: AABB = model["aabb"]
 
-	var ground_height: float = _terrain.get_height_at(
-			mega_tower_position_xz.x, mega_tower_position_xz.y)
+	var ground_height: float = _terrain.get_height_at(position_xz.x, position_xz.y)
 
 	# Height and diameter are independent targets (unlike the procedural
-	# population's single uniform `s` plus height_multiplier) — this is a
-	# hand-tuned one-off, not a member of a population sharing one scale
+	# population's single uniform `s` plus height_multiplier) — these are
+	# hand-tuned one-offs, not members of a population sharing one scale
 	# law, so each axis is solved directly against the model's own
 	# measured AABB.
 	var scale_y := mega_tower_height / maxf(local_aabb.size.y, 0.001)
@@ -581,9 +610,9 @@ func _place_mega_tower() -> void:
 	# for it here: shift the transform origin so the mesh's true LOWER
 	# bound — not its pivot — lands exactly on ground_height.
 	var world_pos := Vector3(
-			mega_tower_position_xz.x,
+			position_xz.x,
 			ground_height - local_aabb.position.y * scale_y,
-			mega_tower_position_xz.y)
+			position_xz.y)
 	var world_xform := Transform3D(Basis.from_scale(scale_vec), world_pos)
 
 	var material: Material = model["material"]
@@ -600,7 +629,7 @@ func _place_mega_tower() -> void:
 	# scale baked into the shape rather than a non-uniform body scale) —
 	# solid to the same building-collision code paths everything else
 	# uses, just not tracked in `buildings`/collapse_near() (see the
-	# export group header for why: a permanent monument, not something a
+	# export group header for why: permanent monuments, not something a
 	# nearby tank explosion should sink).
 	var body := StaticBody3D.new()
 	body.collision_layer = 1 << (BUILDING_COLLISION_LAYER - 1)

@@ -328,7 +328,20 @@ const KILL_FEED_ENTRY_LIFETIME := 8.0
 
 @export var friendly_count: int = 100
 @export var enemy_count: int = 100
-@export var dome_radius: float = 8000.0  # covers the city's ~7637m corner-to-corner footprint
+## Was 8000.0, sized against the ORIGINAL fixed-footprint city's ~7637m
+## corner-to-corner diagonal — left untouched through the map-wide city
+## rework specifically because that was a building-placement change, not
+## a scoring one (see city_generator.gd's own note on this). Direct
+## follow-up request once the city and its mega towers actually spanned
+## the map: "I think the dome for the city is too small and should extend
+## through majority of the map." 40000.0 against the terrain's 50000m
+## half-extent gives an 80000m-diameter contested column — a circle
+## covering just over half the SQUARE map's total area, and the majority
+## of anywhere actually worth flying (the corners are the most extreme,
+## least-built-up mountain terrain). Every formula already reading this
+## export (rally points, squad objective radii, in-dome checks) scales
+## automatically; nothing needed a separate fix.
+@export var dome_radius: float = 40000.0
 
 ## Lid on the contested volume, in metres above terrain.
 ##
