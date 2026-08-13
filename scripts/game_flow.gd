@@ -47,8 +47,9 @@ enum GameMode { FULL_SCALE, ONE_V_ONE }
 ## mothership's flight deck — which is now the single source of truth (see
 ## _reposition_player). This is used only if there's no FactionBattle in the
 ## scene, and is kept roughly in step with faction_battle.gd's
-## `spawn_distance_from_city` so the fallback isn't wildly wrong.
-@export var player_spawn_xz: Vector2 = Vector2(-16000.0, 0.0)
+## `mothership_corner_inset` (the friendly mothership's own corner) so the
+## fallback isn't wildly wrong.
+@export var player_spawn_xz: Vector2 = Vector2(-42000.0, -42000.0)
 @export var player_spawn_altitude: float = 102.0
 
 var state: int = State.MENU

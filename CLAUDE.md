@@ -1556,6 +1556,13 @@ at `Blender Foundation/Blender 5.2/5.2/blender.exe`):
 
 ### Placement
 
+**RETIRED — see "Corner spawn rework" below for the live geometry.**
+Originally both motherships sat on a single straight line THROUGH
+`dome_center` (`dome_center + Vector3(±spawn_distance_from_city, 0, 0)`),
+22000m out on each side, west/east — kept below for history, since the
+tuning knobs and their reasoning are still broadly relevant, just aimed at
+a different geometry now.
+
 Three exported knobs on `FactionBattle`, all live-tunable. Current values
 are the result of two rounds of user-requested scaling-up (2000m/11000m/
 1500m, then doubled):
@@ -1585,11 +1592,88 @@ approach per 1000m of spawn distance, per side.
 This is also the standing answer to "nothing is happening" reports — for
 the first two minutes, that is now correct behaviour.
 
-The exported `player_spawn_xz` / `respawn_position_xz` /
-`spawn_position_xz` fallbacks in `game_flow.gd`, `crash_handler.gd` and
-`Town.tscn` track this at `(-16000, 0)`. They are **fallbacks only** (see
-Player spawn below), but a fallback that's kilometres wrong is worse than
-no fallback.
+### Corner spawn rework — opposite corners of the map, not a straight line
+
+Direct follow-up request: *"the cruisers have to get moved to the corners
+of the map... on the opposite sides of each other."* The tower/Conquest
+layout was explicitly confirmed unchanged in the same request ("the setup
+you have currently is perfect") — this is a spawn-geometry change only.
+
+`_friendly_spawn_center`/`_enemy_spawn_center` are no longer
+`dome_center`-relative at all. `dome_center` sits only 6000m off true
+world origin — negligible against the terrain's 50000m half-extent — so
+"corners of the map" means the terrain's own extent
+(`Terrain.world_size`), not the city's scoring anchor. Both motherships
+now sit at diagonally OPPOSITE corners of the terrain square (southwest
+vs. northeast — an arbitrary choice of diagonal, the other one would be
+exactly as valid), computed once in `_ready()`:
+
+    corner = terrain.world_size / 2 - mothership_corner_inset
+    friendly = (-corner, 0, -corner)
+    enemy    = (+corner, 0, +corner)
+
+`mothership_corner_inset` (**8000.0**, replacing the retired
+`spawn_distance_from_city` as the live pacing dial) is the margin kept
+back from the LITERAL map edge so a mothership's own ~2660m-wide deck has
+room to sit fully on the terrain, rather than hanging off it. At the
+default inset that puts both motherships at **(∓42000, ∓42000)**.
+
+**Nothing else needed to change.** Every downstream system that consumes
+`_friendly_spawn_center`/`_enemy_spawn_center` — squad building, rally
+points (`_make_rally_point()`'s `away := base_center - dome_center`
+projection), ground-avoidance, the mothership deck launch — was already
+written in terms of real vectors relative to `dome_center`, never assuming
+a cardinal axis. Moving from "opposite ends of one line" to "opposite
+corners of a square" is exactly the kind of change that formula-driven
+design is supposed to absorb for free, and headless verification confirmed
+it did: motherships land exactly on the computed corners, both comfortably
+inside the terrain's own bounds, and squads/rally points behave identically
+in shape, just now pointed along a diagonal instead of an axis.
+
+**Pacing consequence, measured — and it's a much bigger change than the
+number alone suggests.** The corner-to-corner diagonal is **~118,794m**
+(vs. the old 44,000m straight line — roughly 2.7x). A full simulated
+600s+ match at 100v100 found:
+
+| event | old (straight line) | new (diagonal corners) |
+|---|---|---|
+| fleet fully airborne | t=29.1s | t=29.2s |
+| first ambient tracer fired | — | **t=206.2s** |
+| first real combat kill | t≈54.5-116.6s (varies by config) | **t=240.0s** |
+
+**First real combat now doesn't happen until roughly 4 minutes into the
+10-minute match — 40% of the match elapsed before any dogfighting, up
+from the previous ~19%.** This is a substantially longer "nothing is
+happening" opening than any prior spawn-distance tuning in this project
+produced, and is worth flagging explicitly rather than only noting in
+passing: if that reads as too much dead air live, `mothership_corner_inset`
+is the direct lever (raising it pulls both corners inward, shortening the
+diagonal) and `match_duration` is the other one, same two dials as before,
+just renamed/repointed.
+
+**A real, separate finding surfaced by the same measurement, NOT a new
+bug introduced by this change**: kill-feed entries throughout the whole
+match — before, during, and after the delayed combat window — are
+dominated by `"...crashed"` (terrain/building impacts) rather than
+`"shot down by..."` combat kills, at a steady background rate on both
+sides (alive counts held in the same 94-100 range this project's own
+prior 100v100 baselines already report, e.g. "94-99 alive per side
+through t=300s"). This reads as the SAME pre-existing ground-avoidance
+imperfection this project has never claimed to be zero (this terrain is
+"genuinely mountainous," and ground avoidance flies a straight line at a
+fixed altitude offset rather than a full 3D avoidance solve) — just far
+more VISIBLE than before, because combat kills no longer arrive early
+enough to share the kill feed with it. Not re-tuned or investigated
+further this pass since the alive-count totals match historical
+baselines rather than showing new attrition; flagged here in case a
+future live session suggests otherwise.
+
+The exported `player_spawn_xz` fallback in `game_flow.gd` was updated to
+`(-42000, -42000)` to track the new friendly corner (same "a fallback
+that's kilometres wrong is worse than no fallback" reasoning as before);
+`respawn_position_xz`/`spawn_position_xz` in `crash_handler.gd`/
+`Town.tscn` were already at `Vector2.ZERO` (a mothership-independent
+fallback near map centre) and were left alone.
 
 The asset arrived with no materials, so `mothership.gd` applies a
 `material_override` per faction — a metallic hull tinted toward the faction

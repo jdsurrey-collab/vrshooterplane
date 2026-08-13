@@ -563,12 +563,25 @@ const KILL_FEED_ENTRY_LIFETIME := 8.0
 @export var mothership_length: float = 4000.0
 ## Height of the mothership's underside above the terrain below it.
 @export var mothership_altitude: float = 3000.0
-## How far out from dome_center each faction's mothership (and therefore its
-## whole fleet, since everything launches from the deck) sits. Raising this
-## lengthens the opening transit — roughly 6 seconds per extra 1000m at
-## cruise — before the fleets meet. At 22000m that opening approach is
-## multiple minutes long; see the measured figures in CLAUDE.md.
+## RETIRED — replaced by `mothership_corner_inset` below. This drove both
+## motherships along a single straight line THROUGH `dome_center`
+## (west/east); the corner-placement rework replaced that axis-locked
+## geometry entirely rather than just retuning the distance. Left defined,
+## not deleted, purely so old saved values in a `.tscn` override don't
+## error — nothing reads it anymore.
 @export var spawn_distance_from_city: float = 22000.0
+## Direct follow-up request: "the cruisers have to get moved to the
+## corners of the map... on the opposite sides of each other" — each
+## faction's mothership (and therefore its whole fleet, since everything
+## launches from the deck) now sits at a DIAGONALLY OPPOSITE corner of the
+## whole terrain square, not on a fixed cardinal axis through the middle.
+## This is the margin kept back from the literal map edge
+## (`terrain.world_size / 2`) so a mothership's own ~2660m-wide deck (see
+## `mothership_length`) has room to sit fully on the terrain. See
+## `_ready()`'s corner computation and CLAUDE.md's own measured opening-
+## transit figures for this new, much longer diagonal — raising/lowering
+## this is now the pacing dial `spawn_distance_from_city` used to be.
+@export var mothership_corner_inset: float = 8000.0
 @export var laser_sound_chance: float = 0.07  # only this fraction of nearby shots get a sound — the rest would be a wall of noise
 
 ## Live status, readable by battle_hud.gd / target_lock.gd / enemy_locator.gd.
@@ -657,8 +670,17 @@ func _ready() -> void:
 	if _city and "city_center" in _city:
 		dome_center = _city.city_center
 
-	_friendly_spawn_center = dome_center + Vector3(-spawn_distance_from_city, 0.0, 0.0)
-	_enemy_spawn_center = dome_center + Vector3(spawn_distance_from_city, 0.0, 0.0)
+	# Diagonally opposite corners of the whole terrain square — NOT
+	# dome_center-relative, since "corners of the map" means the map's own
+	# extent (world_size), and dome_center sits only 6000m off true world
+	# origin, negligible against a 50000m half-extent. Southwest vs.
+	# northeast is an arbitrary choice of diagonal (the other diagonal
+	# would be exactly as valid); what matters is that the two are on
+	# OPPOSITE corners, not opposite ends of one cardinal axis like before.
+	var terrain_half: float = (_terrain.world_size * 0.5) if _terrain else 50000.0
+	var corner: float = terrain_half - mothership_corner_inset
+	_friendly_spawn_center = Vector3(-corner, 0.0, -corner)
+	_enemy_spawn_center = Vector3(corner, 0.0, corner)
 	match_time_remaining = match_duration
 	_build_capture_zones()
 
@@ -2825,9 +2847,9 @@ func get_ship_health_fraction_by_key(key: int) -> float:
 ## previously lived in three separate exported values.
 func get_player_spawn_position() -> Vector3:
 	if duel_mode:
-		# The mothership deck is ~44km from where the OTHER mothership sits —
-		# exactly the transit distance the small-arena request is asking NOT
-		# to have. Spawn directly at dome_center instead, matching where
+		# The mothership deck now sits at a corner of the whole map, far
+		# further from the other mothership than the small-arena request is
+		# asking for. Spawn directly at dome_center instead, matching where
 		# _start_duel() places the one active opponent relative to.
 		var ground: float = _terrain.get_height_at(dome_center.x, dome_center.z) if _terrain else 0.0
 		return Vector3(dome_center.x, ground + 900.0, dome_center.z)
