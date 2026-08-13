@@ -50,17 +50,29 @@ extends Node3D
 ##     `accuracy` and the range. This is the "threatening but not unfair"
 ##     knob.
 ##
-## AIR SUPERIORITY — an invisible cylindrical column over the city
-## (city_center, dome_radius horizontally, and by default UNBOUNDED
-## vertically — it runs from the ground straight up through the cloud deck
-## into the skybox, so holding the sky over the city means holding it at any
-## altitude. See dome_ceiling to put a lid back on).
-## Every physics frame, each side's count of living ships currently inside
-## the dome (the player counts as one friendly) nets against the other:
-## air_superiority += (friendly_in_dome - enemy_in_dome) * delta * the
-## as_generation_multiplier, clamped to [-100, 100] — one enemy in the dome
-## cancels one friendly's contribution, exactly 1-for-1. Either side hitting
-## +/-100, or the 10-minute match timer expiring (higher AS wins), ends it.
+## AIR SUPERIORITY (RETIRED AS SCORING — see CONQUEST below) — an invisible
+## cylindrical column over the city (city_center, dome_radius horizontally,
+## and by default UNBOUNDED vertically — it runs from the ground straight up
+## through the cloud deck into the skybox). `dome_radius`/`dome_center`/
+## `_is_in_dome()`/`_random_point_in_dome()` are all still very much alive
+## and still govern where squads fly and engage — only the SCORING use of
+## dome presence (`_update_air_superiority()`) was ever removed; direct
+## instruction, "we're not gonna count how many people are inside the dome
+## for points anymore." `air_superiority` the variable and
+## `_update_air_superiority()` the function are both left defined but no
+## longer called from `_physics_process()`, same "retired, not deleted"
+## convention as everything else in this project.
+##
+## CONQUEST — the actual scoring now. Direct instruction: "instead of the
+## one dome that we had earlier, we have multiple domes, kind of like
+## battlefield games where you have the conquest areas... this could be
+## signified by the main big buildings... straight rip from battlefield in
+## every regard." See `capture_zone.gd` and this file's own "Conquest"
+## section below for the full design — one `CaptureZone` per mega tower
+## (`CityGenerator.get_mega_tower_positions()`), presence-based capture,
+## `friendly_score`/`enemy_score` racing to `score_target` (1000), fed by
+## +1 per kill and a continuous per-second rate for every zone currently
+## controlled.
 ##
 ## BOLTS are two separate systems. Ambient unit-vs-unit fire ("lasers
 ## everywhere") uses a pooled, non-Node bolt array (Dictionaries), rendered
@@ -297,6 +309,9 @@ const FRIENDLY_COLOR := Color(0.25, 0.65, 1.0)
 const ENEMY_COLOR := Color(0.85, 0.1, 0.85)
 const FRIENDLY_BOLT_COLOR := Color(0.35, 0.8, 1.0)
 const ENEMY_BOLT_COLOR := Color(1.0, 0.25, 0.15)
+const ZONE_NEUTRAL_COLOR := Color(0.55, 0.55, 0.58)
+
+const ZONE_LETTER_FONT := preload("res://Assets/Fonts/Orbitron-Variable.ttf")
 
 # --- Tracer readability at range (see _bolt_transform) ----------------------
 
@@ -393,7 +408,37 @@ const KILL_FEED_ENTRY_LIFETIME := 8.0
 @export var aggro_radius_player: float = 2500.0
 @export var max_ambient_bolts: int = 320  # raised with the slower bolts — they live longer on screen
 @export var enable_building_collision_check: bool = true
-@export var as_generation_multiplier: float = 0.01
+@export var as_generation_multiplier: float = 0.01  # RETIRED — see the class header's CONQUEST note
+
+@export_group("Conquest — tower capture scoring")
+## Horizontal distance from a tower a ship (or the player) counts as
+## "present" for capture purposes. 4000m against a 32000m ring radius
+## between neighbouring towers leaves each zone clearly its own contested
+## area rather than overlapping the next one.
+@export var capture_radius: float = 4000.0
+## How fast `CaptureZone.capture_value` moves per second while
+## uncontested (one faction present, the other absent) — 15.0 means
+## neutral -> fully captured in ~6.7s, or fully-enemy -> fully-friendly in
+## ~13.3s (has to pass back through neutral first — see
+## _update_capture_zones()'s own note on why that's the real Conquest rule,
+## not a shortcut).
+@export var zone_capture_rate: float = 15.0
+## Points per second, per zone currently controlled, added to that zone's
+## owning faction's score. Six zones held for the whole 10-minute match
+## would alone contribute 6 * 0.2 * 600 = 720 of the 1000-point target —
+## strong enough that map control can matter on its own, but not so strong
+## it trivially dominates kills. First-pass, needs live tuning.
+@export var zone_score_rate: float = 0.2
+## Added to a faction's score per confirmed kill (ship-vs-ship combat only
+## — a crash into terrain/a building isn't credited to anyone). Direct
+## instruction: "we're gonna go by kills... for every one kill is one
+## point."
+@export var kill_score_value: float = 1.0
+## First side to reach this score wins outright; if the 10-minute timer
+## expires first, whichever score is higher wins (exactly equal is a
+## draw). Direct instruction: "the score is gonna go all the way to a
+## thousand."
+@export var score_target: float = 1000.0
 
 ## How many aliens may hunt the player at once. An "attacker cap" is a
 ## standard modern-combat-AI pacing device: without it, every alien inside
@@ -480,11 +525,20 @@ const KILL_FEED_ENTRY_LIFETIME := 8.0
 @export var laser_sound_chance: float = 0.07  # only this fraction of nearby shots get a sound — the rest would be a wall of noise
 
 ## Live status, readable by battle_hud.gd / target_lock.gd / enemy_locator.gd.
-var air_superiority: float = 0.0  # -100 (enemy control) .. +100 (friendly control)
+var air_superiority: float = 0.0  # RETIRED — see the class header's CONQUEST note
 var match_time_remaining: float = 0.0
 var game_over: bool = false
 var winning_faction: int = -1  # Combatant.Faction.FRIENDLY/ENEMY, or -1 for a draw
 var dome_center: Vector3 = Vector3(6000.0, 0.0, 0.0)
+
+## The real score now — see the class header's CONQUEST note and the
+## "Conquest" section below. Readable by battle_hud.gd.
+var friendly_score: float = 0.0
+var enemy_score: float = 0.0
+
+## One CaptureZone per mega tower, built once in _ready() from
+## CityGenerator.get_mega_tower_positions() — see capture_zone.gd.
+var capture_zones: Array[CaptureZone] = []
 
 ## Gated by game_flow.gd — false until the player confirms the start menu,
 ## so ships spawn and sit visibly (frozen) rather than fighting/scoring
@@ -513,6 +567,7 @@ var _enemy_spawn_center: Vector3
 
 var _terrain: Node
 var _player: Node3D
+var _city: Node
 ## tank_objective.gd, if the ground objective is in the scene at all. Every
 ## use is null-guarded — the mass battle predates the ground objective and
 ## must still run without it (headless sims instantiate it, but a stripped
@@ -551,13 +606,14 @@ func _ready() -> void:
 	_bolt_min_width_rad = deg_to_rad(bolt_min_angular_width_deg)
 	_bolt_min_length_rad = deg_to_rad(bolt_min_angular_length_deg)
 
-	var city := get_node_or_null("../City")
-	if city and "city_center" in city:
-		dome_center = city.city_center
+	_city = get_node_or_null("../City")
+	if _city and "city_center" in _city:
+		dome_center = _city.city_center
 
 	_friendly_spawn_center = dome_center + Vector3(-spawn_distance_from_city, 0.0, 0.0)
 	_enemy_spawn_center = dome_center + Vector3(spawn_distance_from_city, 0.0, 0.0)
 	match_time_remaining = match_duration
+	_build_capture_zones()
 
 	_build_multimesh_nodes()
 	_build_motherships()
@@ -604,7 +660,8 @@ func _physics_process(delta: float) -> void:
 			declare_winner(Combatant.Faction.FRIENDLY, "duel opponent destroyed")
 
 		_update_ambient_bolts(delta)
-		_update_air_superiority(delta)
+		_update_capture_zones(delta)
+		_update_score(delta)
 		_update_kill_feed(delta)
 		_frame_counter += 1
 
@@ -653,6 +710,15 @@ func reset_battle() -> void:
 	game_over = false
 	winning_faction = -1
 	air_superiority = 0.0
+	friendly_score = 0.0
+	enemy_score = 0.0
+	for zone in capture_zones:
+		zone.capture_value = 0.0
+		# Explicit rather than waiting for the next _update_capture_zones()
+		# tick (which only runs while simulation_active) — a player who
+		# returns to the menu and looks at a tower shouldn't still see last
+		# match's colour.
+		_update_zone_letter_color(zone)
 	match_time_remaining = match_duration
 	_ambient_bolts.clear()
 	_kill_feed_entries.clear()
@@ -2037,6 +2103,19 @@ func _apply_damage_internal(units: Array, index: int, amount: float, cause: Stri
 		var squads: Array[Squad] = _friendly_squads if c.faction == Combatant.Faction.FRIENDLY else _enemy_squads
 		var sq: Squad = squads[c.squad_id] if c.squad_id >= 0 and c.squad_id < squads.size() else null
 		_kill_combatant(c, index, sq, cause)
+		# This is combat damage specifically (this function is only ever
+		# reached through apply_damage()/ambient bolts, never the terrain/
+		# building crash path — see _update_combatant()'s own separate
+		# _kill_combatant() call for that), so it's always a real kill by
+		# the OPPOSING faction. Covers player-fired kills too: the player's
+		# own weapons call apply_damage() on the ENEMY array, so the victim
+		# being enemy correctly credits FRIENDLY, the same side the
+		# player's own presence has always counted toward.
+		if not game_over:
+			if c.faction == Combatant.Faction.FRIENDLY:
+				enemy_score += kill_score_value
+			else:
+				friendly_score += kill_score_value
 
 
 # ---------------------------------------------------------------------------
@@ -2111,6 +2190,161 @@ func _update_air_superiority(delta: float) -> void:
 		_end_game()
 
 
+## ---------------------------------------------------------------------------
+## Conquest — the live scoring system (see the class header's own note)
+## ---------------------------------------------------------------------------
+
+## One CaptureZone per tower, letters assigned A-F in the SAME order
+## CityGenerator places them (index 0 = world origin = "A", then the ring
+## in the order get_mega_tower_positions() itself builds it) — see that
+## function's own note on why the ordering has to stay deterministic for
+## this to hold.
+const ZONE_LETTERS := ["A", "B", "C", "D", "E", "F"]
+
+func _build_capture_zones() -> void:
+	capture_zones.clear()
+	if not _city or not _city.has_method("get_mega_tower_positions"):
+		return
+	var positions: Array = _city.get_mega_tower_positions()
+	for i in positions.size():
+		var zone := CaptureZone.new()
+		zone.letter = ZONE_LETTERS[i] if i < ZONE_LETTERS.size() else "?"
+		var p: Vector2 = positions[i]
+		# Real ground height, not a placeholder — _update_capture_zones()'s
+		# presence check is horizontal-only (X/Z) so Y was never load-bearing
+		# there, but _build_zone_letters() needs the tower's true base to
+		# place the letters correctly up its actual structure.
+		var ground: float = _terrain.get_height_at(p.x, p.y) if _terrain else 0.0
+		zone.position = Vector3(p.x, ground, p.y)
+		capture_zones.append(zone)
+	_build_zone_letters()
+
+
+## Four HUGE, world-scale letter markers per tower — one per cardinal
+## side, each rotated to face outward so it reads correctly from an
+## aircraft approaching from that direction. Direct instruction: "The
+## alphabet letters have to be huge and are visible above the clouds on
+## every side of the building. Huge letters." Deliberately real
+## world-scale text (NOT the fixed-apparent-size `fixed_size=true`
+## technique this project's other far-legible text — friendly_tags.gd,
+## target_lock.gd — already uses) since the request is specifically for a
+## huge PHYSICAL marker on the tower, not a HUD readout; letters genuinely
+## get bigger as you approach, matching a real marking on a real
+## structure the size of everything else in this "hellscape."
+func _build_zone_letters() -> void:
+	var cloud_top_y := 3800.0
+	var world_env := get_node_or_null("../Atmosphere")
+	if world_env and "cloud_base_y" in world_env and "cloud_thickness" in world_env:
+		cloud_top_y = world_env.cloud_base_y + world_env.cloud_thickness
+
+	for zone in capture_zones:
+		# Whichever is higher: comfortably above the (absolute-altitude)
+		# cloud band, or a sane height up the tower's own structure — a
+		# tower whose base already sits above the clouds (this terrain is
+		# genuinely mountainous, measured base_y ranged 1162-5291m across
+		# the ring) still gets its letters a real distance off the ground
+		# rather than sitting right at its own base.
+		var letter_y: float = maxf(zone.position.y + 500.0, cloud_top_y + 200.0)
+		var ring_radius := 700.0  # just outside the tower's own 600m base radius
+		zone.letter_labels.clear()
+		for side in 4:
+			var angle := float(side) * PI * 0.5
+			var offset := Vector3(sin(angle), 0.0, cos(angle)) * ring_radius
+			var label := Label3D.new()
+			label.text = zone.letter
+			label.font = ZONE_LETTER_FONT
+			label.font_size = 300
+			label.pixel_size = 2.0  # real world scale — see this function's own header
+			label.modulate = ZONE_NEUTRAL_COLOR
+			label.outline_size = 24
+			label.outline_modulate = Color(0.0, 0.0, 0.0, 0.6)
+			label.position = zone.position + offset + Vector3(0.0, letter_y - zone.position.y, 0.0)
+			# Face OUTWARD (away from the tower centre) — a Label3D's
+			# readable front is its own local +Z by default (same
+			# convention flight_hud.gd's non-billboarded labels already
+			# documented), so rotate to point +Z along `offset`.
+			label.rotation.y = angle
+			add_child(label)
+			zone.letter_labels.append(label)
+
+
+## Presence-based capture, straight from Battlefield Conquest: whichever
+## faction has ships within `capture_radius` and the other does NOT
+## captures/reinforces the zone toward themselves; if both are present the
+## zone is CONTESTED and progress freezes; if neither is present the zone
+## holds whatever state it was last in. Flipping an enemy-owned zone to
+## friendly (or vice versa) requires draining it back through neutral
+## first — a captured zone doesn't just gradually reassign, matching the
+## real rule rather than a softer approximation of it.
+func _update_capture_zones(delta: float) -> void:
+	for zone in capture_zones:
+		var friendly_present := _faction_present_near(_friendlies, zone.position)
+		if not friendly_present and _player \
+				and Vector2(_player.global_position.x - zone.position.x, _player.global_position.z - zone.position.z).length() <= capture_radius:
+			friendly_present = true
+		var enemy_present := _faction_present_near(_enemies, zone.position)
+
+		if friendly_present and enemy_present:
+			continue  # contested — frozen, same as real Conquest
+
+		if friendly_present:
+			zone.capture_value = minf(zone.capture_value + zone_capture_rate * delta, 100.0)
+		elif enemy_present:
+			zone.capture_value = maxf(zone.capture_value - zone_capture_rate * delta, -100.0)
+		# else: nobody present — hold current value unchanged.
+
+		_update_zone_letter_color(zone)
+
+
+## Only actually touches the four Label3D materials when ownership
+## genuinely changed — most zones sit stable for long stretches of a
+## match, so this is a cheap early-out against real per-frame work on 24
+## labels for nothing. Direct instruction: "when they're captured, they
+## turn the color of the... faction that captured them."
+func _update_zone_letter_color(zone: CaptureZone) -> void:
+	var owner: int = zone.owner_faction()
+	if owner == zone._last_owner_written:
+		return
+	zone._last_owner_written = owner
+	var color: Color = ZONE_NEUTRAL_COLOR
+	if owner == CaptureZone.FRIENDLY:
+		color = FRIENDLY_COLOR
+	elif owner == CaptureZone.ENEMY:
+		color = ENEMY_COLOR
+	for label in zone.letter_labels:
+		label.modulate = color
+
+
+func _faction_present_near(units: Array, pos: Vector3) -> bool:
+	var radius_sq := capture_radius * capture_radius
+	for c in units:
+		var combatant: Combatant = c
+		if combatant.alive and Vector2(combatant.position.x - pos.x, combatant.position.z - pos.z).length_squared() <= radius_sq:
+			return true
+	return false
+
+
+## The ticket-bleed half of Conquest, translated to a score race instead of
+## a countdown: each zone currently owned by a faction adds
+## `zone_score_rate` points/second to that faction's score — the more
+## towers you hold, the faster your score climbs, same snowball dynamic
+## real Conquest has via ticket bleed. Kill-scoring (kill_score_value per
+## kill) is added separately, at the moment of the kill — see
+## _apply_damage_internal()'s own note.
+func _update_score(delta: float) -> void:
+	if game_over:
+		return
+	for zone in capture_zones:
+		match zone.owner_faction():
+			CaptureZone.FRIENDLY:
+				friendly_score += zone_score_rate * delta
+			CaptureZone.ENEMY:
+				enemy_score += zone_score_rate * delta
+
+	if friendly_score >= score_target or enemy_score >= score_target:
+		_end_game()
+
+
 ## Lump-sum contribution to `air_superiority`, for OBJECTIVES rather than
 ## dome presence. `_update_air_superiority()` above is a RATE — a continuous
 ## per-second trickle from who is holding the dome — which had no way to
@@ -2169,9 +2403,9 @@ func _is_in_dome(pos: Vector3) -> bool:
 
 func _end_game() -> void:
 	game_over = true
-	if air_superiority > 0.0:
+	if friendly_score > enemy_score:
 		winning_faction = Combatant.Faction.FRIENDLY
-	elif air_superiority < 0.0:
+	elif enemy_score > friendly_score:
 		winning_faction = Combatant.Faction.ENEMY
 	else:
 		winning_faction = -1

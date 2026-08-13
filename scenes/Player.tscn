@@ -152,8 +152,9 @@ billboard = 1
 no_depth_test = true
 modulate = Color(2.2, 2.2, 2.4, 1)
 outline_modulate = Color(0.02, 0.02, 0.05, 1)
-text = "AIR SUPERIORITY
-FRIENDLY 50% - ENEMY 50%
+text = "SCORE
+FRIENDLY 0  -  ENEMY 0
+TOWERS HELD: 0 - 0
 10:00"
 font = ExtResource("49_orbitron")
 font_size = 30

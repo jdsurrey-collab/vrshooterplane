@@ -1066,7 +1066,20 @@ zero (`Basis().scaled(Vector3.ZERO)`) rather than removed — `MultiMesh` has
 no per-instance visibility flag for an arbitrary middle index, only
 `visible_instance_count`, which trims from the buffer's tail.
 
-### Air Superiority (AS)
+### Air Superiority (AS) — RETIRED AS SCORING, see Conquest below
+
+**No longer how the match is scored.** Direct instruction: *"we're not
+gonna count how many people are inside the dome for points anymore. We're
+gonna go by kills... straight rip from battlefield [Conquest]."* The
+scalar, the update function, and everything in this section describing HOW
+it worked are all left completely intact below (still correct as
+*history*, and `dome_radius`/`dome_center`/`_is_in_dome()` are all still
+genuinely live — they still govern where AI squads fly and engage, only
+the SCORING use of dome presence was removed) — but `_update_air_superiority()`
+is no longer called from `_physics_process()`, replaced by
+`_update_capture_zones()` + `_update_score()`. See the new "Conquest —
+tower capture scoring" section right after this one for what actually
+determines who wins now.
 
 A single scalar, `air_superiority`, -100 (full enemy control) to +100 (full
 friendly control), starting at 0: `air_superiority += (friendly_in_dome -
@@ -1130,6 +1143,153 @@ Verified: counts at 10m through 140,000m altitude over the city, still
 rejects anything outside the radius at any altitude (500m / 20km / 90km),
 a positive `dome_ceiling` correctly restores a lid, AI objectives stay in
 their 320-2448m combat band, and AS still accrues with the player 25km up.
+
+## Conquest — tower capture scoring (`capture_zone.gd`)
+
+**The actual scoring system now.** Direct instruction, once the six mega
+towers (see the City section) existed to hang it on: *"instead of the one
+dome that we had earlier, we have multiple domes, kind of like battlefield
+games where you have the conquest areas... this could be signified by the
+main big buildings. You have control over those areas... straight rip
+from battlefield in every regard. The more towers you control, the more
+points you get that rack up the score. Take everything there is from
+battlefield control, and we're gonna implement it here."*
+
+### The data model — `CaptureZone`
+
+One `CaptureZone` (`scripts/capture_zone.gd`, `RefCounted`, same
+lightweight-data-record convention as `Combatant`/`Squad` — never a Node)
+per mega tower, built in `FactionBattle._build_capture_zones()` directly
+from `CityGenerator.get_mega_tower_positions()` (renamed from a private
+`_mega_tower_positions()` specifically so `FactionBattle` could read it —
+the towers didn't exist as gameplay objects before this, only as visual
+landmarks). Letters assigned `A` through `F` in the SAME order
+`get_mega_tower_positions()` builds them (index 0 = world origin = "A",
+then the ring in that function's own deterministic order) — the ordering
+has to stay deterministic on both ends or the letters would drift out of
+sync with which physical tower is which.
+
+**Ownership is DERIVED, never stored separately.** A single
+`capture_value` scalar, `-100.0` (fully enemy) through `0.0` (neutral) to
+`+100.0` (fully friendly) — deliberately the same range the retired
+`air_superiority` scalar used, for continuity of the mental model even
+though the mechanism underneath is completely different now.
+`owner_faction()` computes FRIENDLY/ENEMY/NEUTRAL from the threshold
+rather than a field that could disagree with it.
+
+### Capture rules — the real Conquest rules, not an approximation
+
+`FactionBattle._update_capture_zones()`, every physics frame a zone's
+faction presence is checked (`_faction_present_near()`, horizontal-only
+distance against `capture_radius`, 4000m — the player's own position
+counts toward friendly presence, same "you count as one" convention the
+retired dome-presence system already established):
+
+- **Only friendly present** → `capture_value` moves toward `+100` at
+  `zone_capture_rate` (15.0/sec).
+- **Only enemy present** → moves toward `-100` at the same rate.
+- **BOTH present** → **CONTESTED, frozen** — `capture_value` doesn't move
+  at all, matching real Conquest exactly rather than a softer "whoever has
+  more nearby wins slowly" approximation.
+- **Neither present** → holds whatever it last was. No decay-to-neutral
+  when abandoned; a captured zone stays captured until someone actually
+  contests it.
+- **Flipping an owned zone requires passing through neutral first** — this
+  falls out of the single-scalar model for free: an enemy-owned zone
+  sitting at `-100` needs real time under friendly-only presence to climb
+  back through `0` before it can reach `+100` and flip. Not a separate
+  rule, just what the scalar does.
+
+### Scoring — kills + zone control, racing to 1000
+
+Two independent feeds into `friendly_score`/`enemy_score`
+(`FactionBattle`, both start at 0.0):
+
+- **+`kill_score_value`** (1.0) **per confirmed kill**, credited the
+  instant a combat kill lands — `_apply_damage_internal()`'s own kill
+  branch, NOT the separate crash/terrain kill path
+  (`_update_combatant()`'s own `_kill_combatant(..., "crashed")` call),
+  so flying into a mountain never scores a point for anyone. Since the
+  victim's faction is always known at that call site, the credit goes to
+  the OPPOSITE faction automatically — this also correctly covers
+  player-fired kills for free, since the player's own weapons already
+  call `apply_damage()` on the ENEMY array (the same "the player counts
+  as friendly" convention the whole scoring system has always used).
+- **+`zone_score_rate` (0.2) per second, per zone currently controlled**
+  — the ticket-bleed half of Conquest, translated from a countdown into a
+  score race: the more towers a faction holds, the faster its score
+  climbs. Six zones held for an entire 10-minute match would alone
+  contribute 720 of the 1000-point target — strong enough that map
+  control genuinely matters on its own, not so strong it trivially
+  dominates kills. First-pass number, needs live tuning like everything
+  else in this project.
+
+**Win condition**: first side to reach `score_target` (1000.0) wins
+immediately (`_end_game()`, called from `_update_score()`); if the
+10-minute `match_duration` timer expires first, whichever score is higher
+wins (`_end_game()`, called from `_update_match_timer()` same as always)
+— exactly equal is a draw.
+
+### The letters — huge, world-scale, four-sided
+
+Direct follow-up, twice: *"The alphabet letters have to be huge and are
+visible above the clouds on every side of the building. Huge letters. And
+when they're captured, they turn the color of the... faction that
+captured them."* `FactionBattle._build_zone_letters()`, four `Label3D`
+per tower (24 total), one per cardinal side, each rotated so its front
+(local +Z, the same non-billboarded-label convention `flight_hud.gd`
+already established) points outward — readable from an aircraft
+approaching from that specific direction, not a billboarded HUD marker.
+
+**Deliberately REAL world-scale text, not the fixed-apparent-size
+technique this project's other far-legible text already uses**
+(`friendly_tags.gd`'s callsigns, `target_lock.gd`'s HUD readouts, both
+`fixed_size = true` so they never change apparent size with distance).
+The request is specifically for a huge PHYSICAL marker on the tower, not
+a HUD readout, so these genuinely get larger as you approach — `font_size`
+300 with `pixel_size` 2.0 (versus HUD text's typical 0.001-0.002) works
+out to roughly 600m-tall glyphs, consistent with everything else at this
+project's "hellscape" scale.
+
+**Placement height is the higher of two floors, not a fixed altitude** —
+`maxf(tower_base_y + 500.0, cloud_top_y + 200.0)`. A single fixed absolute
+altitude (matching how the cloud band itself works) would have buried the
+letters on towers whose own base already sits above the clouds — this
+terrain is genuinely mountainous, and the measured tower base elevations
+across the ring span **1162m to 5291m**, with two of the six already
+higher than the cloud top (3800m) at their very base. The `maxf` guarantees
+a letter is always both comfortably above the weather AND a real distance
+up its own tower's structure, whichever demands more altitude for that
+specific tower.
+
+**Colour updates only touch the four labels when ownership genuinely
+changes** (`_update_zone_letter_color()`, gated on
+`CaptureZone._last_owner_written` so 24 labels aren't re-styled every
+frame for zones sitting stable) — grey (`ZONE_NEUTRAL_COLOR`) when
+neutral, `FRIENDLY_COLOR`/`ENEMY_COLOR` (the same blue/magenta already
+used for ship tinting throughout this project) once captured, so the
+towers use the exact same colour language as everything else rather than
+inventing a third palette.
+
+Verified headlessly (44/44), by direct simulation rather than structural
+checks alone: exactly 6 zones with the correct `A`-`F` letters, 4 real
+`Label3D` children each (parented under `FactionBattle`, positioned
+either above the cloud line or up their own tower per the `maxf` rule
+above), all starting neutral; a fabricated friendly-only presence
+genuinely captures toward friendly; adding an enemy presence on top
+genuinely FREEZES progress (not merely slows it); removing the friendly
+and leaving the enemy alone eventually flips the zone to full enemy
+ownership *through* neutral, and the letters recolour to the exact
+`ENEMY_COLOR` the instant that happens; score climbs from zone control at
+the configured rate; a combat kill awards exactly `kill_score_value` to
+the correct faction; a crash awards nothing to anyone; crossing
+`score_target` ends the match with the correct winner; and
+`reset_battle()` correctly zeroes both scores and every zone back to
+neutral. **Not yet confirmed live** — same as every other visual/gameplay
+first pass in this project, particularly whether the capture pacing (15
+capture-value/sec, 0.2 score/sec/zone) actually feels right at battle
+scale, and whether letters this size genuinely read as intended from the
+air rather than as visual clutter.
 
 ### Bolts — two separate systems
 

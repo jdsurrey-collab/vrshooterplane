@@ -1,44 +1,49 @@
 extends Label3D
 
 ## Top-center readout for the faction battle (faction_battle.gd): the
-## friendly/enemy Air Superiority split and the match countdown, plus a
-## VICTORY/DEFEAT/DRAW line and a "return to menu" prompt once the match
-## ends (game_flow.gd reads the same right-trigger press to act on it).
+## friendly/enemy score race and the match countdown, plus a VICTORY/
+## DEFEAT/DRAW line and a "return to menu" prompt once the match ends
+## (game_flow.gd reads the same right-trigger press to act on it).
+##
+## RETIRED: the old "AIR SUPERIORITY / FRIENDLY n% - ENEMY n%" dome-
+## presence readout and the "FUEL TANKS: n/20" line — direct instruction,
+## "we're gonna go by kills... for every one kill is one point," and
+## separately "get rid of all the tank mechanics." Scoring is now
+## FactionBattle.friendly_score/enemy_score (kills + tower control, see
+## that script's own Conquest section), racing to score_target (1000).
 
 @export var battle_path: NodePath = ^"../../../FactionBattle"
-@export var tanks_path: NodePath = ^"../../../TankObjective"
 
 var _battle: Node
-var _tanks: Node
 
 
 func _ready() -> void:
 	_battle = get_node_or_null(battle_path)
-	_tanks = get_node_or_null(tanks_path)
 
 
 func _process(_delta: float) -> void:
 	if not _battle:
 		return
 
-	var friendly_pct: float = (_battle.air_superiority + 100.0) / 2.0
-	var enemy_pct: float = 100.0 - friendly_pct
 	var total_seconds := int(_battle.match_time_remaining)
 	var minutes := total_seconds / 60
 	var seconds := total_seconds % 60
 
+	var friendly_towers := 0
+	var enemy_towers := 0
+	for zone in _battle.capture_zones:
+		var owner: int = zone.owner_faction()
+		if owner == CaptureZone.FRIENDLY:
+			friendly_towers += 1
+		elif owner == CaptureZone.ENEMY:
+			enemy_towers += 1
+
 	var lines := [
-		"AIR SUPERIORITY",
-		"FRIENDLY %d%% - ENEMY %d%%" % [roundi(friendly_pct), roundi(enemy_pct)],
+		"SCORE",
+		"FRIENDLY %d  -  ENEMY %d" % [roundi(_battle.friendly_score), roundi(_battle.enemy_score)],
+		"TOWERS HELD: %d - %d" % [friendly_towers, enemy_towers],
 		"%02d:%02d" % [minutes, seconds],
 	]
-
-	# Ground objective. The role line matters as much as the count: which side
-	# of the tank fight the player is on is rerolled every match, so it can't
-	# be assumed and has to be stated.
-	if _tanks and _tanks.active:
-		lines.append("FUEL TANKS: %d/%d  [%s]"
-				% [_tanks.tanks_remaining, _tanks.tank_count, _tanks.player_role_text()])
 
 	if _battle.game_over:
 		if _battle.winning_faction == Combatant.Faction.FRIENDLY:

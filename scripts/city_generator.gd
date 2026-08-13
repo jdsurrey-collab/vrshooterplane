@@ -558,7 +558,14 @@ func _generate_buildings() -> void:
 ## layout is deterministic and reproducible match to match rather than
 ## randomized (these function as navigation landmarks; players benefit
 ## from them being in the same place every time).
-func _mega_tower_positions() -> Array[Vector2]:
+##
+## PUBLIC (not `_`-prefixed) — faction_battle.gd's Conquest capture-zone
+## system (see that file) reads this directly to place one CaptureZone per
+## tower, so the towers ARE the six control points. Deterministic
+## ordering matters here specifically because `faction_battle.gd` assigns
+## letters A-F by index into this same array; if this ever became
+## randomized, the letter assignment would need to move with it.
+func get_mega_tower_positions() -> Array[Vector2]:
 	var positions: Array[Vector2] = [Vector2.ZERO]
 	var ring_count := mega_tower_count - 1
 	for i in ring_count:
@@ -572,7 +579,7 @@ func _mega_tower_positions() -> Array[Vector2]:
 ## behind the height/diameter targets and why these stay outside both the
 ## batched MultiMesh population and the buildings/collapse array.
 func _place_mega_towers() -> void:
-	var positions := _mega_tower_positions()
+	var positions := get_mega_tower_positions()
 	for i in positions.size():
 		_place_one_mega_tower(positions[i], LANDMARK_BUILDINGS[i % LANDMARK_BUILDINGS.size()])
 
