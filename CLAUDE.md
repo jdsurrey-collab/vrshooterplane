@@ -2354,6 +2354,28 @@ game-over screens.
 
 ## Ground objective — attack/defend over the city's fuel tanks
 
+**RETIRED AS A SCORING MECHANIC — tanks are now pure cosmetic
+set-dressing.** Direct instruction, once the six-tower Conquest system
+(see that section) became "actually what we're gonna go by": *"we'll go
+ahead and get rid of all the tank mechanics. We can leave the tanks in the
+game, but turn that off where enemies aren't hunting for tanks... leave
+them in right now for cosmetics, essentially."* Concretely:
+`game_flow.gd._start_match()` still calls `_tanks.start_objective()` (so
+20 tanks still scatter and roll which faction may damage them — the
+placement/rejection-sampling system below is fully intact and unchanged)
+but no longer calls `_battle.assign_ground_roles()` — with no caller ever
+assigning `STRIKE_ROLE`/`TANK_GUARD`, every squad stays its own default
+`Squad.Role.FIGHTER`, so no AI ever enters `GROUND_ATTACK` or patrols tank
+airspace. `tank_objective.gd`'s `apply_damage()` no longer calls
+`grant_air_superiority()` on a kill, and no longer calls the (now-retired,
+left defined but unused) `_attackers_win()` when all 20 are destroyed — a
+tank blowing up is still a real, huge, satisfying explosion (fireball,
+building collapse, sound all untouched) with the same attacker-only
+damage gate, it just doesn't feed any score or win condition anymore. The
+old ATTACKER/DEFENDER role-stamp announcement is gone too. Everything
+below this note describes the ORIGINAL scoring-tier design, kept for
+history and in case a future pass wants tank destruction to matter again.
+
 `scripts/tank_objective.gd` (`TankObjective`, a sibling of `City`/
 `FactionBattle` in `Town.tscn`). The **first of three intended scoring
 tiers** (ground / dogfight / air) and the first objective in this project
@@ -3956,9 +3978,96 @@ request didn't call for.
   frozen — `FactionBattle` always writes its `MultiMesh` transforms every
   frame regardless of `simulation_active`, specifically so ships don't
   vanish (never having been given a transform) while the sim is paused.
-  **The actual main menu** (`scripts/main_menu.gd`, `MainMenu` node under
-  `XRCamera3D`, replacing an earlier plain text-prompt version
-  `start_menu_hud.gd`, now removed):
+  **The actual main menu is now a genuine world-locked flat screen**
+  (`scripts/main_menu.gd`, `MainMenu` node under `Player` — the
+  `XROrigin3D`, NOT `XRCamera3D` — see below for why that parent changed),
+  replacing an earlier Label3D/camera-child version whose full history
+  (including a gaze-selection bug worth remembering) is kept below.
+
+  ### The flat-screen rebuild
+
+  Direct request: "Is there any way where we can have the main menu an
+  actual flat screen?... I don't want it headlocked. I want it as a main
+  screen free of clutter." Two structural changes:
+
+  - **Real 2D UI instead of hand-positioned Label3D text.**
+    `scenes/MainMenuUI.tscn` (`scripts/main_menu_ui.gd`) is genuine
+    Godot `Control`/`Button`/`Label` content — Godot's normal UI toolkit,
+    not 3D text nodes manually styled to look like buttons. It's rendered
+    into a `SubViewport` and displayed on a flat quad via
+    `addons/godot-xr-tools/objects/viewport_2d_in_3d.tscn`
+    (`XRToolsViewport2DIn3D`) — already present in this project's
+    installed XR Tools addon, exactly built for "show a 2D scene on a
+    flat 3D surface," so no new rendering machinery was needed.
+  - **World-locked, not head-locked.** `MainMenu` moved from a child of
+    `XRCamera3D` to a child of `Player` (the `XROrigin3D` rig root).
+    `$Screen` sits at a fixed LOCAL offset (8m ahead, 2m up) — it moves
+    with the player RIG (so it's still wherever `_reposition_player()`
+    puts you each time the menu is entered) without tracking head
+    ROTATION, unlike the old version. You look toward it like an actual
+    monitor instead of it always filling your view.
+
+  **The old "solid black backdrop, then reveal" effect is gone, on
+  purpose, not an oversight.** That system (full history kept below)
+  existed because the old menu was a camera-filling opaque quad hiding
+  the whole scene behind it. A small world-locked screen has no "behind
+  it" to hide — the mothership deck and fleet are visible around the
+  screen the instant you're in MENU state, same as they always were
+  before that reveal system existed. This reads as more natural for an
+  object sitting in the cockpit (a display you're looking at) than the
+  alternative (a curtain covering everything).
+
+  **Not using the addon's native pointer-click interaction.** This
+  project deliberately has no hand-held laser pointer or visible hands
+  ("this is a cockpit game, you don't see your hands"), so
+  `main_menu.gd` still reads the thumbstick directly (same
+  `STICK_DEADZONE`-latched convention as every other menu screen) and
+  forwards `move_selection(+1/-1)`/`confirm_selection()` calls into the
+  2D scene via `XRToolsViewport2DIn3D.get_scene_instance()` — keeping
+  thumbstick+trigger consistent across the whole game rather than
+  introducing a second interaction model just for this screen.
+
+  **A real nested menu, not a binary choice.** `main_menu_ui.gd` owns a
+  small `Level { TOP, MODES }` state machine — TOP shows GAME MODES /
+  QUIT; confirming GAME MODES opens a MODES level (FULL SCALE / 1 V 1 /
+  BACK) — see the "Game Modes" section below for what those actually do.
+  Selection-highlighting is driven by index into whichever level's
+  button array is current (`StyleBoxFlat` background + font colour +
+  1.08x scale on the selected button — the same "deliberately
+  heavy-handed, hard to misread at VR resolutions" reasoning the old
+  Label3D highlight used, just expressed as real UI theme overrides
+  instead of manual `Label3D` property writes). The 2D scene is fully
+  decoupled from `GameFlow` — it only emits `mode_selected`/
+  `quit_requested` signals; `main_menu.gd` (which does have a path to
+  `GameFlow`) connects to both via `connect_scene_signal()` and forwards.
+
+  **The title got the font bump directly requested**
+  ("I wanna sim up the font a little bit for the air supremacy"): "AIR
+  SUPERIORITY" (the `Title` label) is now font_size 88 versus "ALIEN
+  INVASION" (`Subtitle`) at 36 — a clear, deliberate two-tier hierarchy
+  instead of the old single-size two-line title.
+
+  **`game_flow.gd`'s trigger-confirm handling simplified to pure
+  delegation.** It used to hardcode "if selected_action == quit, quit;
+  else start" — now a MENU-state trigger press just calls
+  `_main_menu.confirm_selection()` and the 2D UI's own state machine
+  decides what that means (open/close the submenu, quit, or call the new
+  `start_match_with_mode()` — see below). `_main_menu`'s own resolved
+  path also had to move (`"MainMenu"` instead of
+  `"XRCamera3D/MainMenu"`), matching the reparent.
+
+  Verified headlessly end to end (once past an unrelated environmental
+  snag — see the Testing workflow section's new note on `--xr-mode off`):
+  `Player/MainMenu/Screen` resolves, `get_scene_instance()` returns the
+  real `MainMenuUI` `Control`, `move_selection`/`confirm_selection`
+  correctly open and close the GAME MODES submenu, and confirming a mode
+  button reaches the `mode_selected.emit()` line (traced directly via
+  `_level`, not just the signal, after a GDScript lambda-capture quirk in
+  the test harness itself made a signal-boolean assertion unreliable —
+  not a bug in the actual menu code).
+
+  ### The old head-locked version, for the record
+
   - **Solid black the whole time it's up, not a quick reveal** — `Fade`,
     an opaque `MeshInstance3D` quad positioned *closer to the camera*
     (z=-0.15) than every other menu element or the background scene, using
@@ -3988,46 +4097,19 @@ request didn't call for.
     order is priority-first, distance-second, so this guarantees `Fade`
     always draws before (visually underneath) the default-priority labels
     regardless of which one is physically nearer the camera.
-    Re-entering `MENU` later (post-match) snaps `Fade` straight back to
-    fully opaque.
-  - **Two simultaneous audio tracks** — `Music` (`menu_music.mp3`,
-    converted from a user-supplied `.m4a` via `ffmpeg`; Godot's importer
-    doesn't support `.m4a` directly) and `Chatter` (`menu_radio_chatter.mp3`,
-    distorted radio-chatter ambience, already an mp3), both plain
-    (non-positional) `AudioStreamPlayer`s — this is cockpit-ambient sound,
-    not a world-space effect, so proximity/attenuation doesn't apply here
-    the way it does for `missile.gd`'s hit sound. Manually looped (`finished`
-    reconnected to `play()`) rather than relying on the imported stream's
-    own loop flag, for explicit control. Both start when the MENU state is
-    entered and stop the moment it's left (`PLAYING` or otherwise).
-  - **START / QUIT selection is by THUMBSTICK** — push either stick left
-    for START or right for QUIT, then pull the right trigger to confirm.
-    The selection is latched through a deadzone (`STICK_DEADZONE`) so one
-    push moves it once instead of re-triggering while held. The highlight
-    is deliberately heavy-handed (colour + 1.25x scale + outline together)
-    because a subtle brightness difference between two small labels on a
-    black screen is genuinely hard to read at VR resolutions, and a `Hint`
-    label spells the controls out. This script only tracks and displays
-    `selected_action` — it doesn't confirm anything itself; `game_flow.gd`
-    (already the sole owner of trigger-confirm logic for both menu states)
-    reads it on a right-trigger press and either starts the match or calls
-    `get_tree().quit()`.
-  - **This replaced a gaze-based version that could never have worked**, and
-    the failure is worth remembering because any future head-locked UI here
-    would hit it. `MainMenu` is a child of `XRCamera3D`, so the labels are
-    rigidly attached to the player's face. Gaze selection compared the angle
-    between the camera's forward vector and the direction to each label —
-    but since the labels move with the head, those directions are constant
-    in camera space, so both angles were fixed no matter where you looked.
-    Worse, the two labels sat symmetrically (x = -0.13 and +0.13, identical
-    y and z), making the two angles *exactly equal*, so the `<=` comparison
-    always resolved to START: **QUIT was literally unselectable.** Gaze
-    selection can only ever work against WORLD-locked UI. `_update_selection()`
-    now takes the stick axis as a parameter rather than reading controllers
-    itself, specifically so a headless test can drive it (there are no
-    controllers without a live OpenXR session, which is precisely why the
-    original bug shipped) — verified with a scripted run covering push,
-    hold-without-repeat, release, and deadzone.
+  - **This replaced an even earlier gaze-based version that could never
+    have worked**, and the failure is worth remembering because any
+    future head-locked UI here would hit it. When `MainMenu` was a child
+    of `XRCamera3D`, its labels were rigidly attached to the player's
+    face. Gaze selection compared the angle between the camera's forward
+    vector and the direction to each label — but since the labels moved
+    with the head, those directions were constant in camera space, so
+    both angles were fixed no matter where you looked. Worse, the two
+    labels sat symmetrically (x = -0.13 and +0.13, identical y and z),
+    making the two angles *exactly equal*, so the `<=` comparison always
+    resolved to START: **QUIT was literally unselectable.** Gaze
+    selection can only ever work against WORLD-locked UI — ironically the
+    exact property the current flat-screen version now genuinely has.
 - **PLAYING**: right trigger confirms `_start_match()` (unpauses the
   player, calls `FactionBattle.start_battle()` which flips
   `simulation_active = true` — this is also the point the 10-minute timer
@@ -4049,6 +4131,111 @@ request didn't call for.
   ship back to alive/full-health at their faction's spawn cluster, resets
   AS/timer/`game_over`, clears in-flight ambient bolts), then back to
   `MENU`.
+
+## Game Modes — Full Scale / 1 V 1
+
+The flat-screen menu's GAME MODES submenu (see above) is the first real
+branch point this project has had: `GameFlow.GameMode { FULL_SCALE,
+ONE_V_ONE }`, chosen via `main_menu_ui.gd`'s `mode_selected` signal and
+applied by the new `GameFlow.start_match_with_mode(mode)` — now the only
+real entry point into a match (`_start_match()` itself is no longer called
+from anywhere else).
+
+**FULL_SCALE is everything this project has built all along, completely
+unchanged** — the 100v100 mass battle, the map-wide city, the six mega
+towers, the whole works. `start_match_with_mode()` just sets
+`FactionBattle.duel_mode = false` explicitly (so a PREVIOUS match having
+been a duel can never leak into a fresh full-scale one) and calls
+`_start_match()` exactly as before.
+
+### 1 V 1 — `FactionBattle.duel_mode`
+
+Direct request, deliberately scoped tiny: *"I don't want... [tanks]... we
+won't really do much work into it. It's just gonna be a one v one. I'm
+gonna play against one bot potentially... a five kilometer by five
+kilometer version of this map."*
+
+**Why this reuses FactionBattle instead of the old retired single-enemy
+AI.** The obvious-looking shortcut — reviving `enemy_ai.gd` (see Retired
+systems below), which already has a complete 3-zone damage model built
+for exactly "one player vs. one AI ship" — turned out to be a dead end,
+checked directly rather than assumed: `laser_bolt.gd`, `target_lock.gd`
+and `missile_system.gd` are all now hard-wired to `FactionBattle`'s
+index-based API (`get_nearest_alive_alien()` and friends) with no generic
+fallback for a standalone Node with its own `apply_damage()`. Reviving the
+old script would have meant re-plumbing every weapon system to support a
+second target-acquisition model, risking the currently-solid full-scale
+mode for a feature explicitly asked to be low-effort. Building 1v1 as a
+MODE of `FactionBattle` instead means it inherits every weapon/damage/
+kill-feed code path for free.
+
+**The real constraint: nothing about `FactionBattle` can be resized at
+match-start time.** `friendly_count`/`enemy_count` only take effect in
+`_ready()`, which already ran when the scene loaded — long before the
+player has picked anything from the main menu. Squads, `MultiMesh`
+buffers and mothership placement are all built ONCE and were never
+designed to be rebuilt. `duel_mode` therefore doesn't touch fleet size at
+all; it works entirely by gating and hand-placement:
+
+- **The PARKED -> LAUNCHING transition** (`_update_combatant()`) gets one
+  added condition: `if duel_mode and not (c.faction == ENEMY and
+  my_index == 0): return`. Every combatant except a single designated
+  enemy (index 0 of `_enemies`) stays parked on its mothership deck for
+  the rest of the match — invisible and 44km away, which is functionally
+  the same as not existing. One line added to an existing, already
+  well-tested code path, not a parallel system.
+- **`_start_duel()`** (called from `start_battle()` when `duel_mode`)
+  hand-places that one opponent close to the player instead of launching
+  it normally — the normal launch-wave/mothership-transit system is
+  exactly the "44km away" geometry the small-arena request is asking NOT
+  to have. Position: a random offset within ~1800m of the player,
+  comfortably inside `aggro_radius_player` (2500m, the SAME radius that
+  already governs any alien noticing the player in a normal match) with
+  state set to `FORMATION` (a safe, ordinary "flying, no target yet"
+  state) — no forced target-lock, no bespoke pursuit code. The EXISTING
+  proximity-based aggro logic (`_retarget_if_needed()`) takes over from
+  there entirely on its own, verified by direct simulation: closing
+  distance from the initial 1801m placement to 561m within 5 simulated
+  seconds, transitioning into real `PURSUE` state with `targeting_player
+  = true` — the exact same code path that makes any alien hunt the player
+  in the full-scale game, not a duel-specific approximation of it.
+- **`get_player_spawn_position()`** gained a `duel_mode` branch returning
+  a fixed point at `dome_center` instead of the (44km-away, build-once)
+  mothership deck — this is what makes the arena small: both ships start
+  near the same spot, matching "five kilometer by five kilometer,"
+  without needing to touch mothership placement at all.
+- **The ground objective doesn't run at all in duel mode** — no
+  attacker/defender coin, no fixed layout, no role stamp. `_start_match()`
+  returns immediately after `start_battle()` when `duel: bool =
+  _battle.duel_mode` is true, before ever reaching the tank-objective
+  block. Just two ships and a kill, per the request's own framing.
+- **Win condition**: checked once per physics frame — `if duel_mode and
+  not _enemies[0].alive: declare_winner(FRIENDLY, "duel opponent
+  destroyed")`. The PLAYER losing is already handled organically by the
+  existing `crash_handler.gd` -> `GameFlow.State.DEAD` flow, entirely
+  independent of `FactionBattle`'s own `game_over` — this only needed to
+  cover the other direction. `_kill_combatant()` still sets a normal
+  respawn timer on the dead opponent; harmless, since `declare_winner()`
+  sets `simulation_active = false` before it would ever fire.
+- **Returning to the main menu cleans up for free.** `reset_battle()`'s
+  existing `_place_all_at_spawn()` -> `_park_faction()` already calls
+  `_respawn_combatant()` on every single combatant in both factions
+  unconditionally, which resets `state = PARKED` and repositions to the
+  (real) mothership deck — so a duel's hand-placed opponent, and the 199
+  combatants that spent the whole match frozen, are ALL back to a clean
+  slate for whatever mode is picked next. No duel-specific reset code
+  needed.
+
+Verified headlessly end to end via direct simulation (not just structural
+checks): `duel_mode` flag propagates correctly from the menu selection;
+zero combatants besides the one designated opponent ever leave `PARKED`
+across a 5-second simulated window; the opponent's distance to the player
+closes from 1801m to 561m (real pursuit, not a stationary placement); its
+state reaches `PURSUE` with `targeting_player = true`; and killing it
+(`apply_damage(0, 999.0, ...)`) correctly flips `game_over = true` /
+`winning_faction = FRIENDLY` within a few frames. **Not yet confirmed
+live**: whether the duel actually reads as tight, immediate 1v1 combat
+from inside the headset, same as every other first pass in this project.
 
 ## Retired systems
 
@@ -4113,12 +4300,32 @@ Headless validation (`godot --headless --editor --quit`) catches
 parse/script errors and forces asset (re)import before ever touching the
 headset — run after nearly every change this session. **One known gap**:
 `XRToolsFunctionPickup` (still present for the grab system, though nothing
-in the current scene actually needs picking up) hangs indefinitely in
-`--headless` **game** mode with no live OpenXR session — confirmed not a
-project bug, just an addon limitation without real controller state. Net
-effect: scene structure, parsing, and all gameplay logic can be verified
-headlessly, but actual flight feel, VR rendering correctness, and audio can
-only be confirmed live in the headset.
+in the current scene actually needs picking up) can hang in `--headless`
+**game** mode with no live OpenXR session — confirmed not a project bug,
+just an addon limitation without real controller state. Net effect: scene
+structure, parsing, and all gameplay logic can be verified headlessly, but
+actual flight feel, VR rendering correctness, and audio can only be
+confirmed live in the headset.
+
+**PASS `--xr-mode off` ON EVERY `-s`/GAME-MODE HEADLESS RUN — this is now
+standard, not optional.** Discovered the hard way: what looked like the
+same known `XRToolsFunctionPickup`-class hang above turned out to be much
+broader in practice — with the Virtual Desktop OpenXR runtime present but
+no headset actually connected/worn (`XR_ERROR_FORM_FACTOR_UNAVAILABLE`),
+`--headless -s <script>.gd` hung indefinitely **before the script's own
+`_init()` ever ran** — confirmed with a genuinely empty test script that
+does nothing but write one line and `quit()`, which still hung. `--editor
+--quit` mode was unaffected (still fast, still reliable), isolating this
+specifically to actual game-mode engine startup trying to establish an XR
+session. Godot exposes `--xr-mode <default|off|on>` for exactly this;
+adding `--xr-mode off` made the identical script (and every real scripted
+simulation afterward) run instantly and reliably again. Worth remembering
+that this failure mode is **environment-dependent, not code-dependent** —
+the exact same project and scripts that ran fine for most of a session can
+start hanging later if the headset's connection state changes (e.g. it
+gets powered off), which is exactly what happened here. If a headless
+script run ever mysteriously hangs again with no output at all, this flag
+is the first thing to try, not a sign the script itself is broken.
 
 **Scripted simulations** (`--headless --script <path>.gd`, a
 `SceneTree`-extending script that instantiates `Town.tscn`, sets

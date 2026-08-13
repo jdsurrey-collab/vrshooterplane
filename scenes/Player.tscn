@@ -1,4 +1,4 @@
-[gd_scene load_steps=53 format=3 uid="uid://c2dyoeywkgf30"]
+[gd_scene load_steps=55 format=3 uid="uid://c2dyoeywkgf30"]
 
 [ext_resource type="PackedScene" uid="uid://diyu06cw06syv" path="res://addons/godot-xr-tools/player/player_body.tscn" id="1_body"]
 [ext_resource type="PackedScene" uid="uid://clc5dre31iskm" path="res://addons/godot-xr-tools/xr/start_xr.tscn" id="4_startxr"]
@@ -47,6 +47,8 @@
 [ext_resource type="Script" path="res://scripts/role_stamp.gd" id="52_rolestamp"]
 [ext_resource type="AudioStream" path="res://Assets/Audio/hit_confirm.tres" id="53_hitconfirm"]
 [ext_resource type="Script" uid="uid://rumqn6nkdcy0" path="res://scripts/gunnery.gd" id="54_gunnery"]
+[ext_resource type="PackedScene" uid="uid://clujaf3u776a3" path="res://addons/godot-xr-tools/objects/viewport_2d_in_3d.tscn" id="55_viewport2din3d"]
+[ext_resource type="PackedScene" uid="uid://dqxvw8mn2h4jk" path="res://scenes/MainMenuUI.tscn" id="56_mainmenuui"]
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_fade"]
 render_priority = -1
@@ -158,66 +160,22 @@ font_size = 30
 outline_size = 8
 script = ExtResource("33_battlehud")
 
-[node name="MainMenu" type="Node3D" parent="XRCamera3D"]
+[node name="MainMenu" type="Node3D" parent="."]
 script = ExtResource("38_mainmenu")
 
-[node name="Fade" type="MeshInstance3D" parent="XRCamera3D/MainMenu"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -0.15)
-material_override = SubResource("StandardMaterial3D_fade")
-mesh = SubResource("QuadMesh_fade")
+[node name="Screen" parent="MainMenu" instance=ExtResource("55_viewport2din3d")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.0, -8.0)
+screen_size = Vector2(4.0, 2.6)
+viewport_size = Vector2(1280, 832)
+scene = ExtResource("56_mainmenuui")
+transparent = 0
+input_gamepad = false
 
-[node name="Title" type="Label3D" parent="XRCamera3D/MainMenu"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.2, -0.55)
-pixel_size = 0.0015
-billboard = 1
-no_depth_test = true
-modulate = Color(0, 2.2, 2.4, 1)
-outline_modulate = Color(0, 0.05, 0.05, 1)
-text = "ALIEN INVASION
-AIR SUPERIORITY"
-font = ExtResource("49_orbitron")
-outline_size = 10
-
-[node name="StartLabel" type="Label3D" parent="XRCamera3D/MainMenu"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.19, -0.02, -0.55)
-pixel_size = 0.0018
-billboard = 1
-no_depth_test = true
-modulate = Color(0, 2.2, 2.4, 1)
-outline_modulate = Color(0, 0.05, 0.05, 1)
-text = "START"
-font = ExtResource("49_orbitron")
-font_size = 34
-outline_size = 10
-
-[node name="QuitLabel" type="Label3D" parent="XRCamera3D/MainMenu"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.19, -0.02, -0.55)
-pixel_size = 0.0018
-billboard = 1
-no_depth_test = true
-modulate = Color(0, 2.2, 2.4, 1)
-outline_modulate = Color(0, 0.05, 0.05, 1)
-text = "QUIT"
-font = ExtResource("49_orbitron")
-font_size = 34
-outline_size = 10
-
-[node name="Hint" type="Label3D" parent="XRCamera3D/MainMenu"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.13, -0.55)
-pixel_size = 0.0012
-billboard = 1
-no_depth_test = true
-modulate = Color(0.6, 0.6, 0.65, 1)
-text = "STICK LEFT / RIGHT TO SELECT
-RIGHT TRIGGER TO CONFIRM"
-font = ExtResource("49_orbitron")
-font_size = 26
-
-[node name="Music" type="AudioStreamPlayer" parent="XRCamera3D/MainMenu"]
+[node name="Music" type="AudioStreamPlayer" parent="MainMenu"]
 stream = ExtResource("39_menumusic")
 volume_db = -8.0
 
-[node name="Chatter" type="AudioStreamPlayer" parent="XRCamera3D/MainMenu"]
+[node name="Chatter" type="AudioStreamPlayer" parent="MainMenu"]
 stream = ExtResource("40_menuchatter")
 volume_db = -14.0
 

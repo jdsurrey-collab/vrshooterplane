@@ -343,6 +343,27 @@ const KILL_FEED_ENTRY_LIFETIME := 8.0
 ## automatically; nothing needed a separate fix.
 @export var dome_radius: float = 40000.0
 
+## The "1 V 1" game mode (game_flow.gd's GameMode.ONE_V_ONE). Direct
+## request, deliberately scoped tiny: "we won't really do much work into
+## it... it's just gonna be a one v one... play against one bot... a five
+## kilometer by five kilometer version of this map." friendly_count/
+## enemy_count can't actually be resized at runtime — squads and
+## MultiMeshes are built ONCE in _ready(), long before the player has
+## picked a mode from the main menu — so duel_mode doesn't touch fleet
+## size at all. Instead it gates ONE existing, well-tested transition
+## (PARKED -> LAUNCHING, see _update_combatant) so every combatant except
+## a single designated enemy (index 0 of `_enemies`) stays parked on its
+## mothership deck forever — invisible, inert, and 44km away, so it might
+## as well not exist. That one opponent is then hand-placed close to the
+## player by `_start_duel()` rather than launched normally (the normal
+## launch-wave/mothership-transit system is exactly the "22-44km away"
+## geometry the small-arena request is asking NOT to have), and the
+## EXISTING proximity-based player-aggro logic (`aggro_radius_player`,
+## already how any alien acquires the player as a target in the normal
+## game) is what actually gets it hunting — no separate duel-specific
+## combat AI needed.
+@export var duel_mode: bool = false
+
 ## Lid on the contested volume, in metres above terrain.
 ##
 ## **0 or less means NO lid (the default)** — the contested airspace is an
@@ -572,6 +593,16 @@ func _physics_process(delta: float) -> void:
 		for i in _enemies.size():
 			_update_combatant(_enemies[i], i, _friendlies, _enemies, _enemy_grid, _enemy_squads, true, delta)
 
+		# duel_mode's whole win condition: kill or be killed. The player
+		# losing is already handled organically by crash_handler.gd's own
+		# death flow (GameFlow._process() checks _crash_handler.crashed
+		# independently of this battle's own game_over) — this only needs
+		# to catch the other direction. _kill_combatant() still sets a
+		# respawn timer on the opponent same as any normal kill; harmless,
+		# since declare_winner() below stops simulation before it ever fires.
+		if duel_mode and not _enemies.is_empty() and not (_enemies[0] as Combatant).alive:
+			declare_winner(Combatant.Faction.FRIENDLY, "duel opponent destroyed")
+
 		_update_ambient_bolts(delta)
 		_update_air_superiority(delta)
 		_update_kill_feed(delta)
@@ -586,6 +617,32 @@ func _physics_process(delta: float) -> void:
 ## Called by game_flow.gd once the player confirms the start menu.
 func start_battle() -> void:
 	simulation_active = true
+	if duel_mode:
+		_start_duel()
+
+
+## Hand-places the one active duel opponent close to the player instead of
+## launching it from its mothership — see duel_mode's own export header
+## for why. Deliberately simple: just position + a safe non-PARKED state;
+## the EXISTING proximity-based player-aggro logic (_retarget_if_needed,
+## aggro_radius_player) takes over from there and transitions it into
+## PURSUE on its own within a frame or two, same as it would for any
+## alien that happens to fly close to the player in a normal match.
+func _start_duel() -> void:
+	if _enemies.is_empty() or not _player:
+		return
+	var opponent: Combatant = _enemies[0]
+	var player_pos: Vector3 = _player.global_position
+	# Comfortably inside aggro_radius_player (2500m default) so it notices
+	# the player almost immediately, but not point-blank.
+	var offset := Vector3(randf_range(-1200.0, 1200.0), randf_range(-100.0, 300.0), -1800.0)
+	opponent.position = player_pos + offset
+	opponent.heading = (player_pos - opponent.position).normalized()
+	opponent.state = Combatant.State.FORMATION
+	opponent.launch_delay = 0.0
+	opponent.speed = opponent.base_speed
+	opponent.target_index = -1
+	opponent.targeting_player = false
 
 
 ## Called by game_flow.gd on "return to main menu" — puts the battle back
@@ -1072,6 +1129,13 @@ func _update_combatant(c: Combatant, my_index: int, opposing: Array, own_units: 
 	# Parked on the mothership deck, waiting for its launch slot. Doesn't
 	# move, steer, retarget or shoot — it's sitting on a flight deck.
 	if c.state == Combatant.State.PARKED:
+		# duel_mode: only the one designated opponent (enemy index 0) is ever
+		# allowed off the deck — see duel_mode's own export header. Everyone
+		# else stays parked for the rest of the match, which given they're
+		# 44km away and never rendered near the player is functionally the
+		# same as not existing.
+		if duel_mode and not (c.faction == Combatant.Faction.ENEMY and my_index == 0):
+			return
 		c.launch_delay -= delta
 		if c.launch_delay <= 0.0:
 			c.state = Combatant.State.LAUNCHING
@@ -2317,6 +2381,13 @@ func get_ship_health_fraction_by_key(key: int) -> float:
 ## source of truth, replacing the hand-synced (-4000, 0) coordinate that
 ## previously lived in three separate exported values.
 func get_player_spawn_position() -> Vector3:
+	if duel_mode:
+		# The mothership deck is ~44km from where the OTHER mothership sits —
+		# exactly the transit distance the small-arena request is asking NOT
+		# to have. Spawn directly at dome_center instead, matching where
+		# _start_duel() places the one active opponent relative to.
+		var ground: float = _terrain.get_height_at(dome_center.x, dome_center.z) if _terrain else 0.0
+		return Vector3(dome_center.x, ground + 900.0, dome_center.z)
 	if _friendly_mothership:
 		var deck: Vector3 = _friendly_mothership.random_deck_point()
 		return deck + Vector3(0.0, 12.0, 0.0)  # sat on the deck, not embedded in it

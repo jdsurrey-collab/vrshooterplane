@@ -69,11 +69,11 @@ const TANK_EXPLOSION_SOUND := preload("res://Assets/Audio/tank_explosion.mp3")
 
 @export var tank_health: float = 60.0
 
-## Partial credit per tank, signed toward the attacking faction. 20 tanks x
-## 2.5 = 50 points, i.e. half the bar — deliberately comparable to what a
-## whole match of dome presence generates at as_generation_multiplier 0.01,
-## so the ground tier is a genuine "moneymaker" alongside the air war rather
-## than a side activity. Destroying ALL of them ends the match regardless.
+## RETIRED — no longer read anywhere. Tank destruction used to grant this
+## much air_superiority (see _detonate()'s own note on why that stopped);
+## left as a export rather than deleted in case a future scoring pass wants
+## to reintroduce a tank-destruction bonus, same as this project's other
+## retired-but-not-deleted systems.
 @export var air_superiority_per_tank: float = 2.5
 
 ## How far the ground shock reaches when a tank goes up. 400m is roughly a
@@ -397,9 +397,8 @@ func apply_damage(index: int, amount: float, cause: String = "destroyed by PLAYE
 	tanks_remaining -= 1
 	_write_transforms()
 	_detonate(t["pos"], index, cause)
-
-	if tanks_remaining <= 0:
-		_attackers_win()
+	# No more _attackers_win() call here — tanks are cosmetic set-dressing
+	# now, not a win condition. See _detonate()'s own note.
 
 
 func _detonate(pos: Vector3, index: int, cause: String) -> void:
@@ -417,15 +416,14 @@ func _detonate(pos: Vector3, index: int, cause: String) -> void:
 	if _city and _city.has_method("collapse_near"):
 		_city.collapse_near(pos, collapse_radius)
 
-	if _battle:
-		# Signed toward whoever is attacking: air_superiority is +friendly /
-		# -enemy, so an enemy attacker's progress drives it negative.
-		var signed_gain: float = air_superiority_per_tank
-		if attacking_faction == Combatant.Faction.ENEMY:
-			signed_gain = -signed_gain
-		if _battle.has_method("grant_air_superiority"):
-			_battle.grant_air_superiority(signed_gain,
-					"FUEL TANK %d/%d %s" % [tank_count - tanks_remaining, tank_count, cause])
+	# No more grant_air_superiority() call here — direct request: "get rid
+	# of all the tank mechanics... leave them in right now for cosmetics,
+	# essentially." A tank blowing up is still a real, satisfying, huge
+	# explosion (the fireball/collapse/sound above are all untouched) and
+	# still only the rolled attacking_faction can trigger it
+	# (can_be_damaged_by(), unchanged) — it just doesn't feed any score or
+	# win condition anymore. Scoring is entirely kills + tower control now
+	# (see faction_battle.gd's CaptureZone system).
 
 
 ## Positional rumble for a tank detonation. Needs no concurrency cap of its
@@ -451,6 +449,10 @@ func _play_explosion_sound(at_position: Vector3) -> void:
 	sound.finished.connect(sound.queue_free)
 
 
+## RETIRED — no longer called (see apply_damage()'s own note). Left
+## defined rather than deleted in case a future pass wants an instant-win
+## condition back; tanks are pure cosmetic set-dressing now, not a win
+## condition.
 func _attackers_win() -> void:
 	active = false
 	if _battle and _battle.has_method("declare_winner"):

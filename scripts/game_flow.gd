@@ -10,27 +10,37 @@ extends Node
 ## risk/complexity a "basic" menu doesn't call for.
 ##
 ## States: MENU (gameplay paused, the real main menu shown — see
-## main_menu.gd for the fade-from-black/music/START-QUIT selection — both
-## fleets visible but frozen behind it, faction_battle.gd still writes
-## their MultiMesh transforms even while simulation_active is false) ->
-## PLAYING (normal gameplay, FactionBattle simulating) -> GAME_OVER
-## (gameplay paused again, match summary + "return to menu" prompt shown,
-## see battle_hud.gd) -> back to MENU via reset_battle() + repositioning
-## the player.
+## main_menu.gd for the world-locked flat-screen UI and its GAME MODES
+## submenu — both fleets visible but frozen behind it, faction_battle.gd
+## still writes their MultiMesh transforms even while simulation_active is
+## false) -> PLAYING (normal gameplay, FactionBattle simulating) ->
+## GAME_OVER (gameplay paused again, match summary + "return to menu"
+## prompt shown, see battle_hud.gd) -> back to MENU via reset_battle() +
+## repositioning the player.
 ##
 ## Right trigger both fires the guns during PLAYING (weapon_system.gd's own
 ## job, untouched) and confirms the MENU/GAME_OVER prompts here — no
 ## conflict, since weapon_system.gd only reads the trigger while
 ## `not paused`, and this script sets the whole player `paused` for both
-## menu states. During MENU specifically, which action a trigger-confirm
-## performs depends on main_menu.gd's thumbstick-driven `selected_action`
-## ("start" starts the match, "quit" calls get_tree().quit()).
+## menu states. During MENU specifically, a trigger-confirm is delegated
+## entirely to `main_menu.gd`'s `confirm_selection()` — what it actually
+## DOES depends on the 2D UI's own TOP/MODES state machine (open the GAME
+## MODES submenu, quit, or call `start_match_with_mode()` with a chosen
+## GameMode), not a fixed start-vs-quit binary anymore.
 
 ## DEAD is entered whenever crash_handler.gd reports the player destroyed
 ## (terrain/building impact, or cockpit/hull health reaching zero). The
 ## player used to be respawned silently on a timer; now death_screen.gd
 ## fades the view to red and the player chooses RESPAWN or MAIN MENU.
 enum State { MENU, PLAYING, GAME_OVER, DEAD }
+
+## Chosen from the main menu's GAME MODES submenu (main_menu_ui.gd's own
+## identical enum — duplicated there since that 2D scene has no direct
+## path to this script, see its class comment). FULL_SCALE is everything
+## this project has built all along, unchanged; ONE_V_ONE is
+## FactionBattle.duel_mode — see that export's own header for why it's a
+## gate on the existing mass-battle system rather than a separate one.
+enum GameMode { FULL_SCALE, ONE_V_ONE }
 
 ## FALLBACK ONLY. The real spawn point comes from
 ## FactionBattle.get_player_spawn_position() — a spot on the friendly
@@ -75,7 +85,7 @@ func _ready() -> void:
 		_flare_system = _player.get_node_or_null("FlareSystem")
 		_player_damage = _player.get_node_or_null("PlayerDamage")
 		_right_controller = _player.get_node_or_null("RightHand")
-		_main_menu = _player.get_node_or_null("XRCamera3D/MainMenu")
+		_main_menu = _player.get_node_or_null("MainMenu")
 		_death_screen = _player.get_node_or_null("XRCamera3D/DeathScreen")
 		_crash_handler = _player.get_node_or_null("CrashHandler")
 		_role_stamp = _player.get_node_or_null("XRCamera3D/RoleStamp")
@@ -108,10 +118,13 @@ func _process(_delta: float) -> void:
 	var confirm_down := _right_controller.is_button_pressed("trigger_click")
 	if confirm_down and not _confirm_button_was_down:
 		if state == State.MENU:
-			if _main_menu and _main_menu.selected_action == "quit":
-				get_tree().quit()
-			else:
-				_start_match()
+			# Delegated entirely to main_menu.gd (and from there, the 2D UI's
+			# own TOP/MODES state machine) — a MENU trigger-confirm no longer
+			# means one fixed thing (start vs quit); it means whatever's
+			# currently highlighted, including opening/backing out of the
+			# GAME MODES submenu. See main_menu.gd's own header.
+			if _main_menu and _main_menu.has_method("confirm_selection"):
+				_main_menu.confirm_selection()
 		elif state == State.GAME_OVER:
 			_return_to_menu()
 		elif state == State.DEAD:
@@ -189,25 +202,49 @@ func _enter_menu() -> void:
 	_reposition_player()
 
 
+## The only real entry point now — main_menu.gd's GAME MODES submenu calls
+## this directly on confirm (see main_menu_ui.gd's `mode_selected` signal).
+## Sets FactionBattle.duel_mode BEFORE _start_match() runs, since
+## start_battle() reads it immediately to decide whether to launch the
+## normal fleet or hand-place a single duel opponent.
+func start_match_with_mode(mode: int) -> void:
+	if _battle:
+		_battle.duel_mode = (mode == GameMode.ONE_V_ONE)
+	_start_match()
+
+
 func _start_match() -> void:
 	state = State.PLAYING
 	_set_player_paused(false)
 	if _battle:
 		_battle.start_battle()
-	# Rerolls attacker/defender AND the tank layout — deliberately per match,
-	# not in _ready(), so there is no fixed layout to memorise.
+
+	var duel: bool = _battle != null and _battle.duel_mode
+	# The ground objective doesn't apply to 1v1 at all — no attacker/
+	# defender coin, no fixed layout, no role stamp, just two ships and a
+	# kill. Direct request: "we won't really do much work into it."
+	if duel:
+		return
+
+	# Tanks stay in the world PURELY AS COSMETIC SET-DRESSING now — direct
+	# request: "get rid of all the tank mechanics. We can leave the tanks
+	# in the game, but turn that off where enemies aren't hunting for
+	# tanks... leave them in right now for cosmetics, essentially." Scoring
+	# is now entirely kills + tower control (see faction_battle.gd's
+	# CaptureZone system); the ground objective's attacker/defender coin
+	# and mission framing are retired.
+	#
+	# _tanks.start_objective() still runs (tanks still spawn/scatter, still
+	# destructible by the rolled attacking_faction, same rejection-sampling
+	# placement as always) — that's the "leave them in for cosmetics" half.
+	# _battle.assign_ground_roles() is deliberately NOT called anymore: with
+	# no caller ever assigning STRIKE_ROLE/TANK_GUARD, every squad stays
+	# Squad.Role.FIGHTER (its own default), so no AI ever enters
+	# GROUND_ATTACK or patrols tank airspace — that's the "enemies aren't
+	# hunting for tanks" half. The old ATTACKER/DEFENDER role-stamp
+	# announcement is gone too, since that mission framing no longer exists.
 	if _tanks:
 		_tanks.start_objective()
-		# Which squads fly ground strikes and which guard the tanks depends on
-		# which side their faction just drew, so roles are assigned here rather
-		# than when the squads were built in FactionBattle._ready().
-		if _battle:
-			_battle.assign_ground_roles()
-		# Announce which side of the tank fight the player drew. Done here,
-		# AFTER start_objective() has rolled the coin, so the stamp can never
-		# show a stale role from the previous match.
-		if _role_stamp:
-			_role_stamp.play_role(_tanks.player_role_noun())
 
 
 func _enter_dead() -> void:

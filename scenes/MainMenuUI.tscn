@@ -1,0 +1,114 @@
+[gd_scene load_steps=3 format=3 uid="uid://dqxvw8mn2h4jk"]
+
+[ext_resource type="Script" path="res://scripts/main_menu_ui.gd" id="1_script"]
+[ext_resource type="FontFile" uid="uid://l3cfm2xy05pd" path="res://Assets/Fonts/Orbitron-Variable.ttf" id="2_orbitron"]
+
+[node name="MainMenuUI" type="Control"]
+custom_minimum_size = Vector2(1280, 832)
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_right = 0.0
+offset_bottom = 0.0
+script = ExtResource("1_script")
+
+[node name="Background" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+color = Color(0.015, 0.02, 0.025, 1)
+
+[node name="Layout" type="VBoxContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 40.0
+offset_top = 40.0
+offset_right = -40.0
+offset_bottom = -40.0
+theme_override_constants/separation = 28
+alignment = 1
+
+[node name="Subtitle" type="Label" parent="Layout"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.35, 0.85, 0.9, 1)
+theme_override_fonts/font = ExtResource("2_orbitron")
+theme_override_font_sizes/font_size = 36
+horizontal_alignment = 1
+text = "ALIEN INVASION"
+
+[node name="Title" type="Label" parent="Layout"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.1, 1.0, 1.0, 1)
+theme_override_fonts/font = ExtResource("2_orbitron")
+theme_override_font_sizes/font_size = 88
+horizontal_alignment = 1
+text = "AIR SUPERIORITY"
+
+[node name="TopButtons" type="HBoxContainer" parent="Layout" node_paths=PackedStringArray()]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 4
+size_flags_vertical = 3
+theme_override_constants/separation = 60
+alignment = 1
+
+[node name="GameModesButton" type="Button" parent="Layout/TopButtons"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(320, 90)
+layout_mode = 2
+theme_override_fonts/font = ExtResource("2_orbitron")
+theme_override_font_sizes/font_size = 34
+text = "GAME MODES"
+
+[node name="QuitButton" type="Button" parent="Layout/TopButtons"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(320, 90)
+layout_mode = 2
+theme_override_fonts/font = ExtResource("2_orbitron")
+theme_override_font_sizes/font_size = 34
+text = "QUIT"
+
+[node name="ModeButtons" type="HBoxContainer" parent="Layout"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+size_flags_horizontal = 4
+size_flags_vertical = 3
+theme_override_constants/separation = 44
+
+[node name="FullScaleButton" type="Button" parent="Layout/ModeButtons"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(280, 90)
+layout_mode = 2
+theme_override_fonts/font = ExtResource("2_orbitron")
+theme_override_font_sizes/font_size = 30
+text = "FULL SCALE"
+
+[node name="OneVOneButton" type="Button" parent="Layout/ModeButtons"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(280, 90)
+layout_mode = 2
+theme_override_fonts/font = ExtResource("2_orbitron")
+theme_override_font_sizes/font_size = 30
+text = "1 V 1"
+
+[node name="BackButton" type="Button" parent="Layout/ModeButtons"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(280, 90)
+layout_mode = 2
+theme_override_fonts/font = ExtResource("2_orbitron")
+theme_override_font_sizes/font_size = 30
+text = "BACK"
+
+[node name="Hint" type="Label" parent="Layout"]
+layout_mode = 2
+size_flags_vertical = 8
+theme_override_colors/font_color = Color(0.45, 0.47, 0.5, 1)
+theme_override_fonts/font = ExtResource("2_orbitron")
+theme_override_font_sizes/font_size = 22
+horizontal_alignment = 1
+text = "STICK LEFT / RIGHT TO SELECT   -   TRIGGER TO CONFIRM"
